@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # bin/apiKeyHelper — Claude Code apiKeyHelper: print ANTHROPIC_API_KEY just-in-time via
-# `sops -d --extract '["ANTHROPIC_API_KEY"]' "$(store_file)"` (SOPS_AGE_KEY_CMD set). Stdout IS
-# the credential (helper protocol) — its one legitimate value-out; never logged. 
+# `sops -d --extract '["ANTHROPIC_API_KEY"]'`. Stdout IS the credential (helper protocol) — its one
+# legitimate value-out; never logged. AGENT_SECRETS_ROOT baked at top, env-overridable.
 set -euo pipefail
-echo "apiKeyHelper: not implemented yet" >&2
-exit 1
+AGENT_SECRETS_ROOT="${AGENT_SECRETS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# shellcheck source=lib/common.sh
+. "$AGENT_SECRETS_ROOT/lib/common.sh"
+# shellcheck source=lib/keychain.sh
+. "$AGENT_SECRETS_ROOT/lib/keychain.sh"
+# shellcheck source=lib/store.sh
+. "$AGENT_SECRETS_ROOT/lib/store.sh"
+[ -f "$(agsec_store_file)" ] || agsec_die "no store found — run: agent-secrets setup"
+store_extract "ANTHROPIC_API_KEY"

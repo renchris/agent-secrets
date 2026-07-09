@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # bin/claude-agent — JIT wrapper: inject secrets process-scoped, exec `claude`.
-# Canonical form: exec sops exec-env "$(store_file)" claude "$@" with SOPS_AGE_KEY_CMD set.
-# Installed to ~/bin; resolves AGENT_SECRETS_ROOT at install time.
+# Installed to ~/bin; AGENT_SECRETS_ROOT baked at top, env-overridable.
 set -euo pipefail
-echo "claude-agent: not implemented yet" >&2
-exit 1
+AGENT_SECRETS_ROOT="${AGENT_SECRETS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# shellcheck source=lib/common.sh
+. "$AGENT_SECRETS_ROOT/lib/common.sh"
+# shellcheck source=lib/keychain.sh
+. "$AGENT_SECRETS_ROOT/lib/keychain.sh"
+# shellcheck source=lib/store.sh
+. "$AGENT_SECRETS_ROOT/lib/store.sh"
+[ -f "$(agsec_store_file)" ] || agsec_die "no store found — run: agent-secrets setup"
+store_exec -- claude "$@"
