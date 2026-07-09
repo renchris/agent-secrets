@@ -1,0 +1,22 @@
+# agent-secrets tooling repo — ZERO secrets, ZERO machine facts.
+# Defense-in-depth: never let secret material or user store state get committed.
+*.key
+*.pem
+*.age
+.env
+.env.*
+!.env.example
+secrets.env
+age.key
+age.pub
+install-manifest.json
+
+# macOS / editor cruft
+.DS_Store
+*.swp
+*~
+
+# test / build scratch
+*.tmp
+.bats-run-*
+/coverage/

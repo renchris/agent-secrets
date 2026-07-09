@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    # macos-15 only at v0.1; macos-14 joins the matrix at the public-visibility flip.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: brew install shellcheck bats-core age sops
+
+      - name: ShellCheck (all shell sources)
+        run: |
+          find bin cmd lib scripts install.sh -type f -print0 | xargs -0 shellcheck
+
+      - name: Zero-telemetry / no-exfil gate
+        run: scripts/telemetry-gate.sh
+
+      - name: Bats behavior suite (synthetic-HOME isolated)
+        run: bats -r tests
+
+      - name: Demo recording present
+        run: |
+          if [ -f demo.cast ]; then
+            echo "demo.cast present"
+          else
+            echo "::notice::demo.cast not yet present"
+          fi

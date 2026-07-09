@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# bin/cursor-agent — JIT wrapper for Cursor + single-instance guard: if a Dock
+# Cursor is already running (pgrep), tell the user to quit it first and exit non-zero.
+# Installed to ~/bin.
+set -euo pipefail
+echo "cursor-agent: not implemented yet" >&2
+exit 1

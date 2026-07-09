@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# tests/mocks/security — mock macOS `security` (the login Keychain is NOT HOME-scoped, so the
+# real one must never be touched in tests). Backing store: a file under
+# AGENT_SECRETS_HOME. Set AGENT_SECRETS_MOCK_KC_FAIL=1 to simulate a Keychain read failure
+# (degraded-custody drill). Stores a THROWAWAY test key only — never a real secret.
+#
+set -euo pipefail
+db="${AGENT_SECRETS_HOME:?AGENT_SECRETS_HOME unset}/.mock-keychain"
+sub="${1:-}"; shift || true
+
+case "$sub" in
+  add-generic-password)
+    svc=""; val=""; have_w=0
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        -s) svc="${2:-}"; shift 2 ;;
+        -w) have_w=1; if [ "${2:-}" != "" ] && [ "${2:0:1}" != "-" ]; then val="$2"; shift 2; else shift; fi ;;
+        *)  shift ;;
+      esac
+    done
+    # If -w had no inline value, the secret arrives on stdin (the no-argv path).
+    if [ "$have_w" -eq 1 ] && [ -z "$val" ]; then val="$(cat)"; fi
+    printf '%s\t%s\n' "$svc" "$val" >> "$db"
+    ;;
+  find-generic-password)
+    [ -n "${AGENT_SECRETS_MOCK_KC_FAIL:-}" ] && exit 44
+    svc=""
+    while [ "$#" -gt 0 ]; do case "$1" in -s) svc="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    line="$(grep -F "$svc"$'\t' "$db" 2>/dev/null | tail -n1)" || exit 44
+    [ -n "$line" ] || exit 44
+    printf '%s\n' "${line#*$'\t'}"
+    ;;
+  delete-generic-password) exit 0 ;;
+  *) exit 0 ;;
+esac

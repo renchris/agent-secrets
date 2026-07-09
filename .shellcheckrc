@@ -1,0 +1,10 @@
+# agent-secrets shellcheck config (repo-root cwd assumed, as in CI).
+# Follow `# shellcheck source=lib/<x>.sh` directives so cross-file vars/functions resolve
+# (prevents false SC2154 on lib/common.sh constants used by cmd/*.sh).
+external-sources=true
+source-path=SCRIPTDIR
+source-path=SCRIPTDIR/..
+source-path=SCRIPTDIR/../lib
+# Runtime sources use $AGENT_SECRETS_LIB (non-constant); silence the "can't follow" noise —
+# analysis intent is standalone-plus-directive, not full runtime resolution.
+disable=SC1090,SC1091

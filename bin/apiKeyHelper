@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# bin/apiKeyHelper — Claude Code apiKeyHelper: print ANTHROPIC_API_KEY just-in-time via
+# `sops -d --extract '["ANTHROPIC_API_KEY"]' "$(store_file)"` (SOPS_AGE_KEY_CMD set). Stdout IS
+# the credential (helper protocol) — its one legitimate value-out; never logged. 
+set -euo pipefail
+echo "apiKeyHelper: not implemented yet" >&2
+exit 1

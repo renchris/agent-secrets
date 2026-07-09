@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# bin/claude-agent — JIT wrapper: inject secrets process-scoped, exec `claude`.
+# Canonical form: exec sops exec-env "$(store_file)" claude "$@" with SOPS_AGE_KEY_CMD set.
+# Installed to ~/bin; resolves AGENT_SECRETS_ROOT at install time.
+set -euo pipefail
+echo "claude-agent: not implemented yet" >&2
+exit 1
