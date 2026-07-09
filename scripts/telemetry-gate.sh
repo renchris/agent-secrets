@@ -17,8 +17,11 @@ _hit() { printf '  ✗ %s\n' "$1" >&2; fail=1; }
 
 # 1) Known analytics/telemetry endpoints or SDKs in tool source.
 TELEMETRY_RE='(mixpanel|amplitude|segment\.(io|com)|google-?analytics|googletagmanager|posthog|\.datadoghq\.|newrelic|bugsnag|/collect\?|/v1/track|/api/track|telemetry\.[a-z]|analytics\.[a-z])'
-# 2) Env / Keychain dumping piped somewhere, or bare full-env dumps in tool source.
-EXFIL_RE='(security[[:space:]]+dump-keychain|(env|printenv)[[:space:]]*\|[[:space:]]*(curl|wget|nc|ncat|http)|base64[[:space:]]+.*\|[[:space:]]*(curl|wget|nc))'
+# 2) Env / Keychain DATA dumping piped somewhere, or bare full-env dumps in tool source.
+#    Note: bare `security dump-keychain` (attributes/service NAMES only) is allowed — the uninstaller
+#    needs it to enumerate agent-* items to purge. Only `dump-keychain -d` (secret DATA)
+#    is exfil-shaped and flagged.
+EXFIL_RE='(security[[:space:]]+dump-keychain[^|]*[[:space:]]-d([[:space:]]|$)|(env|printenv)[[:space:]]*\|[[:space:]]*(curl|wget|nc|ncat|http)|base64[[:space:]]+.*\|[[:space:]]*(curl|wget|nc))'
 
 echo "== telemetry-gate: scanning tool source ==" >&2
 while IFS= read -r f; do
