@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
-# tests/dispatcher.bats — dispatcher behavior (real at baseline). 
-# these lock the routing contract so it can't silently regress.
+# tests/dispatcher.bats — dispatcher behavior; these lock the routing contract so it
+# can't silently regress.
 load test_helper
 
 @test "version prints a semver line" {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # cmd/add.sh — `add <NAME>`: read one value (hidden) and store it (store_add writes the manifest row).
-# Value source = STDIN if piped (testable/scriptable), else ui_read_secret. 
+# Value source = STDIN if piped (testable/scriptable), else ui_read_secret.
 set -euo pipefail
 . "${AGENT_SECRETS_LIB:?run via bin/agent-secrets}/common.sh"
 case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render add; exit 0 ;; esac

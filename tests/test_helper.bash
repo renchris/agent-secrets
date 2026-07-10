@@ -1,6 +1,6 @@
 # tests/test_helper.bash — shared bats setup. Synthetic-HOME isolation.
 # Every .bats file: `load test_helper`. Never touches the real HOME, username, or login Keychain.
-# this harness is the isolation contract — extend, do not weaken it.
+# This harness is the isolation contract — extend, do not weaken it.
 
 setup() {
   # Throwaway HOME for this test; the tool resolves every path via agsec_home()→AGENT_SECRETS_HOME.

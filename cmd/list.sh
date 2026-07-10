@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # cmd/list.sh — `list`: print secret NAMES + manifest.toml metadata (rotate_by). Never values.
-# Optional --format=json. 
+# Optional --format=json.
 set -euo pipefail
 . "${AGENT_SECRETS_LIB:?run via bin/agent-secrets}/common.sh"
 case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render list; exit 0 ;; esac

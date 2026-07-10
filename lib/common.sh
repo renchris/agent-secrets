@@ -2,15 +2,14 @@
 # shellcheck disable=SC2034  # sourced library: constants/colors are consumed by cmd/*.sh + wrappers
 # lib/common.sh — shared foundation for agent-secrets.
 # Sourced by bin/agent-secrets, every cmd/*.sh, and the wrappers.
-# 
+# Stable interface: consume these helpers; do not redefine them in callers.
 #
 # HARD CONTRACT (enforced centrally here):
 #   * Names-only. No function in this file ever writes a secret VALUE to stdout,
 #     stderr, a log, or any file outside the sops-encrypted store.
 #   * Synthetic-HOME. Every user path derives from agsec_home(); tests/recordings
 #     set AGENT_SECRETS_HOME to an isolated dir so nothing touches the real HOME,
-#     username, or secret-name set
-# 
+#     username, or secret-name set.
 
 # Sourced library: do NOT `set -e`/`set -u` here (would leak into callers).
 set -o pipefail 2>/dev/null || true
@@ -48,7 +47,7 @@ else
   C_GREEN=$'\033[32m' ; C_YELLOW=$'\033[33m' ; C_RED=$'\033[31m' ; C_BLUE=$'\033[34m'
 fi
 
-# Status glyphs (✓/⚠/✗) — available in (doctor) before ui.sh exists.
+# Status glyphs (✓/⚠/✗) — available before ui.sh is sourced (used by doctor).
 agsec_ok()   { printf '%s\n' "${C_GREEN}✓${C_RESET} $*"; }
 agsec_attn() { printf '%s\n' "${C_YELLOW}⚠${C_RESET} $*"; }
 agsec_bad()  { printf '%s\n' "${C_RED}✗${C_RESET} $*"; }
@@ -65,7 +64,8 @@ agsec_digest() { shasum -a 256 2>/dev/null | awk '{print "sha256:"substr($1,1,12
 agsec_have()    { command -v "$1" >/dev/null 2>&1; }
 agsec_require() { agsec_have "$1" || agsec_die "required command not found: $1 — run: agent-secrets doctor"; }
 
-# Refuse secret-bearing key ceremonies inside an agent session.
+# Refuse secret-bearing key ceremonies inside an agent session
+# (~/.claude/projects transcripts capture stdout in plaintext).
 agsec_in_agent_session() {
   [ -n "${CLAUDECODE:-}" ] && return 0
   [ -n "${CLAUDE_CODE:-}" ] && return 0

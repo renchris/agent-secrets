@@ -3,7 +3,6 @@
 This document states plainly what `agent-secrets` protects, what it does **not**, and how to report
 a problem.
 
-
 ## The names-only guarantee
 
 The tool is built so a secret **value** is never displayed, logged, or written in plaintext outside

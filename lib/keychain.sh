@@ -7,8 +7,8 @@
 # clean, no-argv sink; the Keychain add mirrors it via the design's STDIN `-w` form (also honored
 # by the test `security` shim).  ⚠️ On real macOS Sequoia the `security -w` no-argv path does NOT
 # read STDIN — it prompts /dev/tty with a double-confirm — so the Keychain sink cannot be
-# populated without argv (banned) or an interactive tty double-type.
-# custody runs on the file fallback until a no-argv Keychain-write flow.
+# populated without argv (banned) or an interactive tty double-type — so custody runs on the
+# file fallback until a no-argv Keychain-write flow is settled.
 kc_add() {
   # Read the FULL key material from stdin — an age key file is multi-line (comment lines + the
   # AGE-SECRET-KEY line), so a single `read -r` would drop the actual key. `cat` preserves all of it.

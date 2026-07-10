@@ -102,5 +102,4 @@ specifically when any check is ✗ — use it as a boolean gate.
 
 ## More
 
-`README.md` (human overview + diagrams) · `SECURITY.md` (threat model, honest ceiling) ·
-`agent-secrets help --json` (the authoritative surface).
+`README.md` (human overview + diagrams) · `SECURITY.md` (threat model, honest ceiling) · `agent-secrets help --json` (the authoritative surface).

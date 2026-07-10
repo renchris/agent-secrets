@@ -21,7 +21,6 @@
 - [README.md](README.md): human overview, demo, architecture diagrams.
 - [SECURITY.md](SECURITY.md): threat model and the honest ceiling.
 
-
 ## Rules
 - Never print, echo, or log a secret value. Use `list` (names) or `run -- printenv X | wc -c` (length) to confirm presence.
 - Pass secret values on STDIN, never on the command line.

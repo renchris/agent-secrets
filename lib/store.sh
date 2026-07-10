@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/store.sh — sops+age secret store.  
+# lib/store.sh — sops+age secret store.
 # Assumes common.sh is already sourced by the entry script. Names-only: store_extract and
 # store_exec are the sole value-outs (JIT injection). No secret VALUE ever reaches stdout/log/argv.
 

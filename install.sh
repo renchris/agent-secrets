@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# install.sh — one-command bootstrap (curl'd). 
+# install.sh — one-command bootstrap (curl'd).
 # FUNCTION-GUARDED (main(){…}; main "$@") so a truncated download can never partial-exec
 # Consent gate is the FIRST screen; --dry-run = plan-then-apply (the rendered
-# plan is exactly what executes). STOP-ASK gates have NO --force/env bypass
+# plan is exactly what executes). STOP-ASK gates have NO --force/env bypass.
 # Install from a PINNED release tag (never main); SHA-256 verify any artifact before running it.
-# AGENT_SECRETS_BASE_URL overrides the source (private-repo / corporate mirror;
-# smoke uses it). Records every TOOL artifact via lib/manifest.sh; no secret value ever handled.
+# AGENT_SECRETS_BASE_URL overrides the source (private-repo / corporate mirror; the smoke test
+# uses it). Records every TOOL artifact via lib/manifest.sh; no secret value ever handled.
 set -euo pipefail
 
 main() {
@@ -60,7 +60,7 @@ main() {
     return 0
   fi
   _render_plan
-  # No --force / env bypass: consent is mandatory
+  # No --force / env bypass: consent is mandatory.
   printf '[Enter] continue · [d] show the full dry-run first · Ctrl-C stop: ' >&2
   local reply; read -r reply
   if [ "$reply" = "d" ] || [ "$reply" = "D" ]; then

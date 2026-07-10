@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/restore.sh — restore flow + returning-user fast path. 
+# lib/restore.sh — restore flow + returning-user fast path.
 # setup.sh calls these. Names-only: the age key VALUE transits stdin/ui_read_secret, never echoed.
 
 # fresh | installed | partial — for setup.sh's returning-user branch (screen 1).

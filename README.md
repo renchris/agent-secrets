@@ -190,8 +190,7 @@ reads the key can read the whole store — the same ceiling a password-manager v
 design adds is *keeping secrets out of the places they usually leak* and *bounding + detecting*
 misuse: an in-store **canary** trips an alert on any whole-store sweep, and a process-scoped **egress
 allowlist** bounds where a compromised agent can send data. It does **not** claim a per-secret audit
-trail on the free tier. Full threat model → **[SECURITY.md](SECURITY.md)**
-
+trail on the free tier. Full threat model → **[SECURITY.md](SECURITY.md)**.
 
 ## For AI agents
 
@@ -208,7 +207,6 @@ agent-secrets <command> --help     # detailed per-command help (side-effect-free
 - **[AGENTS.md](AGENTS.md)** · **[llms.txt](llms.txt)** — agent-facing usage guide + large language model (LLM) link index
 - **[SECURITY.md](SECURITY.md)** — threat model, the honest ceiling, reporting a vulnerability
 - **[docs/FAQ.md](docs/FAQ.md)** — "I don't code", store backup, the Dock-Cursor rule, corporate installs, Touch ID
-
 - Regenerate the demo: `scripts/record-demo.sh` (Charm [VHS](https://github.com/charmbracelet/vhs))
 
 ## Uninstall

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# lib/ui.sh — interactive UI layer. 
+# lib/ui.sh — interactive UI layer.
 # gum is used ONLY for navigation/momentum; every SECRET input uses builtin `read -s` (never gum).
 # Honors AGENT_SECRETS_PLAIN / NO_COLOR / --plain + adaptive colors (via common.sh). Sourced after
 # common.sh. Names-only: ui_read_secret's value goes to STDOUT for the caller to pipe; nothing echoes.

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # cmd/setup.sh — onboarding wizard. Screens 1–7 (installer owns screen-0 consent).
 # Interactive by default; AGENT_SECRETS_UNATTENDED=1 runs it non-interactively with fake values for
-# the §5 drills (accepts defaults, file custody, skips the clipboard/paste steps). Idempotent:
-# re-running never mints a second key. Names-only. 
+# tests (accepts defaults, file custody, skips the clipboard/paste steps). Idempotent:
+# re-running never mints a second key. Names-only.
 set -euo pipefail
 . "${AGENT_SECRETS_LIB:?run via bin/agent-secrets}/common.sh"
 # help guard — precede the agent-session refusal so `setup --help` self-documents

@@ -30,7 +30,7 @@ while IFS= read -r f; do
   if grep -nEI "$EXFIL_RE" "$f" 2>/dev/null; then _hit "env/keychain exfil pattern in $f"; fi
 done < <(find "${SRC_GLOBS[@]}" -type f \( -name '*.sh' -o -perm -u+x \) 2>/dev/null | sort -u)
 
-# 3) Workflows must not dump env or echo secrets
+# 3) Workflows must not dump env or echo secrets.
 echo "== telemetry-gate: scanning workflows ==" >&2
 if [ -d .github/workflows ]; then
   while IFS= read -r wf; do

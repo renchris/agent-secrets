@@ -2,7 +2,7 @@
 # cmd/uninstall.sh — total removal via the install-manifest: tool files, PATH block, launchd
 # bootout, settings.json apiKeyHelper revert, Keychain agent-* purge. A keep-vs-purge PROMPT
 # governs the user's DATA (the sops store + age keys under the config dir) — that is NOT in the
-# install-manifest. Zero residue is the goal. 
+# install-manifest. Zero residue is the goal.
 set -euo pipefail
 # shellcheck source=/dev/null
 . "${AGENT_SECRETS_LIB:?run via bin/agent-secrets}/common.sh"
@@ -23,7 +23,7 @@ main() {
   [ "$dry" -eq 1 ] && agsec_note "(dry-run: showing the plan, changing nothing)"
 
   # keep-vs-purge for the user's DATA (store + keys). Data-loss decision → a real STOP-ASK gate
-  # with NO --force/env bypass --dry-run defaults to KEEP (touches nothing).
+  # with NO --force/env bypass. --dry-run defaults to KEEP (touches nothing).
   local purge=0
   if [ "$dry" -eq 1 ]; then
     agsec_note "(dry-run) would ASK: keep or purge the encrypted store + age keys under $config_dir"

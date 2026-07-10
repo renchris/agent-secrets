@@ -7,8 +7,8 @@
 set -euo pipefail
 . "${AGENT_SECRETS_LIB:?AGENT_SECRETS_LIB unset — run via bin/agent-secrets}/common.sh"
 case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render doctor; exit 0 ;; esac
-. "$AGENT_SECRETS_LIB/store.sh"       # guarded: tolerates an unset/absent store
-. "$AGENT_SECRETS_LIB/keychain.sh"    # guarded: tolerates an unset/absent store
+. "$AGENT_SECRETS_LIB/store.sh"       # every call below is guarded against an unset/absent store
+. "$AGENT_SECRETS_LIB/keychain.sh"    # guarded against an unset/absent store
 
 FORMAT=text ; REDACT=0 ; FIX=0 ; GATES=0
 for arg in "$@"; do
@@ -155,7 +155,7 @@ check_supply() {
   fi
 }
 
-check_gates() {  # (c)/(d)/(e) — (c) degradation is a note, never a block/error
+check_gates() {  # execution gates (c)/(d)/(e) — (c) degradation is a note, never a block/error
   local st
   if _try st kc_status && [ "$st" = primary ]; then _row gate ok "(c) keychain read" "primary"
   else _row gate attn "(c) keychain read" "degraded (file custody)"; fi
