@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # tests/mocks/security — mock macOS `security` (the login Keychain is NOT HOME-scoped, so the
 # real one must never be touched in tests). Backing store: a file under
-# AGENT_SECRETS_HOME. Set AGENT_SECRETS_MOCK_KC_FAIL=1 to simulate a Keychain read failure
-# (degraded-custody drill). Stores a THROWAWAY test key only — never a real secret.
-#
+# AGENT_SECRETS_HOME. Values are base64-encoded on disk so multi-line/arbitrary key material
+# round-trips faithfully (real Keychain generic-passwords hold arbitrary bytes). Set
+# AGENT_SECRETS_MOCK_KC_FAIL=1 to simulate a Keychain read failure (degraded-custody drill).
+# Stores a THROWAWAY test key only — never a real secret.
 set -euo pipefail
 db="${AGENT_SECRETS_HOME:?AGENT_SECRETS_HOME unset}/.mock-keychain"
 sub="${1:-}"; shift || true
@@ -20,7 +21,8 @@ case "$sub" in
     done
     # If -w had no inline value, the secret arrives on stdin (the no-argv path).
     if [ "$have_w" -eq 1 ] && [ -z "$val" ]; then val="$(cat)"; fi
-    printf '%s\t%s\n' "$svc" "$val" >> "$db"
+    # base64 the value so a multi-line key stays one physical record.
+    printf '%s\t%s\n' "$svc" "$(printf '%s' "$val" | base64 | tr -d '\n')" >> "$db"
     ;;
   find-generic-password)
     [ -n "${AGENT_SECRETS_MOCK_KC_FAIL:-}" ] && exit 44
@@ -28,8 +30,21 @@ case "$sub" in
     while [ "$#" -gt 0 ]; do case "$1" in -s) svc="${2:-}"; shift 2 ;; *) shift ;; esac; done
     line="$(grep -F "$svc"$'\t' "$db" 2>/dev/null | tail -n1)" || exit 44
     [ -n "$line" ] || exit 44
-    printf '%s\n' "${line#*$'\t'}"
+    printf '%s' "${line#*$'\t'}" | base64 --decode
     ;;
-  delete-generic-password) exit 0 ;;
+  delete-generic-password)
+    svc=""
+    while [ "$#" -gt 0 ]; do case "$1" in -s) svc="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    if [ -f "$db" ] && grep -qF "$svc"$'\t' "$db" 2>/dev/null; then
+      grep -vF "$svc"$'\t' "$db" > "$db.tmp" 2>/dev/null || true; mv -f "$db.tmp" "$db" 2>/dev/null || true
+      exit 0
+    fi
+    exit 44
+    ;;
+  dump-keychain)
+    # names/attributes only (no -d) — used by the uninstaller to enumerate agent-* services.
+    [ -f "$db" ] || exit 0
+    awk -F'\t' '{print "    \"svce\"<blob>=\""$1"\""}' "$db" | sort -u
+    ;;
   *) exit 0 ;;
 esac

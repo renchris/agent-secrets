@@ -20,3 +20,19 @@ teardown() {
 
 # Invoke the installed dispatcher (it self-resolves lib/ and cmd/).
 agsec() { bash "$REPO_ROOT/bin/agent-secrets" "$@"; }
+
+# Stand up a REAL sops+age store under the synthetic HOME (throwaway keys, file custody, fake canary).
+# Used by suites that need an initialized store. Never touches the real Keychain (mock is on PATH).
+setup_store() {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/keychain.sh"; . "$REPO_ROOT/lib/store.sh"
+  mkdir -p "$(agsec_config_dir)"
+  age-keygen -o "$(agsec_age_key_file)" 2>/dev/null; chmod 600 "$(agsec_age_key_file)"
+  age-keygen -y "$(agsec_age_key_file)" > "$(agsec_age_pub_file)"
+  age-keygen -o "$(agsec_config_dir)/recovery.key" 2>/dev/null
+  age-keygen -y "$(agsec_config_dir)/recovery.key" > "$(agsec_config_dir)/recovery.pub"
+  rm -f "$(agsec_config_dir)/recovery.key"
+  kc_write_selector
+  store_init >/dev/null 2>&1
+}

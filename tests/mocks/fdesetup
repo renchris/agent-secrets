@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "FileVault is On."
+exit 0

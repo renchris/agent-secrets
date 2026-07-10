@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# tests/mocks/launchctl — record load/bootout into a file under AGENT_SECRETS_HOME; never touch real launchd.
+set -euo pipefail
+db="${AGENT_SECRETS_HOME:?}/.mock-launchd"
+case "${1:-}" in
+  bootstrap|load)   printf 'loaded\n'  >>"$db" ;;
+  bootout|remove)   printf 'booted\n'  >>"$db" ;;
+  print)            grep -q loaded "$db" 2>/dev/null && echo "state = running" || exit 1 ;;
+esac
+exit 0
