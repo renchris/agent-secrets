@@ -26,23 +26,23 @@
   <text x="74" y="188" font-size="22" fill="#e6edf3">Machine-wide secrets for coding agents.</text>
   <text x="74" y="220" font-size="22" fill="#8b949e">Encrypted · just-in-time · <tspan fill="#3fb950" font-weight="700">names-only</tspan>.</text>
 
-  <!-- capability chips -->
-  <g font-size="15" fill="#c9d1d9">
+  <!-- capability chips — font 14, uniform ~13px padding, row ends at x=720 → even 72px gutter to the card -->
+  <g font-size="14" fill="#c9d1d9">
     <g transform="translate(74,262)">
-      <rect width="118" height="34" rx="17" fill="#161b22" stroke="#30363d"/>
-      <text x="59" y="22" text-anchor="middle">sops + age</text>
+      <rect width="110" height="34" rx="17" fill="#161b22" stroke="#30363d"/>
+      <text x="55" y="22" text-anchor="middle">sops + age</text>
     </g>
-    <g transform="translate(202,262)">
-      <rect width="150" height="34" rx="17" fill="#161b22" stroke="#30363d"/>
-      <text x="75" y="22" text-anchor="middle">JIT injection</text>
+    <g transform="translate(194,262)">
+      <rect width="135" height="34" rx="17" fill="#161b22" stroke="#30363d"/>
+      <text x="67.5" y="22" text-anchor="middle">JIT injection</text>
     </g>
-    <g transform="translate(362,262)">
-      <rect width="228" height="34" rx="17" fill="#161b22" stroke="#30363d"/>
-      <text x="114" y="22" text-anchor="middle">one-command reversible</text>
+    <g transform="translate(339,262)">
+      <rect width="211" height="34" rx="17" fill="#161b22" stroke="#30363d"/>
+      <text x="105.5" y="22" text-anchor="middle">one-command reversible</text>
     </g>
-    <g transform="translate(600,262)">
-      <rect width="176" height="34" rx="17" fill="#161b22" stroke="#30363d"/>
-      <text x="88" y="22" text-anchor="middle">$0 · zero vendor</text>
+    <g transform="translate(560,262)">
+      <rect width="160" height="34" rx="17" fill="#161b22" stroke="#30363d"/>
+      <text x="80" y="22" text-anchor="middle">$0 · zero vendor</text>
     </g>
   </g>
 
