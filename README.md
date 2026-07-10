@@ -105,6 +105,37 @@ file, a shell export, a log, or an agent transcript.
   <img src="assets/diagrams/injection-light.svg" alt="Just-in-time injection: secrets.env (sops + age — names plaintext, values encrypted) is decrypted only at launch by the claude-agent / cursor-agent wrappers and injected into the launched process's environment; when the process exits the value is gone — never written to config files, shell exports, ~/.claude transcripts, or terminal logs">
 </picture>
 
+<details>
+<summary>Interactive version — zoom · pan · text selection (native Mermaid) · full-screen SVG: <a href="assets/diagrams/injection-dark.svg?raw=true">dark</a> / <a href="assets/diagrams/injection-light.svg?raw=true">light</a> · <a href="assets/diagrams/injection.mmd">source</a> (“Copy raw file” = the Mermaid markdown)</summary>
+
+<!-- mermaid-fence: assets/diagrams/injection.mmd (auto-synced by `npm run diagrams`) -->
+```mermaid
+flowchart LR
+    subgraph rest["🔒 at rest · encrypted"]
+        S["secrets.env<br/>sops + age<br/><i>names plaintext · values ENC［…］</i>"]
+    end
+    subgraph jit["⚡ just-in-time · process-scoped"]
+        W["claude-agent / cursor-agent<br/>run -- &lt;cmd&gt;"]
+        P(["launched process<br/><b>value in env only</b>"])
+    end
+    S -->|"sops exec-env<br/>decrypt at launch"| W
+    W -->|"inject"| P
+    P -.->|"process exits →<br/>value gone"| X["∅ nothing persists"]
+
+    S -.->|"✗ never written"| LEAK["❌ config files<br/>❌ shell exports<br/>❌ ~/.claude transcripts<br/>❌ terminal / logs"]
+
+    classDef enc fill:#1a2b1a,stroke:#3fb950,color:#e6edf3
+    classDef jit fill:#2b2410,stroke:#d4af37,color:#e6edf3
+    classDef leak fill:#2b1618,stroke:#ff6b6b,color:#ff9b9b
+    classDef gone fill:#161b22,stroke:#6e7681,color:#8b949e
+    class S enc
+    class W,P jit
+    class LEAK leak
+    class X gone
+```
+
+</details>
+
 ### 2 · One key, custodied three ways
 
 A single `age` key unlocks the store. It lives in your login Keychain (prompt-free), with a `0600`
@@ -117,6 +148,38 @@ so you can restore after losing the Mac entirely.
   <img src="assets/diagrams/custody-light.svg" alt="Key custody: one age keypair generated once on-device, held three ways — login Keychain (primary, prompt-free), 0600 file on the FileVault volume (fallback), and an off-machine recovery recipient in your password manager; the age-key-cmd selector feeds SOPS_AGE_KEY_CMD to decrypt secrets.env; a macOS upgrade degrades gracefully to file custody (doctor tracks it), and losing the Mac entirely is covered by the restore drill">
 </picture>
 
+<details>
+<summary>Interactive version — zoom · pan · text selection (native Mermaid) · full-screen SVG: <a href="assets/diagrams/custody-dark.svg?raw=true">dark</a> / <a href="assets/diagrams/custody-light.svg?raw=true">light</a> · <a href="assets/diagrams/custody.mmd">source</a> (“Copy raw file” = the Mermaid markdown)</summary>
+
+<!-- mermaid-fence: assets/diagrams/custody.mmd (auto-synced by `npm run diagrams`) -->
+```mermaid
+flowchart TB
+    K["🔑 age keypair<br/>generated once, on-device"]
+    K --> PRIM["login Keychain<br/><b>primary</b> · prompt-free"]
+    K --> FALL["0600 file · FileVault vol<br/><b>fallback</b>"]
+    K --> REC["recovery recipient<br/><b>off-machine leg</b> → your password manager"]
+
+    SEL{"age-key-cmd<br/>selector"}
+    PRIM --> SEL
+    FALL --> SEL
+    SEL -->|"SOPS_AGE_KEY_CMD"| DEC["decrypt secrets.env"]
+
+    PRIM -. "macOS upgrade breaks Keychain?" .-> DEG["doctor: degraded<br/>(file custody) — tracked, not an outage"]
+    FALL -.-> DEG
+    REC -. "lost your Mac?" .-> RES["restore drill →<br/>store decrypts from the saved key alone"]
+
+    classDef key fill:#2b2410,stroke:#d4af37,color:#f0f6fc
+    classDef sink fill:#161b22,stroke:#58a6ff,color:#e6edf3
+    classDef ok fill:#1a2b1a,stroke:#3fb950,color:#e6edf3
+    classDef warn fill:#2b2410,stroke:#e3b341,color:#e6edf3
+    class K key
+    class PRIM,FALL,REC sink
+    class SEL,DEC ok
+    class DEG,RES warn
+```
+
+</details>
+
 ### 3 · One command in, one command out
 
 Every install action is recorded so uninstall is total — no orphaned launchd jobs, PATH lines, or
@@ -127,6 +190,37 @@ Keychain items.
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/reversible-dark.svg">
   <img src="assets/diagrams/reversible-light.svg" alt="Reversible install: one command installs age/sops/gum, the tool and wrappers on PATH, a weekly launchd smoke job, and the settings.json apiKeyHelper — every change recorded in install-manifest.json (path, sha256, mode, edit, launchd); agent-secrets uninstall performs a total rollback — files, PATH block, launchd bootout, settings.json reverted, Keychain agent-* purged — to zero residue, with a keep-or-purge prompt for your store">
 </picture>
+
+<details>
+<summary>Interactive version — zoom · pan · text selection (native Mermaid) · full-screen SVG: <a href="assets/diagrams/reversible-dark.svg?raw=true">dark</a> / <a href="assets/diagrams/reversible-light.svg?raw=true">light</a> · <a href="assets/diagrams/reversible.mmd">source</a> (“Copy raw file” = the Mermaid markdown)</summary>
+
+<!-- mermaid-fence: assets/diagrams/reversible.mmd (auto-synced by `npm run diagrams`) -->
+```mermaid
+flowchart LR
+    subgraph install["one command · every change recorded"]
+        direction TB
+        I1["brew: age · sops · gum"]
+        I2["tool + wrappers → PATH"]
+        I3["weekly launchd smoke job"]
+        I4["settings.json apiKeyHelper"]
+    end
+    M[("install-manifest.json<br/><i>path · sha256 · mode · edit · launchd</i>")]
+    I1 --> M
+    I2 --> M
+    I3 --> M
+    I4 --> M
+    M ==>|"agent-secrets uninstall"| U["↩ total rollback<br/>files · PATH block · launchd bootout<br/>settings.json reverted · Keychain agent-* purged"]
+    U --> Z["✓ zero residue<br/><i>keep-or-purge prompt for your store</i>"]
+
+    classDef step fill:#161b22,stroke:#58a6ff,color:#e6edf3
+    classDef man fill:#2b2410,stroke:#d4af37,color:#f0f6fc
+    classDef undo fill:#1a2b1a,stroke:#3fb950,color:#e6edf3
+    class I1,I2,I3,I4 step
+    class M man
+    class U,Z undo
+```
+
+</details>
 
 ## Commands
 

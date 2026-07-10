@@ -3,7 +3,7 @@ flowchart LR
         S["secrets.env<br/>sops + age<br/><i>names plaintext · values ENC［…］</i>"]
     end
     subgraph jit["⚡ just-in-time · process-scoped"]
-        W["claude-agent / cursor-agent<br/>run -- <cmd>"]
+        W["claude-agent / cursor-agent<br/>run -- &lt;cmd&gt;"]
         P(["launched process<br/><b>value in env only</b>"])
     end
     S -->|"sops exec-env<br/>decrypt at launch"| W

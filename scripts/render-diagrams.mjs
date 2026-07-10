@@ -52,6 +52,17 @@ function applyPalette(src, variant) {
   })
 }
 
+// .mmd sources stay native-mermaid-valid (angle brackets as &lt;/&gt; so the
+// README's interactive fence renders them); beautiful-mermaid does NOT decode
+// entities, so decode before rendering. &amp; is decoded last.
+function decodeEntities(src) {
+  return src
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&amp;', '&')
+}
+
 // GitHub serves README images through a proxy that blocks external loads, so
 // the default Google-Fonts @import can never resolve there. Strip it and pin
 // GitHub's own font stack for a native look.
@@ -61,6 +72,24 @@ function githubReady(svg) {
   return svg
     .replace(/^\s*@import url\([^\n]*\);\s*$\n?/m, '')
     .replaceAll("'Inter', system-ui, sans-serif", GITHUB_FONTS)
+}
+
+const README = fileURLToPath(new URL('../README.md', import.meta.url))
+const ROOT = fileURLToPath(new URL('../', import.meta.url))
+
+// README <details> blocks carry a native ```mermaid fence as the interactive
+// fallback (zoom/pan/select on github.com). Fence bodies are auto-synced from
+// the .mmd sources (dark palette baked — native mermaid can't switch per mode).
+const FENCE_RE =
+  /(<!-- mermaid-fence: (\S+) \(auto-synced by `npm run diagrams`\) -->\n```mermaid\n)([\s\S]*?)(```)/g
+function syncReadmeFences() {
+  const readme = readFileSync(README, 'utf8')
+  const updated = readme.replace(FENCE_RE, (_m, head, relPath, _body, tail) =>
+    head + applyPalette(readFileSync(join(ROOT, relPath), 'utf8'), 'dark') + tail,
+  )
+  if (updated === readme) return false
+  if (!CHECK) writeFileSync(README, updated)
+  return true
 }
 
 const sources = readdirSync(DIR).filter((f) => f.endsWith('.mmd')).sort()
@@ -75,7 +104,7 @@ for (const file of sources) {
   for (const [variant, theme] of VARIANTS) {
     const out = file.replace(/\.mmd$/, `-${variant}.svg`)
     const svg = githubReady(
-      renderMermaidSVG(applyPalette(src, variant), { ...theme, transparent: true }),
+      renderMermaidSVG(decodeEntities(applyPalette(src, variant)), { ...theme, transparent: true }),
     )
     const path = join(DIR, out)
     if (CHECK) {
@@ -91,7 +120,14 @@ for (const file of sources) {
   }
 }
 
+const fencesChanged = syncReadmeFences()
 if (CHECK) {
+  if (fencesChanged) {
+    console.error('STALE: README mermaid fence(s) do not match .mmd sources — run `npm run diagrams`')
+    stale++
+  }
   if (stale) process.exit(1)
-  console.log(`all ${sources.length * VARIANTS.length} SVGs up to date`)
+  console.log(`all ${sources.length * VARIANTS.length} SVGs + README fences up to date`)
+} else if (fencesChanged) {
+  console.log('synced README mermaid fence(s)')
 }
