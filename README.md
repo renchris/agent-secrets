@@ -7,7 +7,7 @@
 [![CI](https://github.com/renchris/agent-secrets/actions/workflows/ci.yml/badge.svg)](https://github.com/renchris/agent-secrets/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-d4af37?style=flat-square)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.1.0-58a6ff?style=flat-square)](VERSION)
-[![Tests](https://img.shields.io/badge/bats-30%2F30-3fb950?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/bats-41%2F41-3fb950?style=flat-square)](tests)
 [![Security](https://img.shields.io/badge/values-names--only-3fb950?style=flat-square)](SECURITY.md)
 [![Crypto](https://img.shields.io/badge/crypto-sops%20%2B%20age-d4af37?style=flat-square)](https://github.com/getsops/sops)
 [![Agent-ready](https://img.shields.io/badge/agent--ready-AGENTS.md%20%C2%B7%20help%20--json-bc8cff?style=flat-square)](AGENTS.md)
@@ -88,8 +88,8 @@ The installer is function-guarded and pins a SHA-256–verified release.
 command, an encrypted store at `~/.config/secrets/`, a key in your login Keychain, and one `PATH`
 line — all removable in one command.
 
-> **Private beta:** while this repo is private the `curl` URL 404s. Install from a mirror or a local
-> checkout with `AGENT_SECRETS_BASE_URL=<mirror> sh install.sh` (see [FAQ](docs/FAQ.md)).
+> **Behind a corporate firewall or air-gapped?** If `raw.githubusercontent.com` is blocked, install
+> from an internal mirror: `AGENT_SECRETS_BASE_URL=<mirror> sh install.sh` (see [FAQ](docs/FAQ.md) → corporate install).
 
 ## How it works
 
