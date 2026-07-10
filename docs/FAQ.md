@@ -29,17 +29,33 @@ Agent work that needs secrets goes through the `cursor-agent` command, which inj
 that launch. If you run `cursor-agent` while a Dock Cursor is already open, it will tell you to quit
 that one first — otherwise the new secrets wouldn't reach the running app.
 
-### Corporate machine, or an internal mirror?
+### Corporate machine, firewall, or air-gapped?
 
-While the repo is private (or on a locked-down network) the public `curl` URL won't work. Point the
-installer at an internal mirror or a local copy:
+If your network filters egress (Cisco Umbrella, Zscaler, a TLS-inspecting proxy), give IT this
+**allowlist** — every host the installer touches:
+
+| Host | Why |
+|---|---|
+| `raw.githubusercontent.com` | fetches `install.sh` |
+| `github.com`, `objects.githubusercontent.com` | the pinned release tarball + `.sha256` |
+| `github.com/Homebrew`, `formulae.brew.sh`, `ghcr.io` | Homebrew + bottles for `age`, `sops`, `gum` (skipped if already installed) |
+| `canarytokens.org` | runtime only, and only if you enable the in-store canary |
+
+**Proxy + TLS inspection work with no changes:** `install.sh` uses `curl`, which honors
+`HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`; and as long as your corporate root CA is trusted (Jamf/MDM
+installs it into the System keychain) system `curl` validates the inspected TLS transparently — set
+`CURL_CA_BUNDLE=/path/to/corp-ca.pem` only if it is not.
+
+**Internal mirror / air-gapped (no public egress):** mirror the release assets (`install.sh` +
+`agent-secrets-v0.1.0.tar.gz` + `.sha256`, under a `releases/download/v0.1.0/` path) onto your
+internal Git / Artifactory / Nexus, fetch `install.sh` from there, and point it back at the mirror:
 
 ```sh
 AGENT_SECRETS_BASE_URL=https://git.internal.example/mirror/agent-secrets sh install.sh
 ```
 
-On a corporate machine, get IT/security approval first, keep your dotfiles + manifest on the
-**internal** git host (names-only is still internal-sensitive), and note that corporate endpoint detection and response (EDR) or an
+Get IT/security approval first; keep your store + manifest on the **internal** git host (names-only
+is still internal-sensitive); and note that corporate endpoint detection and response (EDR) or an
 egress proxy may already provide the network bound this design asks for — integrate with it rather
 than double-building.
 
