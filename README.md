@@ -106,7 +106,7 @@ file, a shell export, a log, or an agent transcript.
 </picture>
 
 <details>
-<summary>Interactive version — zoom · pan · text selection (native Mermaid) · full-screen SVG: <a href="assets/diagrams/injection-dark.svg?raw=true">dark</a> / <a href="assets/diagrams/injection-light.svg?raw=true">light</a> · <a href="assets/diagrams/injection.mmd">source</a> (“Copy raw file” = the Mermaid markdown)</summary>
+<summary>Interactive version</summary>
 
 <!-- mermaid-fence: assets/diagrams/injection.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
@@ -134,6 +134,8 @@ flowchart LR
     class X gone
 ```
 
+<sup><a href="assets/diagrams/injection-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/injection-light.svg?raw=true">light</a> · <a href="assets/diagrams/injection.mmd">source</a></sup>
+
 </details>
 
 ### 2 · One key, custodied three ways
@@ -149,7 +151,7 @@ so you can restore after losing the Mac entirely.
 </picture>
 
 <details>
-<summary>Interactive version — zoom · pan · text selection (native Mermaid) · full-screen SVG: <a href="assets/diagrams/custody-dark.svg?raw=true">dark</a> / <a href="assets/diagrams/custody-light.svg?raw=true">light</a> · <a href="assets/diagrams/custody.mmd">source</a> (“Copy raw file” = the Mermaid markdown)</summary>
+<summary>Interactive version</summary>
 
 <!-- mermaid-fence: assets/diagrams/custody.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
@@ -178,6 +180,8 @@ flowchart TB
     class DEG,RES warn
 ```
 
+<sup><a href="assets/diagrams/custody-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/custody-light.svg?raw=true">light</a> · <a href="assets/diagrams/custody.mmd">source</a></sup>
+
 </details>
 
 ### 3 · One command in, one command out
@@ -192,7 +196,7 @@ Keychain items.
 </picture>
 
 <details>
-<summary>Interactive version — zoom · pan · text selection (native Mermaid) · full-screen SVG: <a href="assets/diagrams/reversible-dark.svg?raw=true">dark</a> / <a href="assets/diagrams/reversible-light.svg?raw=true">light</a> · <a href="assets/diagrams/reversible.mmd">source</a> (“Copy raw file” = the Mermaid markdown)</summary>
+<summary>Interactive version</summary>
 
 <!-- mermaid-fence: assets/diagrams/reversible.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
@@ -219,6 +223,8 @@ flowchart LR
     class M man
     class U,Z undo
 ```
+
+<sup><a href="assets/diagrams/reversible-dark.svg?raw=true">full-screen dark</a> · <a href="assets/diagrams/reversible-light.svg?raw=true">light</a> · <a href="assets/diagrams/reversible.mmd">source</a></sup>
 
 </details>
 
