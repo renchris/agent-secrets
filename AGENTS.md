@@ -1,0 +1,106 @@
+# AGENTS.md — driving `agent-secrets` autonomously
+
+You are an AI agent. This file is your complete operating guide for the `agent-secrets` CLI — enough
+to use it correctly with **no human in the loop**. If you read nothing else, read the **Golden rules**
+and **Discovery** sections.
+
+`agent-secrets` stores a machine's secrets encrypted at rest (sops + age) and injects them into a
+process **just-in-time**. It is **names-only**: the tool never prints a secret value, and you must not
+either.
+
+---
+
+## Golden rules (do not violate)
+
+1. **Never print, echo, or log a secret value.** Not to stdout, not to a file, not into your own
+   transcript. `list` and `doctor` are safe because they only ever emit *names* and status.
+2. **Pass secret values via STDIN, never on argv.** argv is world-readable in the process table.
+   ✅ `printf '%s' "$VALUE" | agent-secrets add NAME` ❌ `agent-secrets add NAME "$VALUE"`
+3. **To use a secret, inject it — don't read it.** `agent-secrets run -- <cmd>` puts the values in the
+   child process's environment for that run only. Prefer this over ever materializing a value.
+4. **Gate on `doctor`'s exit code.** `0` = no failing checks, `1` = at least one ✗. Parse
+   `doctor --format=json` for structure.
+5. **`uninstall` and the setup key-ceremony are human-gated.** `uninstall` removes the installation and
+   prompts about the store; the `setup` wizard refuses its key ceremony inside an agent session
+   (transcripts are secret-bearing). Do not automate these without an explicit human instruction.
+
+## Discovery — learn the whole surface without a human
+
+```sh
+agent-secrets help                 # overview: commands, global flags, env, exit codes
+agent-secrets help --json          # FULL machine-readable manifest — parse this
+agent-secrets <command> --help     # detailed help for one command (safe; no side effects)
+agent-secrets help <command>       # same, spelled differently
+```
+
+`help --json` returns `{ tool, version, commands[], reserved_v0_2[], agent_notes }` where each command
+has `{ name, synopsis, summary, description, args[], flags[], env[], examples[], exit_codes[], reads,
+writes, names_only }`. **Everything you need to construct a valid invocation is in there.** Every
+`<command> --help` is side-effect-free — safe to probe, including `uninstall --help`.
+
+## The commands
+
+| Command | Use it to | Key detail |
+|---|---|---|
+| `setup` | onboard a machine (once) | interactive; refuses key-ceremony in an agent session |
+| `add <NAME>` | store/update one secret | value via **STDIN**; `NAME` = `^[A-Za-z_][A-Za-z0-9_]*$` |
+| `list [--format=json]` | see what exists | **names + rotate dates only**, never values |
+| `run -- <cmd>` | run a tool with secrets | JIT-injected into that process; `--` is required |
+| `doctor [--format=json] [--gates]` | check health / gate | exit `0` healthy, `1` if any ✗ |
+| `uninstall [--dry-run]` | remove everything | human-gated; `--dry-run` previews |
+
+Wrappers `claude-agent` / `cursor-agent` are `run` specialized for those tools. `rotate` and `demo`
+are reserved for v0.2 and exit `2` if called.
+
+## Recipes (copy these)
+
+```sh
+# Add a secret you already hold in a variable — value never hits argv or the screen
+printf '%s' "$THE_VALUE" | agent-secrets add ANTHROPIC_API_KEY
+
+# Check whether a secret exists (names only; safe)
+agent-secrets list --format=json | jq -e '.[] | select(.name=="ANTHROPIC_API_KEY")' >/dev/null \
+  && echo present || echo absent
+
+# Use a secret WITHOUT ever reading its value: inject and run
+agent-secrets run -- your-tool --that-needs ANTHROPIC_API_KEY
+
+# Prove injection works without displaying the value (byte count only)
+agent-secrets run -- printenv ANTHROPIC_API_KEY | wc -c      # >1 means present
+
+# Health-gate before doing work; branch on exit code
+if agent-secrets doctor >/dev/null 2>&1; then echo healthy; else agent-secrets doctor; fi
+
+# Machine-readable health for decisions
+agent-secrets doctor --format=json | jq '[.[] | select(.status=="fail")]'
+```
+
+## Environment variables
+
+| Var | Effect |
+|---|---|
+| `AGENT_SECRETS_HOME` | base dir for all state (default `$HOME`). **Set to an isolated temp dir to test/CI without touching the real machine.** |
+| `AGENT_SECRETS_PLAIN` / `NO_COLOR` | plain output (no color/box-drawing) — use when capturing output |
+| `AGENT_SECRETS_UNATTENDED` | `setup` runs non-interactively with **fake placeholder** values (tests only); reads the first value from STDIN |
+
+⚠️ The macOS login Keychain is **not** scoped by `AGENT_SECRETS_HOME`. When testing, put a mock
+`security` on `PATH` (see `tests/mocks/`) so you never touch the real Keychain.
+
+## Exit codes
+
+`0` success · `1` runtime error (read the message — it is names-only and tells you the fix, e.g.
+"run: agent-secrets setup") · `2` usage error / unknown command / reserved verb. `doctor` returns `1`
+specifically when any check is ✗ — use it as a boolean gate.
+
+## What NOT to do
+
+- ❌ Print a value to confirm it — use `list` (names) or `run -- printenv X | wc -c` (length) instead.
+- ❌ Put a value on the command line (`add NAME value`) — pipe it via STDIN.
+- ❌ Run `setup`'s key ceremony inside your own session — it will refuse; that is correct.
+- ❌ Run `uninstall` to "clean up" without explicit human intent — it is a destructive, gated action.
+- ❌ Use an MCP server or command that returns a raw secret value — it lands in the transcript.
+
+## More
+
+`README.md` (human overview + diagrams) · `SECURITY.md` (threat model, honest ceiling) ·
+`agent-secrets help --json` (the authoritative surface).

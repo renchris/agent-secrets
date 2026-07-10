@@ -10,6 +10,7 @@
 [![Tests](https://img.shields.io/badge/bats-30%2F30-3fb950?style=flat-square)](tests)
 [![Security](https://img.shields.io/badge/values-names--only-3fb950?style=flat-square)](SECURITY.md)
 [![Crypto](https://img.shields.io/badge/crypto-sops%20%2B%20age-d4af37?style=flat-square)](https://github.com/getsops/sops)
+[![Agent-ready](https://img.shields.io/badge/agent--ready-AGENTS.md%20%C2%B7%20help%20--json-bc8cff?style=flat-square)](AGENTS.md)
 [![Cost](https://img.shields.io/badge/cost-%240%20%C2%B7%20zero%20vendor-8b949e?style=flat-square)](#the-honest-ceiling)
 
 **Encrypted at rest · injected just-in-time · never in a config, log, or transcript.**
@@ -192,8 +193,19 @@ allowlist** bounds where a compromised agent can send data. It does **not** clai
 trail on the free tier. Full threat model → **[SECURITY.md](SECURITY.md)**
 
 
+## For AI agents
+
+Driving this tool autonomously? Start with **[AGENTS.md](AGENTS.md)** — golden rules, discovery,
+copy-paste recipes, and exit codes. The CLI is fully self-describing with no human needed:
+
+```sh
+agent-secrets help --json          # authoritative machine-readable command manifest
+agent-secrets <command> --help     # detailed per-command help (side-effect-free, even `uninstall --help`)
+```
+
 ## More
 
+- **[AGENTS.md](AGENTS.md)** · **[llms.txt](llms.txt)** — agent-facing usage guide + LLM link index
 - **[SECURITY.md](SECURITY.md)** — threat model, the honest ceiling, reporting a vulnerability
 - **[docs/FAQ.md](docs/FAQ.md)** — "I don't code", store backup, the Dock-Cursor rule, corporate installs, Touch ID
 

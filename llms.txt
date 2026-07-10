@@ -1,0 +1,28 @@
+# agent-secrets
+
+> Machine-wide secrets for coding agents on macOS: encrypted at rest (sops + age), injected
+> just-in-time into a process, and **names-only** — the CLI never prints a secret value. If you are
+> an AI agent, read AGENTS.md and run `agent-secrets help --json` to learn the full command surface.
+
+## For agents (read first)
+- [AGENTS.md](AGENTS.md): complete guide to driving the CLI autonomously — golden rules, discovery, recipes, exit codes.
+- Live manifest: run `agent-secrets help --json` for the authoritative, machine-readable command surface (commands, flags, args, examples, exit codes, reads/writes, names-only notes).
+- Per-command help (side-effect-free): `agent-secrets <command> --help`.
+
+## Commands
+- `setup` — one-time onboarding wizard (human-gated key ceremony).
+- `add <NAME>` — store/update one secret; value via STDIN, never argv.
+- `list [--format=json]` — list secret names + rotate dates (never values).
+- `run -- <cmd>` — run a command with secrets JIT-injected into its process.
+- `doctor [--format=json] [--gates]` — health check; exit 0 healthy, 1 if any failure.
+- `uninstall [--dry-run]` — total, manifest-driven removal (human-gated).
+
+## Docs
+- [README.md](README.md): human overview, demo, architecture diagrams.
+- [SECURITY.md](SECURITY.md): threat model and the honest ceiling.
+
+
+## Rules
+- Never print, echo, or log a secret value. Use `list` (names) or `run -- printenv X | wc -c` (length) to confirm presence.
+- Pass secret values on STDIN, never on the command line.
+- Gate automation on `doctor`'s exit code.
