@@ -28,10 +28,17 @@ jobs:
       - name: Bats behavior suite (synthetic-HOME isolated)
         run: bats -r tests
 
-      - name: Demo recording present
+      - name: Visual assets present
         run: |
-          if [ -f demo.cast ]; then
-            echo "demo.cast present"
-          else
-            echo "::notice::demo.cast not yet present"
+          for a in assets/demo.gif assets/hero.svg assets/demo.tape \
+                   assets/diagrams/injection.mmd assets/diagrams/custody.mmd assets/diagrams/reversible.mmd; do
+            if [ -f "$a" ]; then echo "✓ $a"; else echo "::error::missing visual asset $a"; exit 1; fi
+          done
+
+      - name: Demo asset carries no secret values (names-only)
+        run: |
+          # the tape/script must never embed a real-looking secret; only fake placeholders
+          if grep -RInE 'sk-ant-[A-Za-z0-9]{20}|AGE-SECRET-KEY-1[A-Z0-9]{20}' assets/ ; then
+            echo "::error::possible secret value in assets/"; exit 1
           fi
+          echo "assets clean (names-only)"

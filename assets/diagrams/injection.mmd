@@ -1,0 +1,23 @@
+%%{init: {"theme":"base","themeVariables":{"background":"#0d1117","primaryColor":"#161b22","primaryTextColor":"#e6edf3","primaryBorderColor":"#30363d","lineColor":"#6e7681","fontFamily":"ui-monospace, monospace","fontSize":"15px"}}}%%
+flowchart LR
+    subgraph rest["🔒 at rest · encrypted"]
+        S["secrets.env<br/>sops + age<br/><i>names plaintext · values ENC[…]</i>"]
+    end
+    subgraph jit["⚡ just-in-time · process-scoped"]
+        W["claude-agent / cursor-agent<br/>run -- &lt;cmd&gt;"]
+        P(["launched process<br/><b>value in env only</b>"])
+    end
+    S -->|"sops exec-env<br/>decrypt at launch"| W
+    W -->|"inject"| P
+    P -.->|"process exits →<br/>value gone"| X["∅ nothing persists"]
+
+    S x--x|"never written"| LEAK["❌ config files<br/>❌ shell exports<br/>❌ ~/.claude transcripts<br/>❌ terminal / logs"]
+
+    classDef enc fill:#1a2b1a,stroke:#3fb950,color:#e6edf3;
+    classDef jit fill:#2b2410,stroke:#d4af37,color:#e6edf3;
+    classDef leak fill:#2b1618,stroke:#ff6b6b,color:#ff9b9b;
+    classDef gone fill:#161b22,stroke:#6e7681,color:#8b949e;
+    class S enc;
+    class W,P jit;
+    class LEAK leak;
+    class X gone;

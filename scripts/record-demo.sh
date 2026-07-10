@@ -1,35 +1,31 @@
 #!/usr/bin/env bash
-# scripts/record-demo.sh — record demo.cast against the REAL tool under a SYNTHETIC HOME with FAKE
-# names only (never a real username/host/secret-name). The store is seeded BEFORE
-# recording, so the recorded stream shows only names-only surfaces — no secret value (not even a
-# fake one) ever appears in the cast. Run: scripts/record-demo.sh [output.cast]
+# scripts/record-demo.sh — regenerate assets/demo.gif (the hero animation) reproducibly.
+# Seeds an ISOLATED store with FAKE names outside the recording, wires wrappers so `doctor` is
+# green, then runs Charm VHS over assets/demo.tape. NAMES-ONLY: no secret value is ever typed or
+# shown; the real login Keychain is untouched (mock `security` on PATH). Requires: vhs, age, sops.
 set -euo pipefail
 ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT="${1:-$ROOT/demo.cast}"
-export AGENT_SECRETS_HOME; AGENT_SECRETS_HOME="$(mktemp -d "${TMPDIR:-/tmp}/agsec-demo.XXXXXX")"
-# Keychain is NOT HOME-scoped — the mock `security` (+ siblings) on PATH keeps the recording fully
-# isolated from the real login Keychain, same as the bats suite.
-export PATH="$ROOT/tests/mocks:$ROOT/bin:$PATH"
-trap 'rm -rf "$AGENT_SECRETS_HOME"' EXIT
+DEMO="${AGENT_SECRETS_DEMO_HOME:-/tmp/agsec-demoenv}"
+export AGENT_SECRETS_HOME="$DEMO"
 
-# --- seed a store with FAKE names OUTSIDE the recording (values never enter the cast) ---
-printf 'seed' | AGENT_SECRETS_UNATTENDED=1 "$ROOT/bin/agent-secrets" setup >/dev/null 2>&1 || true
-printf 'seed2' | "$ROOT/bin/agent-secrets" add OPENAI_API_KEY >/dev/null 2>&1 || true
+command -v vhs >/dev/null 2>&1 || { echo "vhs not installed — brew install vhs" >&2; exit 1; }
 
-# --- the recorded script: names-only surfaces only ---
-DEMO="$AGENT_SECRETS_HOME/demo-run.sh"
-cat > "$DEMO" <<'SCRIPT'
-#!/usr/bin/env bash
-b() { printf '\033[1m$ %s\033[0m\n' "$*"; }
-b "agent-secrets --version";        agent-secrets --version;               echo
-b "agent-secrets list";             agent-secrets list;                    echo
-b "agent-secrets doctor";           agent-secrets doctor 2>&1 | head -9;   echo
-b "agent-secrets help";             agent-secrets help 2>&1 | head -12
-SCRIPT
-chmod +x "$DEMO"
+rm -rf "$DEMO"; mkdir -p "$DEMO/bin"
+# Seed with realistic-LENGTH fake values (so `run … | wc -c` shows a convincing count) — the values
+# are placeholders, never real, and never displayed by the tool.
+# shellcheck disable=SC2016  # the $(...) refs run in the INNER bash -c, intentionally unexpanded here
+env AGENT_SECRETS_HOME="$DEMO" AGENT_SECRETS_LIB="$ROOT/lib" PATH="$ROOT/tests/mocks:$PATH" bash -c '
+  . "$AGENT_SECRETS_LIB/common.sh"; . "$AGENT_SECRETS_LIB/keychain.sh"; . "$AGENT_SECRETS_LIB/store.sh"
+  mkdir -p "$(agsec_config_dir)"; age-keygen -o "$(agsec_age_key_file)" 2>/dev/null; chmod 600 "$(agsec_age_key_file)"
+  age-keygen -y "$(agsec_age_key_file)" >"$(agsec_age_pub_file)"; kc_write_selector; store_init >/dev/null 2>&1
+  cat "$(agsec_age_key_file)" | kc_add
+  printf "%048d" 0 | store_add ANTHROPIC_API_KEY >/dev/null 2>&1
+  printf "%048d" 0 | store_add OPENAI_API_KEY    >/dev/null 2>&1
+  printf "%048d" 0 | store_add STRIPE_SECRET_KEY >/dev/null 2>&1'
+for w in claude-agent cursor-agent apiKeyHelper; do ln -sf "$ROOT/bin/$w" "$DEMO/bin/$w"; done
+mkdir -p "$DEMO/.claude/projects"; chmod 700 "$DEMO/.claude/projects"
+printf '{"cleanupPeriodDays":7,"apiKeyHelper":"%s/bin/apiKeyHelper"}\n' "$DEMO" > "$DEMO/.claude/settings.json"
 
-if command -v asciinema >/dev/null 2>&1; then
-  asciinema rec --overwrite -c "bash '$DEMO'" "$OUT" && echo "recorded $OUT"
-else
-  echo "asciinema not installed — skipping recording" >&2; exit 0
-fi
+( cd "$ROOT" && vhs assets/demo.tape )
+echo "regenerated $ROOT/assets/demo.gif"
+rm -rf "$DEMO"

@@ -1,0 +1,23 @@
+%%{init: {"theme":"base","themeVariables":{"background":"#0d1117","primaryColor":"#161b22","primaryTextColor":"#e6edf3","primaryBorderColor":"#30363d","lineColor":"#6e7681","fontFamily":"ui-monospace, monospace","fontSize":"15px"}}}%%
+flowchart LR
+    subgraph install["one command · every change recorded"]
+        direction TB
+        I1["brew: age · sops · gum"]
+        I2["tool + wrappers → PATH"]
+        I3["weekly launchd smoke job"]
+        I4["settings.json apiKeyHelper"]
+    end
+    M[("install-manifest.json<br/><i>path · sha256 · mode · edit · launchd</i>")]
+    I1 --> M
+    I2 --> M
+    I3 --> M
+    I4 --> M
+    M ==>|"agent-secrets uninstall"| U["↩ total rollback<br/>files · PATH block · launchd bootout<br/>settings.json reverted · Keychain agent-* purged"]
+    U --> Z["✓ zero residue<br/><i>keep-or-purge prompt for your store</i>"]
+
+    classDef step fill:#161b22,stroke:#58a6ff,color:#e6edf3;
+    classDef man fill:#2b2410,stroke:#d4af37,color:#f0f6fc;
+    classDef undo fill:#1a2b1a,stroke:#3fb950,color:#e6edf3;
+    class I1,I2,I3,I4 step;
+    class M man;
+    class U,Z undo;
