@@ -14,7 +14,7 @@ main() {
   # if this project is ever renamed, the OLD GitHub name MUST be retained (a freed name can be
   # re-registered by an attacker and would serve this exact URL).
   local PINNED_TAG="v0.1.0"
-  local REPO="chrisren/agent-secrets"   # keep the old name reserved forever on any future rename
+  local REPO="renchris/agent-secrets"   # keep the old name reserved forever on any future rename
   local BASE_URL="${AGENT_SECRETS_BASE_URL:-https://github.com/${REPO}}"
   # EXPECTED_SHA256 is baked in at release-tag time; THIS curl'd script is the trust root, so the
   # digest lives here, not in a sibling file an attacker could swap. Empty ⇒ fall back to the
