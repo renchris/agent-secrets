@@ -3,6 +3,7 @@ name: diagrams
 # Guards against editing a .mmd diagram source without regenerating its SVGs
 # (or hand-editing an SVG). Fails if `npm run diagrams` would change anything.
 on:
+  workflow_dispatch:
   push:
     paths:
       - "assets/diagrams/**"
