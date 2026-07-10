@@ -79,7 +79,7 @@ main() {
   local work; work="$(mktemp -d)"
   local pkg="$work/agent-secrets-${PINNED_TAG}.tar.gz"
   local url="$BASE_URL/releases/download/${PINNED_TAG}/agent-secrets-${PINNED_TAG}.tar.gz"
-  _say "Downloading $PINNED_TAG…"
+  _say "Downloading ${PINNED_TAG}…"
   _run curl -fsSL "$url" -o "$pkg"
   local got expect
   got="$(shasum -a 256 "$pkg" | awk '{print $1}')"
@@ -104,15 +104,16 @@ main() {
   agsec_secure_umask
   manifest_init
 
-  # Record installed tool files + wire the bin dispatcher/wrappers.
+  # Wire the bin dispatcher + wrappers as SYMLINKS onto PATH (they follow the link back to their
+  # sibling lib/ under $INSTALL_DIR — a plain copy would strand them from lib/). Record each symlink
+  # for rollback, and record $INSTALL_DIR itself so uninstall removes the unpacked tool (no residue).
+  manifest_record_file "$INSTALL_DIR" >/dev/null 2>&1 || true
   local f
-  _run cp "$INSTALL_DIR/bin/agent-secrets" "$BIN_DIR/agent-secrets"
-  _run chmod 0755 "$BIN_DIR/agent-secrets"
+  _run ln -sf "$INSTALL_DIR/bin/agent-secrets" "$BIN_DIR/agent-secrets"
   manifest_record_file "$BIN_DIR/agent-secrets"
   for f in claude-agent cursor-agent apiKeyHelper; do
     [ -f "$INSTALL_DIR/bin/$f" ] || continue
-    _run cp "$INSTALL_DIR/bin/$f" "$BIN_DIR/$f"
-    _run chmod 0755 "$BIN_DIR/$f"
+    _run ln -sf "$INSTALL_DIR/bin/$f" "$BIN_DIR/$f"
     manifest_record_file "$BIN_DIR/$f"
   done
 

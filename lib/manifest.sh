@@ -147,8 +147,11 @@ manifest_rollback() {
 
 _manifest_rb_file() {
   local rec="$1" dry="$2" p; p="$(jq -r '.path' <<<"$rec")"
-  if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) rm file: $p"; return 0; fi
-  rm -f "$p" && agsec_ok "removed file: $p"
+  if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) rm: $p"; return 0; fi
+  # A recorded real directory (the unpacked $INSTALL_DIR) is removed recursively; everything else
+  # (files, and symlinks-to-dirs) is rm -f so we never delete THROUGH a symlink.
+  if [ -d "$p" ] && [ ! -L "$p" ]; then rm -rf "$p" && agsec_ok "removed dir: $p"
+  else rm -f "$p" && agsec_ok "removed: $p"; fi
 }
 
 _manifest_rb_edit() {

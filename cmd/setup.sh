@@ -65,7 +65,8 @@ _wire_tools() {
   local w
   for w in claude-agent cursor-agent apiKeyHelper; do
     [ -f "$AGENT_SECRETS_ROOT/bin/$w" ] || continue
-    install -m 0755 "$AGENT_SECRETS_ROOT/bin/$w" "$bindir/$w" 2>/dev/null || cp "$AGENT_SECRETS_ROOT/bin/$w" "$bindir/$w"
+    # Symlink (not copy) so the wrapper follows the link back to its sibling lib/ under the install root.
+    ln -sf "$AGENT_SECRETS_ROOT/bin/$w" "$bindir/$w"
     manifest_record_file "$bindir/$w" >/dev/null 2>&1 || true
   done
   ui_ok "installed wrappers to $bindir"

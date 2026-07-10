@@ -3,7 +3,11 @@
 # Dock Cursor is already running (pgrep), tell the user to quit it first and exit non-zero.
 # Installed to ~/bin; AGENT_SECRETS_ROOT + CURSOR_BIN baked, env-overridable.
 set -euo pipefail
-AGENT_SECRETS_ROOT="${AGENT_SECRETS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# Resolve the true install root by following symlinks (this wrapper is symlinked onto PATH, away
+# from its sibling lib/). Env-overridable for tests/drills.
+_self="${BASH_SOURCE[0]:-$0}"
+while [ -h "$_self" ]; do _d=$(cd -P "$(dirname "$_self")" && pwd); _self=$(readlink "$_self"); case "$_self" in /*) : ;; *) _self="$_d/$_self" ;; esac; done
+AGENT_SECRETS_ROOT="${AGENT_SECRETS_ROOT:-$(cd -P "$(dirname "$_self")/.." && pwd)}"
 CURSOR_BIN="${CURSOR_BIN:-/Applications/Cursor.app/Contents/MacOS/Cursor}"
 # shellcheck source=lib/common.sh
 . "$AGENT_SECRETS_ROOT/lib/common.sh"
