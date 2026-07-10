@@ -20,3 +20,4 @@ install-manifest.json
 *.tmp
 .bats-run-*
 /coverage/
+node_modules/

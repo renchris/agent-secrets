@@ -1,4 +1,3 @@
-%%{init: {"theme":"base","themeVariables":{"background":"#0d1117","primaryColor":"#161b22","primaryTextColor":"#e6edf3","primaryBorderColor":"#30363d","lineColor":"#6e7681","fontFamily":"ui-monospace, monospace","fontSize":"15px"}}}%%
 flowchart TB
     K["🔑 age keypair<br/>generated once, on-device"]
     K --> PRIM["login Keychain<br/><b>primary</b> · prompt-free"]
@@ -14,11 +13,11 @@ flowchart TB
     FALL -.-> DEG
     REC -. "lost your Mac?" .-> RES["restore drill →<br/>store decrypts from the saved key alone"]
 
-    classDef key fill:#2b2410,stroke:#d4af37,color:#f0f6fc;
-    classDef sink fill:#161b22,stroke:#58a6ff,color:#e6edf3;
-    classDef ok fill:#1a2b1a,stroke:#3fb950,color:#e6edf3;
-    classDef warn fill:#2b2410,stroke:#e3b341,color:#e6edf3;
-    class K key;
-    class PRIM,FALL,REC sink;
-    class SEL,DEC ok;
-    class DEG,RES warn;
+    classDef key fill:@gold-bg,stroke:@gold-fg,color:@text-bright
+    classDef sink fill:@blue-bg,stroke:@blue-fg,color:@text
+    classDef ok fill:@green-bg,stroke:@green-fg,color:@text
+    classDef warn fill:@gold-bg,stroke:@warn-fg,color:@text
+    class K key
+    class PRIM,FALL,REC sink
+    class SEL,DEC ok
+    class DEG,RES warn
