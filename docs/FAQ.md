@@ -2,7 +2,7 @@
 
 ### I don't write code — is this for me?
 
-Yes. If you use Claude Code or Cursor, this keeps your API keys safe without you ever editing a file
+Yes. If you use Claude Code or Cursor, this keeps your application programming interface (API) keys safe without you ever editing a file
 or knowing a format. The setup wizard asks one plain-English question at a time, shows you every
 change before it makes it, and can undo everything with one command. You never type or see a secret
 value on screen.
@@ -39,7 +39,7 @@ AGENT_SECRETS_BASE_URL=https://git.internal.example/mirror/agent-secrets sh inst
 ```
 
 On a corporate machine, get IT/security approval first, keep your dotfiles + manifest on the
-**internal** git host (names-only is still internal-sensitive), and note that corporate EDR or an
+**internal** git host (names-only is still internal-sensitive), and note that corporate endpoint detection and response (EDR) or an
 egress proxy may already provide the network bound this design asks for — integrate with it rather
 than double-building.
 

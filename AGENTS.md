@@ -98,7 +98,7 @@ specifically when any check is ✗ — use it as a boolean gate.
 - ❌ Put a value on the command line (`add NAME value`) — pipe it via STDIN.
 - ❌ Run `setup`'s key ceremony inside your own session — it will refuse; that is correct.
 - ❌ Run `uninstall` to "clean up" without explicit human intent — it is a destructive, gated action.
-- ❌ Use an MCP server or command that returns a raw secret value — it lands in the transcript.
+- ❌ Use a Model Context Protocol (MCP) server or command that returns a raw secret value — it lands in the transcript.
 
 ## More
 

@@ -33,7 +33,7 @@
 
 ## Why this exists
 
-Coding agents (Claude Code, Cursor) need API keys and tokens, and the easy path — `.env` files,
+Coding agents (Claude Code, Cursor) need application programming interface (API) keys and tokens, and the easy path — `.env` files,
 exported shell variables — scatters those secrets in plaintext across your disk and into logs and
 agent transcripts.
 
@@ -196,7 +196,7 @@ trail on the free tier. Full threat model → **[SECURITY.md](SECURITY.md)**
 ## For AI agents
 
 Driving this tool autonomously? Start with **[AGENTS.md](AGENTS.md)** — golden rules, discovery,
-copy-paste recipes, and exit codes. The CLI is fully self-describing with no human needed:
+copy-paste recipes, and exit codes. The command-line interface (CLI) is fully self-describing with no human needed:
 
 ```sh
 agent-secrets help --json          # authoritative machine-readable command manifest
@@ -205,7 +205,7 @@ agent-secrets <command> --help     # detailed per-command help (side-effect-free
 
 ## More
 
-- **[AGENTS.md](AGENTS.md)** · **[llms.txt](llms.txt)** — agent-facing usage guide + LLM link index
+- **[AGENTS.md](AGENTS.md)** · **[llms.txt](llms.txt)** — agent-facing usage guide + large language model (LLM) link index
 - **[SECURITY.md](SECURITY.md)** — threat model, the honest ceiling, reporting a vulnerability
 - **[docs/FAQ.md](docs/FAQ.md)** — "I don't code", store backup, the Dock-Cursor rule, corporate installs, Touch ID
 
