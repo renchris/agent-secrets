@@ -5,6 +5,8 @@
 # re-running never mints a second key. Names-only. 
 set -euo pipefail
 . "${AGENT_SECRETS_LIB:?run via bin/agent-secrets}/common.sh"
+# help guard — precede the agent-session refusal so `setup --help` self-documents
+case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render setup; exit 0 ;; esac
 for _m in ui store keychain manifest restore; do . "$AGENT_SECRETS_LIB/$_m.sh"; done
 
 UNATTENDED="${AGENT_SECRETS_UNATTENDED:-}"

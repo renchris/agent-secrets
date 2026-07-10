@@ -3,6 +3,7 @@
 # Sources: common.sh, store.sh, keychain.sh. Requires `--` separator.
 set -euo pipefail
 . "${AGENT_SECRETS_LIB:?run via bin/agent-secrets}/common.sh"
+case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render run; exit 0 ;; esac
 # shellcheck source=lib/store.sh
 . "$AGENT_SECRETS_LIB/store.sh"
 # shellcheck source=lib/keychain.sh

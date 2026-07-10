@@ -6,6 +6,8 @@
 set -euo pipefail
 # shellcheck source=/dev/null
 . "${AGENT_SECRETS_LIB:?run via bin/agent-secrets}/common.sh"
+# help guard — MUST precede any side effect (never start the removal on --help)
+case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render uninstall; exit 0 ;; esac
 # shellcheck source=/dev/null
 . "$AGENT_SECRETS_LIB/manifest.sh"
 

@@ -6,6 +6,7 @@
 # Names-only: no check ever writes a secret VALUE (checked via exit code / non-empty only).
 set -euo pipefail
 . "${AGENT_SECRETS_LIB:?AGENT_SECRETS_LIB unset — run via bin/agent-secrets}/common.sh"
+case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render doctor; exit 0 ;; esac
 . "$AGENT_SECRETS_LIB/store.sh"       # guarded: tolerates an unset/absent store
 . "$AGENT_SECRETS_LIB/keychain.sh"    # guarded: tolerates an unset/absent store
 
