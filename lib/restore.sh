@@ -21,7 +21,7 @@ restore_flow() {
   if [ -t 0 ]; then
     key="$(ui_read_secret 'Paste your saved age private key')"
   else
-    IFS= read -r key || true
+    key="$(cat)"   # full multi-line key material (age key files carry comment lines)
   fi
   [ -n "$key" ] || { agsec_warn "no key provided — cannot restore"; return 1; }
   printf '%s' "$key" | kc_add           # writes the 0600 fallback (+ best-effort Keychain)

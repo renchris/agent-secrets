@@ -10,7 +10,9 @@
 # populated without argv (banned) or an interactive tty double-type.
 # custody runs on the file fallback until a no-argv Keychain-write flow.
 kc_add() {
-  local key; IFS= read -r key || true
+  # Read the FULL key material from stdin — an age key file is multi-line (comment lines + the
+  # AGE-SECRET-KEY line), so a single `read -r` would drop the actual key. `cat` preserves all of it.
+  local key; key="$(cat)"
   agsec_secure_umask
   local f; f="$(agsec_age_key_file)"; mkdir -p "$(dirname "$f")"
   printf '%s' "$key" >"$f"; chmod 600 "$f" 2>/dev/null || true      # primary custody: 0600 file
