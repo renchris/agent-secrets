@@ -1,0 +1,17 @@
+# Release-tarball hygiene: keep `git archive` (the v0.1.0 install tarball that install.sh unpacks
+# into ~/.agent-secrets) to the RUNTIME only. Dev tooling, docs, CI, and README/diagram assets stay
+# in the repo but are excluded from the tarball — the tool ships bin/ lib/ cmd/ scripts/*.sh + LICENSE/VERSION.
+assets/                     export-ignore
+tests/                      export-ignore
+docs/                       export-ignore
+.github/                    export-ignore
+README.md                   export-ignore
+SECURITY.md                 export-ignore
+AGENTS.md                   export-ignore
+llms.txt                    export-ignore
+package.json                export-ignore
+package-lock.json           export-ignore
+scripts/render-diagrams.mjs export-ignore
+.shellcheckrc               export-ignore
+.gitignore                  export-ignore
+.gitattributes              export-ignore
