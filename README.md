@@ -106,7 +106,7 @@ file, a shell export, a log, or an agent transcript.
 </picture>
 
 <details>
-<summary>Interactive version</summary>
+<summary>Interactive Diagram</summary>
 
 <!-- mermaid-fence: assets/diagrams/injection.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
@@ -151,7 +151,7 @@ so you can restore after losing the Mac entirely.
 </picture>
 
 <details>
-<summary>Interactive version</summary>
+<summary>Interactive Diagram</summary>
 
 <!-- mermaid-fence: assets/diagrams/custody.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
@@ -196,7 +196,7 @@ Keychain items.
 </picture>
 
 <details>
-<summary>Interactive version</summary>
+<summary>Interactive Diagram</summary>
 
 <!-- mermaid-fence: assets/diagrams/reversible.mmd (auto-synced by `npm run diagrams`) -->
 ```mermaid
