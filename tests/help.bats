@@ -49,8 +49,8 @@ load test_helper
   [[ "$output" != *"separator is REQUIRED"* ]]   # did not fall into run's help
 }
 
-@test "help --json is a valid manifest with all 7 commands" {
-  run bash -c "bash '$REPO_ROOT/bin/agent-secrets' help --json | jq -e '.tool==\"agent-secrets\" and (.commands|length==7)'"
+@test "help --json is a valid manifest with all 10 commands" {
+  run bash -c "bash '$REPO_ROOT/bin/agent-secrets' help --json | jq -e '.tool==\"agent-secrets\" and (.commands|length==10)'"
   [ "$status" -eq 0 ]
 }
 

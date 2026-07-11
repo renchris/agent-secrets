@@ -19,6 +19,7 @@ AGENT_SECRETS_KC_SERVICE="agent-age-key"              # Keychain service: the bo
 AGENT_SECRETS_KC_PREFIX="agent-"                      # uninstall enumerates Keychain by this prefix
 AGENT_SECRETS_CANARY_NAME="AWS_BACKUP_ACCESS_KEY_ID"  # in-store canary (plausible name)
 AGENT_SECRETS_ROTATE_DAYS_DEFAULT=180                 # age key rotation cadence
+AGSEC_SHARE_ENVELOPE_VERSION="v1"                     # colleague-share envelope; receive rejects unknown versions
 
 # --- Home / path resolution (synthetic-HOME aware) ------------------------------
 agsec_home()            { printf '%s\n' "${AGENT_SECRETS_HOME:-$HOME}"; }
@@ -58,6 +59,10 @@ agsec_note() { printf '%s%s%s\n' "$C_DIM" "$*" "$C_RESET" >&2; }
 agsec_warn() { printf '%s\n' "${C_YELLOW}WARN${C_RESET} $*" >&2; }
 agsec_die()  { printf '%s\n' "${C_RED}ERROR${C_RESET} ${1:-}" >&2; exit "${2:-1}"; }
 # Log a value's identity without the value (redaction discipline).
+# 48-bit truncation (first 12 hex = sha256: + substr 1,12): an ACCIDENTAL-MISMATCH human-readback
+# floor ONLY — NOT a substitution/content-address/tamper-evidence defense (48 bits is far too narrow
+# for that). share/receive feed it the base64-DECODED age ciphertext bytes (the caller pipes
+# `base64 -D | agsec_digest`), never the armored text — reflow-stable across benign re-wrapping.
 agsec_digest() { shasum -a 256 2>/dev/null | awk '{print "sha256:"substr($1,1,12)}'; }
 
 # --- Guards ---------------------------------------------------------------------

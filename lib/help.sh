@@ -9,7 +9,7 @@
 #          | flag|arg|example|exit|env|seealso        (pair   → A=key/name, B=description)
 # VERB "" = top-level (agent-secrets itself).
 
-AGSEC_VERBS="setup add list run doctor uninstall"
+AGSEC_VERBS="setup add list run doctor uninstall share receive pubkey"
 
 agsec_help_spec() {
   # NOTE: keep this the ONLY place command facts live; both renderers below read it.
@@ -92,6 +92,46 @@ uninstall	writes	removes tool artifacts; store/keys only on explicit purge confi
 uninstall	exit	0	uninstall completed (or dry-run printed)
 uninstall	exit	1	nothing to roll back / error
 uninstall	namesonly	enumerates artifacts by name; never reads a secret value
+share	synopsis	agent-secrets share <NAME> --to <age1…|github:user|self> [--singleton] [--verify] [--sign] [--rename NEW]
+share	summary	Encrypt ONE secret to a colleague's key; ladder-gated, names-only. Refuses in an agent session.
+share	desc	The don't-share ladder runs FIRST (offer a scoped/least-privilege alternative before any value moves), then a single [y/N] recipient confirm showing the key fingerprint + NAME. Encrypts the one value with age to the recipient's public key and prints a paste-able v1 envelope (armored ciphertext + NAME + digest). The digest is advisory (an accidental-mismatch readback) unless --verify makes it a required out-of-band step. Never auto-rotates. Refuses inside an agent session (transcripts are secret-bearing).
+share	arg	NAME	the secret to share (must already exist in your store)
+share	arg	--to <recipient>	age1… recipient string, github:USER (fetch their key), or self (re-encrypt to your own key)
+share	flag	--singleton	share to exactly one recipient (default; reserved for future multi-recipient)
+share	flag	--verify	require the out-of-band digest readback before the envelope is emitted
+share	flag	--sign	attach a signature leg so the recipient can authenticate the sender
+share	flag	--rename NEW	label the envelope so the recipient stores it under NEW instead of NAME
+share	env	AGENT_SECRETS_UNATTENDED	1 = skip the interactive confirm (CI); ladder + canary hard-errors still apply
+share	example	agent-secrets share ANTHROPIC_API_KEY --to github:dana	encrypt to dana's GitHub age key; prints an envelope to paste
+share	reads	~/.config/secrets/secrets.env (the one NAME only), manifest.toml
+share	writes	the manifest sharing row for NAME (shared_with/shared_at/direction=sent; values-free)
+share	exit	0	envelope emitted
+share	exit	1	no such NAME, bad recipient, or refused (agent session / canary)
+share	exit	2	usage error
+share	namesonly	the value is encrypted to the recipient and never printed; only ciphertext + the NAME leave
+receive	synopsis	agent-secrets receive [--rename NEW] [--yes-i-reviewed]
+receive	summary	Ingest a pasted share envelope on STDIN, decrypt, store — never displayed. tty-gated.
+receive	desc	Reads a v1 envelope blob from STDIN and takes every confirm from /dev/tty (hard-refuses when no tty is present, except --yes-i-reviewed for CI which still runs the canary/collision hard errors). Recomputes the digest locally over the base64-decoded ciphertext (advisory) for an out-of-band voice-compare, rejects unknown envelope versions, hard-refuses the in-store canary name, and hard-stops if NAME already exists (use --rename). The decrypted value is piped straight into the encrypted store.
+receive	flag	--rename NEW	store the received secret under NEW (use when the envelope's NAME collides or you prefer a local name)
+receive	flag	--yes-i-reviewed	non-interactive ingest for CI; skips the tty prompts but keeps the canary/collision hard errors
+receive	env	AGENT_SECRETS_HOME	base dir for all state (default $HOME); set to an isolated dir for tests/CI
+receive	example	agent-secrets receive	run, then paste the envelope on STDIN and press Ctrl-D
+receive	reads	STDIN (the pasted v1 envelope)
+receive	writes	~/.config/secrets/secrets.env, manifest.toml (direction=received, source=received:<label>)
+receive	exit	0	stored
+receive	exit	1	bad/unknown-version envelope, canary name, NAME collision, or no tty
+receive	exit	2	usage error
+receive	namesonly	the decrypted value goes straight into the store, never to stdout/argv
+pubkey	synopsis	agent-secrets pubkey [--copy]
+pubkey	summary	Print your age recipient string + fingerprint — hand it to a sender. Safe (public key).
+pubkey	desc	Prints the contents of your age public-key file plus its agsec_digest fingerprint. This is the recipient's on-ramp: give it to whoever will `share` a secret with you so they can encrypt to your key. A PUBLIC key — safe to display, paste, or copy.
+pubkey	flag	--copy	also copy the recipient string to the clipboard (pbcopy)
+pubkey	example	agent-secrets pubkey	print your age recipient string + fingerprint
+pubkey	reads	~/.config/secrets/age.pub
+pubkey	writes	nothing
+pubkey	exit	0	printed
+pubkey	exit	1	no public key yet (run setup)
+pubkey	namesonly	a PUBLIC key — safe on stdout/argv/clipboard, unlike every value path
 SPEC
 }
 

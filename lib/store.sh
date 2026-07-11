@@ -72,6 +72,30 @@ store_add() {
   _store_manifest_upsert "$name"
 }
 
+# Upsert NAME with a MULTI-LINE value from STDIN (for share/receive: PEM keys, JSON blobs, etc.).
+# sops dotenv rejects raw newlines in a value (verified: "invalid dotenv input line"), so the value is
+# base64-encoded to a single dotenv line. CONSUMERS MUST base64-DECODE on extract: the stored bytes are
+# base64(value), so `store_extract NAME | base64 -D` yields the original value byte-for-byte. Like
+# store_add the value never enters a shell variable or argv — STDIN pipes straight through base64 into
+# the 0600 plaintext temp; only the encrypted store and the base64 line ever touch disk.
+store_add_multiline() {
+  local name="${1:?store_add_multiline: NAME required}"
+  case "$name" in [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*) agsec_die "store_add_multiline: invalid name '$name'";; esac
+  agsec_secure_umask
+  local recips; recips="$(_store_recipients)" || agsec_die "store_add_multiline: no age recipients (run setup)"
+  local store plain; store="$(agsec_store_file)"; plain="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"
+  if [ -f "$store" ]; then
+    _store_decrypt >"$plain" 2>/dev/null || { _store_shred "$plain"; agsec_die "store_add_multiline: cannot decrypt store (custody/key problem — run doctor)"; }
+    { grep -v "^${name}=" "$plain" || true; } >"$plain.f"; mv -f "$plain.f" "$plain"
+  fi
+  # STDIN → base64 (single line) → dotenv line; the value never lands in a variable or argv.
+  { printf '%s=' "$name"; base64 | tr -d '\n'; printf '\n'; } >>"$plain"
+  sops -e --input-type dotenv --output-type dotenv --age "$recips" "$plain" >"$store.new" \
+    || { _store_shred "$plain"; _store_shred "$store.new"; agsec_die "store_add_multiline: sops encrypt failed"; }
+  mv -f "$store.new" "$store"; _store_shred "$plain"
+  _store_manifest_upsert "$name"
+}
+
 # Append a values-free manifest.toml row if NAME is not already present.
 _store_manifest_upsert() {
   local name="$1" man rotate
@@ -80,6 +104,61 @@ _store_manifest_upsert() {
   rotate="$(date -v+"${AGENT_SECRETS_ROTATE_DAYS_DEFAULT}"d +%F 2>/dev/null || echo unknown)"
   { printf '\n[[credential]]\nname = "%s"\nplatform = ""\nsource = "sops:secrets.env"\n' "$name"
     printf 'scope = ""\nrotate_by = "%s"\nused_by = []\nsurface = ""\n' "$rotate"; } >>"$man"
+}
+
+# In-place updater for the [[credential]] block whose `name = "NAME"`. For each FIELD=VALUE arg
+# (shared_with|shared_at|direction|source), replace the existing `FIELD = "…"` line within that block
+# if present, else append it at the end of the block's fields. Values-free (fingerprint + metadata,
+# never a secret). Unlike _store_manifest_upsert (skip-if-exists) this MUTATES an existing row.
+store_manifest_set_sharing() {
+  local name="${1:?store_manifest_set_sharing: NAME required}"; shift
+  [ "$#" -ge 1 ] || agsec_die "store_manifest_set_sharing: at least one FIELD=VALUE required"
+  local man; man="$(agsec_manifest_toml)"; [ -f "$man" ] || return 0
+  # Join FIELD=VALUE pairs with a US (0x1f) separator — awk -v rejects an embedded newline.
+  local fields="" pair
+  for pair in "$@"; do fields="${fields}${pair}"$'\037'; done
+  local tmp; tmp="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"
+  if awk -v target="$name" -v fields="$fields" '
+    BEGIN{
+      n=split(fields, arr, "\037")
+      for(i=1;i<=n;i++){ if(arr[i]=="") continue
+        eq=index(arr[i],"="); fk[substr(arr[i],1,eq-1)]=substr(arr[i],eq+1) }
+    }
+    function flush(   i,k,last,line,replaced){
+      if(bn==0) return
+      if(istarget){
+        last=bn; while(last>0 && buf[last] ~ /^[[:space:]]*$/) last--
+        for(i=1;i<=last;i++){
+          line=buf[i]; replaced=0
+          for(k in fk){ if(line ~ ("^"k" = ")){ print k" = \""fk[k]"\""; done[k]=1; replaced=1; break } }
+          if(!replaced) print line
+        }
+        for(k in fk){ if(!(k in done)) print k" = \""fk[k]"\"" }
+        for(i=last+1;i<=bn;i++) print buf[i]
+      } else { for(i=1;i<=bn;i++) print buf[i] }
+      bn=0; istarget=0; delete done
+    }
+    /^\[\[credential\]\]/{ flush() }
+    {
+      buf[++bn]=$0
+      if($0 ~ /^name = "/){ nm=$0; sub(/^name = "/,"",nm); sub(/".*/,"",nm); if(nm==target) istarget=1 }
+    }
+    END{ flush() }
+  ' "$man" >"$tmp"; then
+    mv -f "$tmp" "$man"
+  else
+    rm -f "$tmp"; agsec_die "store_manifest_set_sharing: manifest rewrite failed"
+  fi
+}
+
+# Strip every sharing line from manifest.toml: shared_with / shared_at / direction, and any
+# source = "received:*" line (a plain source = "sops:…" line is kept). Values-free. Used by
+# uninstall keep-mode so the retained store carries no colleague social graph (design §3.8).
+store_manifest_purge_sharing() {
+  local man; man="$(agsec_manifest_toml)"; [ -f "$man" ] || return 0
+  local tmp; tmp="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"
+  grep -vE '^(shared_with|shared_at|direction) = |^source = "received:' "$man" >"$tmp" || true
+  mv -f "$tmp" "$man"
 }
 
 store_has()   { _store_decrypt 2>/dev/null | grep -q "^${1:?store_has: NAME required}="; }
