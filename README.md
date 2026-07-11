@@ -274,6 +274,21 @@ agent-secrets <command> --help     # detailed per-command help (side-effect-free
 launchd job, the `settings.json` edit, and the Keychain items — then **asks** whether to keep or
 delete your encrypted store and keys. Add `--dry-run` to preview the plan without changing anything.
 
+## Development
+
+Notes for maintaining this. Driving the CLI itself → [AGENTS.md](AGENTS.md).
+
+**Setup:** `brew install age sops shellcheck bats-core` (add `node` only to work on the diagrams).
+
+- **Test:** `bats tests/` — 41 tests under a synthetic `AGENT_SECRETS_HOME`; the real Keychain and store are never touched.
+- **Lint:** `shellcheck bin/* cmd/*.sh lib/*.sh scripts/*.sh install.sh` — CI runs this plus a zero-telemetry gate and the bats suite.
+- **Diagrams:** edit `assets/diagrams/*.mmd`, then `npm install && npm run diagrams`, and commit the regenerated SVGs (CI fails on stale ones).
+- **Commits:** lowercase [Conventional Commits](https://www.conventionalcommits.org).
+- **Cut a release:** tag `vX.Y.Z`, `git archive` the tag (`.gitattributes` trims it to runtime), write its `.sha256`, then `gh release create` with both assets.
+- **The one rule:** *names-only* — a secret **value** is never printed, logged, or written outside the encrypted store (→ [SECURITY.md](SECURITY.md)).
+
+Layout: `bin/` verb dispatcher · `lib/` shared helpers · `cmd/` one file per verb.
+
 ## License
 
 [MIT](LICENSE) · © 2026 Chris Ren
