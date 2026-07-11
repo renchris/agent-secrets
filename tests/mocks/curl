@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# tests/mocks/curl — stand-in for the github.com/<user>.keys fetch in share.
+# Test-controlled body: AGSEC_MOCK_KEYS_FILE (cat the file) > AGSEC_MOCK_KEYS (print the value).
+# With neither set, behaves like a user with no keys → empty body, exit 0 (share then fails loud).
+# Honors -f: a non-2xx would exit 22; we emulate "not found" only when AGSEC_MOCK_KEYS_FAIL=1.
+set -euo pipefail
+if [ -n "${AGSEC_MOCK_KEYS_FAIL:-}" ]; then exit 22; fi
+if [ -n "${AGSEC_MOCK_KEYS_FILE:-}" ] && [ -f "$AGSEC_MOCK_KEYS_FILE" ]; then
+  cat "$AGSEC_MOCK_KEYS_FILE"
+elif [ -n "${AGSEC_MOCK_KEYS+x}" ]; then
+  printf '%s' "$AGSEC_MOCK_KEYS"
+fi
+exit 0

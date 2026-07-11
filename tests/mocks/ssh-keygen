@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# tests/mocks/ssh-keygen — stand-in for the optional --sign / receive-verify legs.
+# `-Y sign … <file>`  → write <file>.sig (a fake detached sig) unless AGSEC_MOCK_SIGN_FAIL=1.
+# `-Y verify …`       → succeed unless AGSEC_MOCK_VERIFY_FAIL=1.
+# Anything else       → no-op success (keeps the mock harmless for unrelated calls).
+set -euo pipefail
+mode=""; file=""
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    -Y) mode="${args[$((i+1))]:-}" ;;
+  esac
+done
+case "$mode" in
+  sign)
+    [ -n "${AGSEC_MOCK_SIGN_FAIL:-}" ] && exit 1
+    # last positional arg is the file being signed
+    file="${args[$((${#args[@]}-1))]}"
+    printf -- '-----BEGIN SSH SIGNATURE-----\nMOCKSIGNATURE\n-----END SSH SIGNATURE-----\n' >"${file}.sig"
+    exit 0 ;;
+  verify)
+    [ -n "${AGSEC_MOCK_VERIFY_FAIL:-}" ] && exit 1
+    exit 0 ;;
+  *) exit 0 ;;
+esac

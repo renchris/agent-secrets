@@ -97,7 +97,7 @@ share	summary	Encrypt ONE secret to a colleague's key; ladder-gated, names-only.
 share	desc	The don't-share ladder runs FIRST (offer a scoped/least-privilege alternative before any value moves), then a single [y/N] recipient confirm showing the key fingerprint + NAME. Encrypts the one value with age to the recipient's public key and prints a paste-able v1 envelope (armored ciphertext + NAME + digest). The digest is advisory (an accidental-mismatch readback) unless --verify makes it a required out-of-band step. Never auto-rotates. Refuses inside an agent session (transcripts are secret-bearing).
 share	arg	NAME	the secret to share (must already exist in your store)
 share	arg	--to <recipient>	age1… recipient string, github:USER (fetch their key), or self (re-encrypt to your own key)
-share	flag	--singleton	share to exactly one recipient (default; reserved for future multi-recipient)
+share	flag	--singleton	assert this is a true singleton (webhook/HMAC/account-only key) to bypass the R2 ladder rung
 share	flag	--verify	require the out-of-band digest readback before the envelope is emitted
 share	flag	--sign	attach a signature leg so the recipient can authenticate the sender
 share	flag	--rename NEW	label the envelope so the recipient stores it under NEW instead of NAME
