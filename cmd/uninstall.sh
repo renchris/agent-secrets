@@ -10,6 +10,8 @@ set -euo pipefail
 case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render uninstall; exit 0 ;; esac
 # shellcheck source=/dev/null
 . "$AGENT_SECRETS_LIB/manifest.sh"
+# shellcheck source=/dev/null
+. "$AGENT_SECRETS_LIB/store.sh"   # store_manifest_purge_sharing (keep-mode social-graph purge)
 
 main() {
   local dry=0
@@ -43,7 +45,12 @@ main() {
     agsec_log "purging store + keys: $config_dir"
     rm -rf "$config_dir"
   else
-    [ "$dry" -eq 1 ] || agsec_log "kept store + keys: $config_dir (re-onboard restores from the fallback key)"
+    if [ "$dry" -eq 1 ]; then
+      agsec_note "(dry-run) would purge the colleague-share roster (shared_with/shared_at/direction) from the retained manifest.toml"
+    else
+      store_manifest_purge_sharing   # design §3.8 #6: keep-mode retains no who-shared-with-whom social graph
+      agsec_log "kept store + keys: $config_dir (share roster purged; re-onboard restores from the fallback key)"
+    fi
   fi
 
   # Tool STATE (install manifest is now empty; drop the dir + edit backups) — always residue.

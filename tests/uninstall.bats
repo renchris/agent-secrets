@@ -44,3 +44,15 @@ load test_helper
   [ "$status" -eq 0 ]
   [ -f "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]
 }
+
+@test "uninstall keep-mode purges the colleague-share roster from the retained manifest (decision #6)" {
+  setup_store
+  printf 'x' | store_add MY_SHARED
+  store_manifest_set_sharing MY_SHARED shared_with='sha256:deadbeef1234' shared_at='2026-07-11' direction='sent'
+  run grep -c '^shared_with = ' "$(agsec_manifest_toml)"; [ "$output" -eq 1 ]   # present pre-uninstall
+  printf 'N\n' | bash "$REPO_ROOT/cmd/uninstall.sh" >/dev/null 2>&1               # keep-mode (N = do not purge store)
+  [ -f "$(agsec_manifest_toml)" ]                                                # manifest kept
+  run grep -c '^shared_with = ' "$(agsec_manifest_toml)"; [ "$output" -eq 0 ]   # social graph purged
+  run grep -c '^direction = ' "$(agsec_manifest_toml)"; [ "$output" -eq 0 ]
+  run grep -c 'name = "MY_SHARED"' "$(agsec_manifest_toml)"; [ "$output" -eq 1 ] # credential row survives
+}
