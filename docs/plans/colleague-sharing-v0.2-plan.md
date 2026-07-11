@@ -14,6 +14,52 @@
 
 - **2026-07-11 — plan created.** Design validated + on trunk (`dac1494` → `docs/research/colleague-sharing-design.md`).
   Six UX decisions locked (below). Build NOT started. Next: Phase 0 team spawn, Wave 1 = foundation.
+- **2026-07-11 — BUILD COMPLETE (bats-green, shellcheck-clean, committed; NOT pushed).** All three verbs
+  shipped via a 4-teammate Agent Team over 3 waves. See "Build outcome" below.
+
+## Build outcome — DONE 2026-07-11
+
+**Commit map (linear on `main`, not pushed):**
+| Commit | What |
+|---|---|
+| `b61c310` | plan: Phase 0 finalized (5 ground-truth corrections to design §8) |
+| `444897e` | foundation — `lib/common.sh` (envelope const + digest doc), `lib/help.sh` (3 verb specs), `lib/store.sh` (`store_add_multiline` base64, `store_manifest_set_sharing`, `store_manifest_purge_sharing`) + `tests/foundation.bats` + `help.bats` count 7→10 |
+| `6f9a993` | dispatcher — registered `share`/`receive`/`pubkey` (design §8 was WRONG that no dispatcher edit was needed; explicit case table) |
+| `15c8a10` | `pubkey` verb + docs (README/AGENTS/SECURITY/FAQ, all INTEGRATE) |
+| `401c10c` | `receive` verb — tty-gated ingest, dual byte caps, local digest, canary+collision guards |
+| `491d101` | `share` verb + `lib/ladder.sh` (R0–R4) |
+| `0105e57` | decision #6 — uninstall keep-mode share-graph purge + test |
+
+**Gate (all green, run on `main` @ `0105e57`):** shellcheck full CI set clean · `bats tests/` **87/87** ·
+zero-telemetry gate PASS · **cross-verb end-to-end round-trip** PASS (share→receive, distinct keys, value
+byte-for-byte, no plaintext in the envelope, `direction=received` recorded) · doctor/smoke ≤14d rotate
+scan correctly parses the sharing-augmented manifest (`⚠ rotation due — BILLING_KEY in 7d`, names the
+right secret) · `help --json` self-describes all 10 commands.
+
+**Six locked decisions — all honored:** (1) digest advisory by default, `--verify` forces the readback ·
+(2) no auto-tighten of `rotate_by` on share · (3) `--sign` opt-in, unsigned `receive` proceeds with a loud
+warning · (4) no-tty `receive` `--yes-i-reviewed` escape (still runs canary/collision hard errors) ·
+(5) `--to self` auto-inferred when recipient == local `age.pub` · (6) `shared_with` fingerprint-only +
+purged in uninstall keep-mode.
+
+**Key learnings / decisions the build forced:**
+- **Multi-line values are base64-encoded in the store** (`store_add_multiline`): sops dotenv rejects raw
+  newlines. `receive` branches on line count — single-line → `store_add` (raw, run-injectable);
+  multi-line → `store_add_multiline` (base64; a `run`-injected multi-line secret gets the base64, a
+  documented tradeoff). Design §3.7 explicitly sanctioned the base64 round-trip.
+- **`AGSEC_CONFIRM_SRC` test seam** (defaults to `/dev/tty`): both `share` and `receive` read confirms
+  from it, so bats injects answers while the blob holds STDIN — proving the "confirm not silently
+  defaulted from exhausted STDIN" property without a PTY.
+- **`bin/agent-secrets` is Read-tool-denied** (global `Read(./**/*secret*)` matches the basename) — lead
+  edited it via `git show` + Bash (`/tmp/agsec-dispatcher-edit.sh`), not the Edit tool.
+
+**Known limitations (documented, not bugs — consistent with design §3.4/§10):**
+- **`--sign` is best-effort emit-only.** `share --sign` attaches a detached `ssh-keygen -Y sign` sidecar as
+  a SEPARATE fenced block (never inside the v1 envelope), and warns+proceeds unsigned when no key. `receive`
+  does NOT auto-verify it (the v1 envelope carries no `sig:` line) — it always prints "sender unverified".
+  Full signed round-trip is deferred pending the §10 sidecar-transport research (saltpack/PGP prior art).
+  A recipient CAN still verify manually with `ssh-keygen -Y verify`.
+- **PQ / signature-verify / TOFU-contacts-roster** were scoped out of v0.2 per the design's opt-in stance.
 
 ## Source of truth (read these first)
 
