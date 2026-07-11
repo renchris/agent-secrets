@@ -66,6 +66,32 @@ without interruption. Touch ID / password prompts appear only in the situations 
 (some post-reboot and cross-user cases). If the Keychain path ever fails, custody falls back to the
 `0600` key file automatically and `doctor` reports "degraded (file custody)".
 
+### How do I send a secret to a colleague?
+
+**First ask whether you have to.** The best "share" is no share: most services (GitHub, cloud CLIs,
+Anthropic) can issue a per-person credential, so your colleague mints their own scoped key that you
+can't leak and the provider can revoke. Only when a value genuinely has to travel do you reach for
+the last rung: your colleague runs `agent-secrets pubkey` and gives you their `age1…` recipient
+string; you run `agent-secrets share <NAME>`, pick their key, and confirm on the terminal; the tool
+prints a fenced blob. Send them that whole block (chat, ticket, wherever). They paste it into
+`agent-secrets receive`, eyeball the digest read-back against the one you read aloud, and confirm —
+the secret lands in their store having never been shown or written to a plaintext file.
+
+### Why can't I recall a shared secret?
+
+You can't — there is no "unshare." Once a colleague has `receive`d the blob they hold a durable,
+decryptable copy, and nothing offline can reach into their machine to revoke it. The only real
+take-back is to **rotate the secret at the provider**: re-issue the token, and the copy you shared
+simply stops authenticating. Treat every share as permanent until you rotate.
+
+### The recipient doesn't have agent-secrets — how do they open it?
+
+They install it (the one-line installer), run `agent-secrets setup` once, then
+`agent-secrets receive` and paste your blob. **Do not** talk them through `age -d` into a plaintext
+file — that dumps the decrypted secret straight to disk, exactly the leak this tool exists to
+prevent. `receive` pipes the decrypted value directly into their encrypted store; it never touches a
+temp plaintext file or their scrollback.
+
 ### How do I remove everything?
 
 `agent-secrets uninstall` — it reverses every recorded change and then asks whether to keep or delete

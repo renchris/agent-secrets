@@ -43,6 +43,31 @@ honeytoken). Any process that decrypts the whole store and *uses* what it found 
 out-of-band alert. It is listed in the manifest among the real entries on purpose, so a
 manifest-guided exfiltration loop grabs it first.
 
+## Sharing (`share` / `receive` / `pubkey`)
+
+Sending a secret to a colleague inherits the same honest-ceiling discipline — here is exactly what it
+does **not** buy you:
+
+- **No offline revocation or ephemerality.** A `share` blob is `age`-encrypted to the recipient's key;
+  once they `receive` it, they hold a durable copy. Nothing in this tool can reach out and unshare it.
+  **Rotating the secret at the provider is the only revocation** — the shared copy simply stops
+  authenticating. There is no expiry, no "burn after reading."
+- **Sender authentication is opt-in.** A plain blob proves *nothing* about who produced it — an
+  unsigned `receive` is trusting whoever pasted the text. The digest read-back you confirm on
+  `receive` catches an **accidental** paste/transport mismatch only; it can **never** catch
+  substitution — an attacker who swaps the blob swaps the digest with it. Use `share --sign` (and
+  verify against `allowed_signers`) when the sender's identity actually matters.
+- **No delivery proof.** The tool cannot tell you the blob arrived, was received once, or was received
+  by the intended person. Delivery and its confidentiality in transit are the paste channel's problem.
+- **The manifest becomes a values-free social graph.** `share`/`receive` record a `shared_with` /
+  `source` **fingerprint** (never a value) plus a direction and timestamp. That leaks *relationships* —
+  who you shared which named secret with — even though it never leaks the secret. It is purged with the
+  rest of the manifest on `uninstall`, **including keep-mode** (the store may be kept; the relationship
+  graph is not).
+- **The canary is hard-refused in both verbs.** You cannot `share` the decoy honeytoken and a `receive`
+  cannot overwrite or import it — a hard error, never a confirm-through — so the detection guarantee
+  can't be defeated or defused through the sharing path.
+
 ## Custody and recovery
 
 The bootstrap age key is custodied in the login Keychain (primary) with a `0600` FileVault-backed

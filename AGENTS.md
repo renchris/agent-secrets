@@ -20,9 +20,15 @@ either.
    child process's environment for that run only. Prefer this over ever materializing a value.
 4. **Gate on `doctor`'s exit code.** `0` = no failing checks, `1` = at least one ✗. Parse
    `doctor --format=json` for structure.
-5. **`uninstall` and the setup key-ceremony are human-gated.** `uninstall` removes the installation and
-   prompts about the store; the `setup` wizard refuses its key ceremony inside an agent session
-   (transcripts are secret-bearing). Do not automate these without an explicit human instruction.
+5. **`uninstall`, the setup key-ceremony, and `share` are human-gated.** `uninstall` removes the
+   installation and prompts about the store; the `setup` wizard refuses its key ceremony inside an
+   agent session; **`share` also refuses inside an agent session** (`CLAUDECODE=1` / etc.) — it
+   extracts a plaintext value to encrypt, which must not touch a secret-bearing transcript. Do not
+   automate these without an explicit human instruction.
+6. **`receive` is tty-gated, not session-gated.** It refuses when there is **no controlling terminal**
+   (except `--yes-i-reviewed` for CI). The pasted blob occupies STDIN, so every confirm/digest-readback
+   must be answered on `/dev/tty` — with no tty there is nowhere to safely confirm, so it hard-refuses.
+   `pubkey` is **safe for agents**: it emits only your *public* recipient key, never a secret.
 
 ## Discovery — learn the whole surface without a human
 
@@ -47,6 +53,9 @@ writes, names_only }`. **Everything you need to construct a valid invocation is 
 | `list [--format=json]` | see what exists | **names + rotate dates only**, never values |
 | `run -- <cmd>` | run a tool with secrets | JIT-injected into that process; `--` is required |
 | `doctor [--format=json] [--gates]` | check health / gate | exit `0` healthy, `1` if any ✗ |
+| `pubkey [--copy]` | print your recipient key | **safe in an agent session** — public key only, never a secret |
+| `share <NAME>` | encrypt a secret to a colleague | **refuses in an agent session** (extracts a plaintext value) |
+| `receive` | ingest a pasted blob | **tty-gated** — refuses with no controlling terminal; blob on STDIN, confirm on `/dev/tty` |
 | `uninstall [--dry-run]` | remove everything | human-gated; `--dry-run` previews |
 
 Wrappers `claude-agent` / `cursor-agent` are `run` specialized for those tools. `rotate` and `demo`

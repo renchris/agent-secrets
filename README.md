@@ -237,10 +237,23 @@ flowchart LR
 | `agent-secrets list` | list secret **names** + rotation dates — never values |
 | `agent-secrets run -- <cmd>` | run a command with secrets injected just for that process |
 | `agent-secrets doctor` | health check — `--gates`, `--format=json`, `--redact`, `--fix` |
+| `agent-secrets pubkey` | print your `age` recipient string + fingerprint — hand it to a sender (`--copy`) |
+| `agent-secrets share <NAME>` | encrypt one secret to a colleague's key as a paste-able blob (last-rung — prefer the ladder) |
+| `agent-secrets receive` | decrypt a colleague's pasted blob into your store (confirms on the terminal) |
 | `agent-secrets uninstall` | remove everything it installed (prompts about your secrets) |
 
 Wrappers `claude-agent` and `cursor-agent` launch those tools with the store injected.
 (`rotate` and `demo` are reserved for v0.2.)
+
+### Sharing a secret with a colleague
+
+**Sharing a value is the last rung — prefer having them mint their own scoped key.** Most services
+(GitHub, cloud CLIs, Anthropic) can re-issue a credential per person, which gives *them* a token
+*you* can't leak and the provider can revoke. Reach for `share` only when a value genuinely has to
+travel: your colleague runs `agent-secrets pubkey` and hands you their `age1…` recipient, you
+`agent-secrets share <NAME>` to encrypt to it, they paste the fenced blob into `agent-secrets receive`.
+Nothing offline can revoke a shared copy — rotating the secret at the provider is the only take-back.
+Full stance → **[SECURITY.md](SECURITY.md)** → *Sharing*.
 
 ## The honest ceiling
 
