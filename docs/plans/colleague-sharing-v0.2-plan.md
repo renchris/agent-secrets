@@ -83,6 +83,50 @@ Each brief ≤150 lines, pre-grep line ranges embedded, "stop on issue → messa
 no "investigate/audit" language, visual/integration checks deferred to the lead's Wave 3. Point each
 teammate at design §8 for its file's spec; do not inline the whole design.
 
+### Phase 0 — FINALIZED 2026-07-11 (ground-truth reads corrected 5 design-§8 gaps)
+
+Runtime = **implicit-team model** (no `TeamCreate`; `team_name` is ignored). Teammates spawn via the
+`Agent` tool, `model: "opus"`, in **pre-created worktrees** (lead runs `git worktree add` serially to
+dodge the parallel-`worktree add` data-loss race, GH #34645/#48927); each teammate `cd`s into its
+worktree and commits on its own branch; lead merges serially. Corrections to the design/plan blueprint,
+forced by reading the actual source:
+
+1. **Dispatcher edit IS required — LEAD-OWNED.** Design §8 says "no dispatcher edit (unknown → exit 2)"
+   — **wrong.** `bin/agent-secrets` has an explicit `case "$verb"` table (setup|add|list|run|doctor|
+   uninstall) + a per-verb help-interception `case`; a new verb hits the `*)` unknown-command arm. So
+   `share|receive|pubkey` must be added to BOTH cases. `bin/agent-secrets` is **Read-denied** (global
+   `Read(./**/*secret*)` rule matches the basename) → the lead does this edit at Wave-1 merge time (read
+   via `git show HEAD:bin/agent-secrets`, write via Bash/Write), NOT a teammate. Done AFTER foundation
+   merges, BEFORE Wave 2 branches, so the verb worktrees inherit a fully-wired dispatcher.
+2. **`tests/help.bats:53` breaks** — asserts `.commands|length==7`; foundation's 3 new verbs make it 10.
+   **Foundation owns the `7`→`10` bump** (green from the help.sh spec change alone — `help --json` is
+   pure help.sh, dispatcher-independent). Foundation leaves the `for v in setup add …` loops at
+   help.bats:9/13 alone (adding new verbs there needs the dispatcher); lead extends verb-help coverage in
+   the dispatcher commit. `tests/dispatcher.bats` is unaffected (frobnicate/rotate/demo still hold).
+3. **Decision #6 (uninstall keep-mode purge) is SPLIT.** Foundation adds a values-free
+   `store_manifest_purge_sharing` helper to `lib/store.sh` (strips `shared_with`/`shared_at`/`direction`/
+   `source = "received:*"` lines from `manifest.toml`). **Lead** wires the one-line call into
+   `cmd/uninstall.sh` keep-branch (store.sh:42-47 region) + adds the assertion to `tests/uninstall.bats`
+   in Wave 3 — both are shared files no teammate should race on.
+4. **Mock ownership fixed to avoid merge collisions in `tests/mocks/` (a shared dir).** `share` owns
+   `tests/mocks/curl` (fake `github.com/<user>.keys`: valid / empty / YubiKey-only) **and**
+   `tests/mocks/ssh-keygen` (`-Y sign`/`-Y verify`). `receive` and `pubkey` add **no** new mock files
+   (receive's required tests need none; its unsigned-warning path uses no sidecar; `gh`/`pbcopy`/`security`
+   mocks already exist). Each teammate keeps test helpers **inside its own `.bats` file** — never edits
+   the shared `tests/test_helper.bash`.
+5. **`receive` PTY-confirm test seam.** No PTY/`expect` infra exists. `receive` reads every confirm from
+   `${AGSEC_CONFIRM_SRC:-/dev/tty}` (defaults to `/dev/tty` in production — behavior unchanged) so bats
+   can point `AGSEC_CONFIRM_SRC` at a file/FIFO carrying the answer **while the blob occupies STDIN** —
+   this is exactly the "confirm honored, not silently defaulted from an exhausted STDIN" property (§3.7).
+   No-tty hard-refuse = `AGSEC_CONFIRM_SRC` unset/unreadable.
+
+Also verified: `doctor.sh:72-91` + `smoke.sh:49-66` scan `manifest.toml` by `*name*=*` / `*rotate_by*=*`
+line-matching — none of the new field names (`shared_with`/`shared_at`/`direction`) contain `name` or
+`rotate_by`, so the ≤14d engine is unaffected (Wave-3 reconfirms with real rows). `store_extract`
+byte-fidelity (trailing-newline) is symmetric sender↔receiver; receive owns the round-trip + multi-line
+survival tests. Ladder/`--singleton`/`--to`/R0–R4 confirmed **net-new** (grep-empty) → built in
+`cmd/share.sh` + `lib/ladder.sh` (share-only; receive's `--self` needs no ladder).
+
 ---
 
 ## Phase 1 — Foundation (`foundation`, Wave 1)  [blocks all verbs]
