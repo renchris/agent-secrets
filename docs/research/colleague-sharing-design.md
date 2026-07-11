@@ -8,20 +8,21 @@
 > rejected alternatives, §8 v0.2 implementation notes. §9 records what the original §3 hypothesis
 > got wrong; §10 the maintainer-decision open questions; §11 provenance.
 >
-> **Settled:** the mechanism — a raw X25519 age-armored blob wrapped in a versioned
-> `AGENT-SECRETS SHARE v1` fence, ladder-gated before any value is copied, with rotation as the
-> only revocation riding the existing doctor/smoke `≤14d` engine — plus its hard rules: every
-> receive-side confirm reads from `/dev/tty` (hard-refuse if none); the digest readback is
-> recomputed **locally** over base64-decoded ciphertext bytes and catches *accidental* mismatch
-> only (substitution is closed solely by the opt-in `ssh-keygen -Y sign` sidecar); `--to
-> github:<user>` fetches `.keys` to a `0600` temp file (never `age -R -`); the canary name is
-> refused in both verbs; multi-line values survive; decrypt stderr is disciplined so no fragment
-> reaches a transcript.
+> **Settled** (design + all six maintainer decisions locked 2026-07-11): the mechanism — a raw
+> X25519 age-armored blob in a versioned `AGENT-SECRETS SHARE v1` fence, ladder-gated before any
+> value is copied, rotation as the only revocation. The everyday **sender path is a single command
+> + one `[y/N]`** (`share NAME --to github:bob`): the recipient confirm (fingerprint + NAME) is the
+> one mandatory gate, the digest readback is **advisory** (shown every time, compared over a second
+> channel only under `--verify` or for a flagged secret), and there is **no auto-rotate**. Hard
+> rules: every receive-side confirm reads from `/dev/tty` (hard-refuse if none, unless the
+> documented `--yes-i-reviewed` CI escape); the digest is recomputed **locally** over decoded
+> ciphertext bytes; `--sign` (opt-in) is the only substitution defense; `--to github:<user>`
+> fetches `.keys` to a `0600` temp file (never `age -R -`); the canary name is refused in both
+> verbs; multi-line values survive; decrypt stderr is disciplined.
 >
-> **Open (maintainer's call — §10):** the tightened-`rotate_by` window, whether any secret class
-> is ever signature-fail-closed, fenced-armor survivability across the team's real channels, the
-> manifest social-graph at-rest/purge question, `--to self` explicit vs inferred, and whether a
-> no-tty CI `receive` escape hatch should exist.
+> **Still open (§10):** one empirical test only you can run — does a fenced armored blob survive a
+> paste through your real Slack/Teams/email? — plus two build-time verification probes (saltpack/PGP
+> prior-art before the `--sign` sidecar; typage/rage PQ interop before PQ is first-class).
 
 ---
 
@@ -169,16 +170,21 @@ can pin, and closes the receiver-side half of key discovery the sender-side stor
 ### 3.4 · Sender authentication — the stance
 
 age gives integrity and confidentiality, never authorship, and even bolt-on signing "can't be done
-perfectly" ([filippo.io](https://words.filippo.io/age-authentication/)). *Decision: the mandatory floor is
-an out-of-band digest readback that catches an ACCIDENTAL mismatch only; a detached `ssh-keygen -Y sign`
-sidecar (`--sign`) is the opt-in defense against deliberate substitution.* The readback is **never**
-labeled a substitution defense — a substitution attacker recomputes a matching digest over their own blob
-trivially. Authenticity against a chosen-blob substitution comes only from the detached signature over the
-blob (Filippo's own recommended zero-vendor workaround), verified against a local `allowed_signers` with a
-project-owned namespace (`share-v1@<owned-domain>`, following
-[agwa's convention](https://www.agwa.name/blog/post/ssh_signatures)) to block cross-protocol reuse. An
-**unsigned** `receive` proceeds but prints a loud *"sender unverified — you are trusting whoever pasted
-this"* — never a green check we cannot back (mirrors setup.sh:39's honesty norm).
+perfectly" ([filippo.io](https://words.filippo.io/age-authentication/)). *Decision (locked 2026-07-11): the
+one **mandatory** gate is the recipient confirm (§3.5 — fingerprint + NAME); the out-of-band digest
+readback is **advisory by default**.* `receive` always recomputes and displays the checksum, but comparing
+it over a second channel is optional for everyday shares and enforced only when the sender opts in
+(`--verify`) or the secret is flagged high-value. *Why advisory:* the readback catches only an ACCIDENTAL
+wrong-recipient/corruption — a substitution attacker recomputes a matching digest over their own blob
+trivially, so it is **never** a substitution defense — and demoting it from mandatory is exactly what lets
+the everyday sender path be a single command + one confirm (§3.6) without giving up the real wrong-recipient
+defenses (the mandatory fingerprint confirm + the TOFU contacts pin). Authenticity against a chosen-blob
+substitution comes only from the opt-in detached signature (`--sign`, Filippo's own recommended zero-vendor
+workaround), verified against a local `allowed_signers` with a project-owned namespace
+(`share-v1@<owned-domain>`, following [agwa's convention](https://www.agwa.name/blog/post/ssh_signatures))
+to block cross-protocol reuse. *Signature stance (locked 2026-07-11): opt-in only — no secret class is
+fail-closed.* An **unsigned** `receive` proceeds but prints a loud *"sender unverified — you are trusting
+whoever pasted this"* — never a green check we cannot back (mirrors setup.sh:39's honesty norm).
 
 *Decision (red-team fix): the digest is recomputed LOCALLY on receive and displayed for the human
 voice-compare.* `receive` base64-decodes the armor body, runs those raw bytes through `agsec_digest`, and
@@ -232,24 +238,30 @@ age recipients (§7) — reject them at input with the reason, don't let the blo
 ### 3.6 · Sender UX
 
 ```
-$ agent-secrets share ANTHROPIC_API_KEY --to age1qz…recipient
+$ agent-secrets share ANTHROPIC_API_KEY --to github:dana
 # 1. share REFUSES inside an agent session, and requires an interactive tty (§3.10).
 # 2. Ladder gate (R0–R4, §6) runs FIRST. On a per-person-mintable name → prints the
 #    R2 recipe and refuses unless --singleton (or --self) is given.
-# 3. Name check: NAME must exist in the store (a typo'd/non-existent name fails fast);
-#    the confirm then names the exact secret whose VALUE is about to leave the machine.
-# 4. Resolves recipient → polymorphic confirm:
-     Share the VALUE of ANTHROPIC_API_KEY → colleague "dana" (sha256:1a2b3c4d5e6f)?
-     Read this digest aloud to them before they receive.  [y/N]
-# 5. store_extract ANTHROPIC_API_KEY | age -r age1qz…recipient -a  → envelope to STDOUT
-# 6. Records the manifest row, tightens rotate_by, prints paste instructions.
+# 3. Name check: NAME must exist in the store (a typo'd/non-existent name fails fast).
+# 4. Resolves recipient → the ONE mandatory confirm (fingerprint + NAME):
+     Share the VALUE of ANTHROPIC_API_KEY → "dana" (sha256:1a2b3c4d5e6f)?  [y/N]
+     (checksum shown so you CAN read it back on a call — optional unless --verify)
+# 5. store_extract ANTHROPIC_API_KEY | age -r <dana's key> -a  → envelope to STDOUT
+# 6. Records the manifest row (direction=sent) + prints paste instructions.  ← no auto-rotate
 ```
 
-Flags: `--to <age1…|github:user|self>`, `--singleton` (asserts a true singleton; required to bypass R2),
-`--sign` (attach the SSH sidecar). *Decision: emit the blob inside a triple-backtick code fence with an
-explicit "paste the whole block including the fences" instruction* — age armor's `+/=` are exactly the
-characters Markdown chat clients mangle (Saltpack chose Base62 to dodge this, [saltpack.org](https://saltpack.org/));
-fenced blocks suppress that ([Slack docs](https://docs.slack.dev/messaging/formatting-message-text/)).
+*Decision (locked 2026-07-11): the everyday sender path is a single command + one `[y/N]`* — the same
+weight as `add` — because the digest comparison is advisory (§3.4) and there is no auto-rotate (§3.9). The
+`--to github:dana` form needs no prior key exchange (it fetches Dana's key from GitHub), so the common case
+is genuinely one command.
+
+Flags: `--to <age1…|github:user|self>` (`self` is auto-inferred when the recipient equals your own key —
+the flag is optional), `--singleton` (asserts a true singleton; required to bypass R2), `--verify` (force
+the aloud checksum comparison), `--sign` (attach the opt-in SSH sidecar). *Decision: emit the blob inside a
+triple-backtick code fence with an explicit "paste the whole block including the fences" instruction* — age
+armor's `+/=` are exactly the characters Markdown chat clients mangle (Saltpack chose Base62 to dodge this,
+[saltpack.org](https://saltpack.org/)); fenced blocks suppress that
+([Slack docs](https://docs.slack.dev/messaging/formatting-message-text/)).
 
 *Wrong-secret selection (hostile-review gap).* Every wrong-recipient defense guards WHO receives; the more
 frequent human error is fat-fingering WHICH secret. Mitigations: the name must resolve to an existing entry
@@ -268,9 +280,11 @@ $ agent-secrets receive          # reads the pasted envelope on STDIN
   is exhausted → the confirm reads empty and silently takes its default with no human in the loop.
   `receive` therefore reads the recipient/collision confirms (and every re-prompt) from `</dev/tty`,
   reading the blob from STDIN only *after* the tty gate. **No controlling tty → `receive` hard-refuses**
-  rather than auto-defaulting. *Why:* the polymorphic recipient gate must stay reachable when the env guard
-  is bypassed by a prompt-injected agent; an exhausted STDIN silently defeating it is exactly the failure
-  the gate exists to prevent.
+  rather than auto-defaulting, *unless* the documented `--yes-i-reviewed` escape is passed (DECISION locked
+  2026-07-11: it still runs the canary/collision HARD errors, only skipping the human confirm, so CI can
+  restore a shared secret). *Why:* the polymorphic recipient gate must stay reachable when the env guard is
+  bypassed by a prompt-injected agent; an exhausted STDIN silently defeating it is exactly the failure the
+  gate exists to prevent — and the escape is opt-in and explicit, never the default.
 - **STDIN ingest, never an echoed line-read** — mirror restore.sh:21-25's tty-vs-`cat` branch (survives
   bracketed-paste corruption and multi-line auto-submit; Claude Code is a named cause of broken paste
   bracketing).
@@ -278,7 +292,8 @@ $ agent-secrets receive          # reads the pasted envelope on STDIN
   and cap the decoded ciphertext BEFORE decrypt. A giant base64 body balloons on decode; both bounds are
   needed to close the header-size / stanza-count DoS the age spec does not cap.
 - **Local digest recompute + display** (§3.4) — decode the armor body, recompute `agsec_digest` locally,
-  show it for the voice compare, treat the embedded `digest:` as a corruption hint only.
+  show it for an **advisory** voice compare (optional by default; forced only under `--verify` or for a
+  flagged secret), treating the embedded `digest:` as a corruption hint only.
 - **Sender-auth verify** — if `--sign` was used, `ssh-keygen -Y verify` against `allowed_signers`;
   unsigned → loud "sender unverified" warning, proceed.
 - **Canary-name refusal (DECISION — hard error both directions).** Refuse to `share`
@@ -311,7 +326,9 @@ $ agent-secrets receive          # reads the pasted envelope on STDIN
 - **Multi-machine self-share (DECISION — transport, not Keychain seeding).** `security add-generic-password
   -w` does not read STDIN on Sequoia (it prompts /dev/tty; keychain.sh:8-11), so self-share cannot silently
   seed the Keychain. It reduces to transporting the `AGE-SECRET-KEY` via STDIN into `kc_add` (0600
-  fallback) — the restore flow already fits. `--to self` also takes the R0 ladder bypass.
+  fallback) — the restore flow already fits. `--to self` takes the R0 ladder bypass, and (DECISION locked
+  2026-07-11) is **auto-inferred** when the resolved recipient equals the local `age.pub` — the explicit
+  flag still works but is never required.
 - **Group-share stance (DECISION — refuse for the single-value verb).** A `sops updatekeys`-style "add
   recipient to my store" grants standing decrypt of **all** secrets (the gopass team-store model). A
   one-off `share` scopes to one value encrypted to one external recipient. Standing team stores are out of
@@ -327,37 +344,41 @@ would no-op and drop the metadata. *Decision: add a dedicated in-place row updat
 |---|---|---|
 | `shared_with` | recipient key fingerprint (label optional) | fingerprint primary — minimize the plaintext social graph |
 | `shared_at` | ISO date | sender-side fact known at share time |
-| `direction` | `sent` \| `received` \| `self` | `self` excluded from the offboarding query + rotation-tightening |
+| `direction` | `sent` \| `received` \| `self` | `self` excluded from the offboarding query |
 | `source` | on receive: `received:<label>` | powers "what came from X" |
 
 This is metadata, not a value (SECURITY.md:6-11 scopes names-only to a *value*; `list` already prints
 manifest metadata), so it does not breach the invariant. `shared_with` (external recipients) is orthogonal
-to the existing `used_by=[]` (local consumers, store.sh:82); the offboarding query reads both. The
-plaintext social-graph exposure this creates, and its uninstall-keep-mode retention, are tracked in §4 and
-§10.
+to the existing `used_by=[]` (local consumers, store.sh:82); the offboarding query reads both. *Decision
+(locked 2026-07-11): `shared_with` defaults to the opaque fingerprint (a human label is opt-in), and the
+share roster is purged even in uninstall **keep-mode*** — closing the plaintext who-shared-with-whom leak
+keep-mode would otherwise retain. The fix targets keep-mode (cmd/uninstall.sh preserves the config dir for
+re-onboarding); purge-mode `rm -rf` is already clean.
 
 ### 3.9 · Rotation, revocation, delivery-awareness
 
 *Revocation honesty, stated verbatim in help/SECURITY.md: a shared secret cannot be cryptographically
 revoked or expired offline; the only revocation is rotating it at its provider so the shared copy stops
-authenticating.* Rotation-after-share is doctrine on first-principles grounds — a pasted bearer copy now
-persists in the recipient's store and the channel's retention, an exposure the sender cannot walk back
-(NIST SP 800-63B favors rotate-on-compromise over fixed calendars; the 180-day default at common.sh:21 is a
-ceiling, not a NIST figure).
+authenticating.* A pasted bearer copy persists in the recipient's store and the channel's retention — an
+exposure the sender cannot walk back — so rotation is the *lever* available when a shared copy must be
+killed (NIST SP 800-63B favors rotate-on-compromise over fixed calendars; the 180-day default at
+common.sh:21 is a ceiling, not a NIST figure).
 
-*Decision: on a non-self share, tighten `rotate_by` to a near date so the next weekly smoke fires a
-reminder* — reusing the free engine: doctor `_scan_rotate` (`days ≤ 14`, doctor.sh:84) and the weekly smoke
-(`days ≤ 14`, smoke.sh:60) already parse `manifest.toml rotate_by`. The tightened window is the shared
-exposure horizon for **both** offboarding blast-radius and post-quantum harvest-now-decrypt-later (§4
-threat #4) — set it against the tighter of the two, not on offboarding grounds alone.
+*Decision (locked 2026-07-11): do NOT auto-tighten `rotate_by` on share.* Rotation is the only revocation,
+but it is a judgment the operator makes when a copy actually needs killing (a holder leaves, a blob leaks) —
+not a routine post-share reflex. Auto-nagging a legitimately-shared singleton is noise, and a config item
+that is not a credential (an AWS endpoint/hostname, a non-secret connection string) should not be rotated at
+all. `share` records the event in the manifest (`shared_with`/`shared_at`/`direction`) so the offboarding
+query can answer *"what did I share with X, and is it still live?"*, and leaves the rotation decision to the
+operator. The existing doctor/smoke `≤14d` engine (doctor.sh:84 / smoke.sh:60) still fires on whatever
+`rotate_by` the secret already carries — the share simply does not move it.
 
-*Decision (hostile-review gap — the orphaned-copy fix): rotate after CONFIRMED receipt, not immediately.*
-The sender gets no delivery signal (serverless = no receipt proof). If the sender rotates the instant they
-paste, and the recipient never ran `receive`, the recipient later receives dead credentials with no
-signal — and their `doctor` reports the stale value as present-and-decryptable, because it checks
-decryptability, not validity (doctor.sh). So the doctrine is: paste → recipient confirms receipt
-out-of-band → *then* rotate. The tightened `rotate_by` is the reminder that this loop is still open, not a
-trigger to rotate blind.
+*Decision (hostile-review gap — the orphaned-copy fix): when you DO rotate to revoke, rotate after CONFIRMED
+receipt, not the instant you paste.* The sender gets no delivery signal (serverless = no receipt proof).
+Rotating before the recipient ran `receive` hands them dead credentials with no signal — and their `doctor`
+reports the stale value as present-and-decryptable, because it checks decryptability, not validity
+(doctor.sh). So when revocation-by-rotation is the goal: paste → recipient confirms receipt out-of-band →
+*then* rotate.
 
 ### 3.10 · AI-agent invocation policy (prompt-injection stance)
 
@@ -396,7 +417,7 @@ it ships; leaving it out is a decision, not an oversight.
 | Canary NAME either direction | hard refuse (no confirm) |
 | Multi-line value | base64 / `cat` round-trip, not truncated |
 | `share` in an agent session or with no tty | refuse |
-| `receive` with no controlling tty | hard-refuse (never auto-default a confirm) |
+| `receive` with no controlling tty | hard-refuse, unless `--yes-i-reviewed` (runs the hard errors, skips only the human confirm — for CI) |
 | Unsigned blob | proceed with loud "sender unverified" |
 | Benign armor reflow | local digest stable (decoded bytes) |
 
@@ -584,9 +605,9 @@ Sharing a value is the last resort. If they truly can't mint their own, re-run:
   discover-by-identity need at lower cost.
 - **Mandatory sender signature (fail-closed on every unsigned blob).** *Killed by adoption friction:*
   blocks users without an SSH key and adds an `allowed_signers`-roster ceremony to every receive. The
-  digest readback is the cheaper mandatory floor (accidental-mismatch only); the SSH sidecar — the actual
-  substitution defense — stays opt-in. *(Whether any high-value secret class should override this and
-  fail-closed is an open decision, §10.)*
+  advisory digest readback (accidental-mismatch only) is the cheap default check; the SSH sidecar — the
+  actual substitution defense — stays opt-in. *(Locked 2026-07-11: opt-in only, no secret class is
+  fail-closed — §3.4, §10.)*
 - **Mandatory hybrid PQ on every share.** *Killed by disproportion:* the ≤180-day rotation window already
   bounds HNDL exposure; PQ adds a v1.3.0+ age requirement on both ends for a threat rotation already caps.
   Reserve `-pq` for blobs known to sit in retained chat beyond the window.
@@ -711,44 +732,33 @@ shape but the corpus corrected four specifics — recorded here because the *why
 
 ## 10 · Open questions (maintainer's call)
 
-- **Tightened `rotate_by` window — `today` (0d) vs `+7–14d`.** Immediate-compromise doctrine argues
-  rotate-now, but the doctor/smoke engine keys on `≤14d` and a 0d flood risks alert fatigue. *Settle by:*
-  `rotate_by=today` + a distinct "rotate now" doctor severity, vs `+7–14d` riding the existing `≤14d`
-  notify, vs a knob (`AGENT_SECRETS_SHARED_ROTATE_DAYS`). Trades security urgency against weekly-smoke noise.
-- **Sender signature: mandatory or opt-in.** The design lands on opt-in (`--sign`) with a loud unsigned
-  warning. Whether `receive` may ever proceed on an unsigned blob — or must fail-closed for a high-value
-  secret class — is a policy call, and it matters more now that the readback is demoted to
-  accidental-mismatch-only (the SSH sidecar is the *sole* offline substitution defense). *Settle by:* a
-  friction test of the `allowed_signers` roster ceremony + a decision on whether any class warrants
-  fail-closed.
-- **Fenced-armor survivability across the team's actual channels.** Fenced blocks fix Slack; Teams/email/
-  mobile are untested. (The decoded-bytes digest tolerates a *benign* reflow, but a channel that
-  drops/rewrites characters still breaks *decryption*.) *Settle by:* an empirical paste-round-trip test
-  through the real channels; if any corrupts, mandate a `.age` file attachment for that channel or
+**Resolved 2026-07-11 (user decisions — the rationale is folded into §3):**
+
+| Decision | Resolution | Why |
+|---|---|---|
+| Digest readback | **Advisory by default** (§3.4, §3.6) | Shown every share; compared over a second channel only under `--verify` or for a flagged secret. Unlocks the one-command sender path; the readback only ever caught an *accidental* mismatch. |
+| `rotate_by` on share | **No auto-tighten** (§3.9) | Record the share; leave rotation to the operator's judgment (revoke a copy only when it needs killing). No nagging on legitimate long-term shares. |
+| Sender signature | **Opt-in only** (§3.4) | `--sign` optional; unsigned `receive` proceeds with a loud "sender unverified" warning. No secret class is fail-closed. |
+| No-tty `receive` | **Documented `--yes-i-reviewed` escape** (§3.7, §3.10) | Enables CI/non-interactive receive; still runs the canary/collision hard errors, only skips the human confirm. |
+| `--to self` | **Auto-inferred** (§3.7) | Inferred when the resolved recipient equals the local `age.pub`; the explicit flag still works. |
+| Manifest social-graph | **Fingerprint-only + purged in keep-mode** (§3.8) | `shared_with` defaults to the opaque fingerprint (label opt-in); the roster is purged even in uninstall keep-mode. |
+
+**Still open:**
+
+- **Fenced-armor survivability across the team's actual channels** — the one test no agent can run. Fenced
+  blocks fix Slack; Teams/email/mobile are untested. (The decoded-bytes digest tolerates a *benign* reflow,
+  but a channel that drops/rewrites characters still breaks *decryption*.) *Settle by:* an empirical
+  paste-round-trip through the real channels; if any corrupts, mandate a `.age` file attachment there or
   fail-loud on receive-decrypt.
-- **`manifest.toml` at-rest for the social graph.** Recording `shared_with` creates a plaintext
-  who-shared-with-whom map. *Settle by:* deciding whether `manifest.toml` should be encrypted-at-rest (it is
-  not today) or `shared_with` restricted to the opaque fingerprint only — and whether the roster is
-  **purged on uninstall**. Note the leak is the **default keep-mode** (cmd/uninstall.sh preserves the whole
-  config dir for re-onboarding), not the purge-mode `rm -rf` which is already clean; a fix must target
-  keep-mode retention, not rollback enumeration.
-- **Whether `--to self` is an explicit flag or inferred.** The R0 bypass needs a reliable "recipient is me"
-  signal. *Settle by:* requiring `--to self` explicitly vs auto-detecting when the resolved recipient equals
-  the local `age.pub`.
-- **`receive` with no controlling tty — hard-refuse vs a documented `--yes-i-reviewed` escape.** The
-  hard-refuse (so the confirm can't be silently defaulted) also blocks legitimate non-interactive receive
-  (CI restoring a shared secret). *Settle by:* deciding whether a narrowly-scoped, explicitly-documented
-  non-interactive flag (that still runs the canary/collision *hard errors*, just not the human confirm) is
-  acceptable, or whether non-interactive receive stays unsupported to keep the agent-defeat absolute.
-- **(Research before shipping the SSH sidecar)** Review saltpack/PGP signcryption prior art. Keybase/
-  saltpack deliberately integrated the sender-authentication age omits, and is serverless-paste-friendly;
-  reviewing it (and PGP's armored-message + CRC framing) either validates the detached-sidecar choice or
-  shows that an integrated signcryption envelope avoids the "two artifacts, verify-order matters" fragility
-  the sidecar carries.
-- **(Research before presenting PQ as first-class)** Verify typage/rage PQ interop. Byte-parity was
-  confirmed for rage classical but not for typage, and PQ (`age1pq1…`) parity across rage/typage is
-  unestablished — so offering the PQ path silently narrows "any conformant age decrypts it" to
-  v1.3.0+-PQ-capable builds only. Verify before PQ is a first-class option.
+- **(Research, at build time — before shipping the `--sign` sidecar)** Review saltpack/PGP signcryption
+  prior art. Keybase/saltpack deliberately integrated the sender-authentication age omits, and is
+  serverless-paste-friendly; reviewing it (and PGP's armored-message + CRC framing) either validates the
+  detached-sidecar choice or shows that an integrated signcryption envelope avoids the "two artifacts,
+  verify-order matters" fragility the sidecar carries.
+- **(Research, at build time — before presenting PQ as first-class)** Verify typage/rage PQ interop.
+  Byte-parity was confirmed for rage classical but not for typage, and PQ (`age1pq1…`) parity across
+  rage/typage is unestablished — so offering the PQ path silently narrows "any conformant age decrypts it"
+  to v1.3.0+-PQ-capable builds only.
 
 ---
 
