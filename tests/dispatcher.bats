@@ -46,3 +46,11 @@ load test_helper
   [ "$status" -eq 0 ]
   [[ "$output" == "agent-secrets "* ]]
 }
+
+@test "smoke is a hidden dispatcher verb — the launchd weekly job routes to smoke.sh (never unknown-command)" {
+  setup_store
+  run agsec smoke
+  [ "$status" -ne 2 ]                          # NOT the unknown-command arm (the launchd job would exit 2 forever)
+  [[ "$output" != *"unknown command"* ]]
+  [[ "$output" == *"keychain read"* ]]         # it actually ran the maintenance checks
+}

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# cmd/smoke.sh — weekly maintenance smoke. Run by the launchd job (NOT a dispatcher
-# verb). Six checks: (1) Keychain read, (2) sops decrypt self-test, (3) apiKeyHelper non-empty,
+# cmd/smoke.sh — weekly maintenance smoke. Run by the launchd job via `agent-secrets smoke`
+# (a HIDDEN dispatcher verb — routed, but deliberately kept out of help and help --json).
+# Six checks: (1) Keychain read, (2) sops decrypt self-test, (3) apiKeyHelper non-empty,
 # (4) wrappers executable, (5) manifest.toml rotate_by scan → local notification, (6) npm
 # ignore-scripts still set. Any failure → notification. Names-only: never prints a value; every
 # lib call is guarded in a subshell so an unset/absent store reports a failure, never crashes.
