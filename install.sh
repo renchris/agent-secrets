@@ -42,7 +42,7 @@ main() {
   _render_plan() {
     _say ""
     _say "agent-secrets installer — this will:"
-    _say "  • install Homebrew (if absent), then: age, sops, gum"
+    _say "  • install Homebrew (if absent), then: age, sops, gum, jq"
     _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG, SHA-256 verified)"
     _say "  • install wrappers into $BIN_DIR   (claude-agent, cursor-agent, apiKeyHelper)"
     _say "  • add a marker-delimited PATH block to $RC_FILE"
@@ -73,7 +73,10 @@ main() {
     _say "Installing Homebrew…"
     _run /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   fi
-  _run brew install age sops gum
+  # jq is REQUIRED, not optional: lib/manifest.sh (the install/uninstall manifest backbone),
+  # `help --json`, and `list --format=json` all call jq unguarded — omitting it aborts the install
+  # mid-way under `set -euo pipefail`, leaving partial residue.
+  _run brew install age sops gum jq
 
   # --- download + SHA-256 verify (never execute an unverified artifact) --------
   local work; work="$(mktemp -d)"
