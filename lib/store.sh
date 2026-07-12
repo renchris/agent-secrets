@@ -22,8 +22,9 @@ _store_recipients() {
   printf '%s\n' "$out"
 }
 
-# Overwrite-and-remove a staged plaintext temp (FileVault gives cryptographic erasure on rm).
-_store_shred() { [ -e "${1:-}" ] || return 0; rm -f "$1"; }
+# Overwrite-and-remove staged plaintext temps (FileVault gives cryptographic erasure on rm).
+# Variadic so a signal trap can shred every temp (decrypted store, filtered copy, new ciphertext).
+_store_shred() { local f; for f in "$@"; do [ -e "$f" ] && rm -f "$f"; done; return 0; }
 
 # Decrypt the whole store to a plaintext dotenv on stdout (VALUES present — internal use only,
 # never surfaced to a terminal; consumers are store_has/store_names/store_add which never echo).
@@ -60,6 +61,9 @@ store_add() {
   local value; IFS= read -r value || true
   local recips; recips="$(_store_recipients)" || agsec_die "store_add: no age recipients (run setup)"
   local store plain; store="$(agsec_store_file)"; plain="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"
+  # Shred the whole-store plaintext (+ transient copies) on an interrupt: without this, a SIGINT
+  # between decrypt and the final shred strands every secret VALUE in cleartext under the config dir.
+  trap '_store_shred "$plain" "$plain.f" "$store.new"; exit 130' INT TERM
   if [ -f "$store" ]; then
     _store_decrypt >"$plain" 2>/dev/null || { _store_shred "$plain"; agsec_die "store_add: cannot decrypt store (custody/key problem — run doctor)"; }
     { grep -v "^${name}=" "$plain" || true; } >"$plain.f"; mv -f "$plain.f" "$plain"
@@ -68,7 +72,7 @@ store_add() {
   unset value
   sops -e --input-type dotenv --output-type dotenv --age "$recips" "$plain" >"$store.new" \
     || { _store_shred "$plain"; _store_shred "$store.new"; agsec_die "store_add: sops encrypt failed"; }
-  mv -f "$store.new" "$store"; _store_shred "$plain"
+  mv -f "$store.new" "$store"; _store_shred "$plain"; trap - INT TERM
   _store_manifest_upsert "$name"
 }
 
@@ -84,6 +88,7 @@ store_add_multiline() {
   agsec_secure_umask
   local recips; recips="$(_store_recipients)" || agsec_die "store_add_multiline: no age recipients (run setup)"
   local store plain; store="$(agsec_store_file)"; plain="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"
+  trap '_store_shred "$plain" "$plain.f" "$store.new"; exit 130' INT TERM   # shred the whole-store plaintext on interrupt
   if [ -f "$store" ]; then
     _store_decrypt >"$plain" 2>/dev/null || { _store_shred "$plain"; agsec_die "store_add_multiline: cannot decrypt store (custody/key problem — run doctor)"; }
     { grep -v "^${name}=" "$plain" || true; } >"$plain.f"; mv -f "$plain.f" "$plain"
@@ -92,7 +97,7 @@ store_add_multiline() {
   { printf '%s=' "$name"; base64 | tr -d '\n'; printf '\n'; } >>"$plain"
   sops -e --input-type dotenv --output-type dotenv --age "$recips" "$plain" >"$store.new" \
     || { _store_shred "$plain"; _store_shred "$store.new"; agsec_die "store_add_multiline: sops encrypt failed"; }
-  mv -f "$store.new" "$store"; _store_shred "$plain"
+  mv -f "$store.new" "$store"; _store_shred "$plain"; trap - INT TERM
   _store_manifest_upsert "$name"
 }
 
