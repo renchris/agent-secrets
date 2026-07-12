@@ -19,6 +19,21 @@ load test_helper
   [ "$pub1" = "$pub2" ]
 }
 
+@test "wizard resumes after age.pub is lost — gates idempotency on the private key alone (no silent wedge)" {
+  printf '%s' v1 | AGENT_SECRETS_UNATTENDED=1 bash "$REPO_ROOT/bin/agent-secrets" setup >/dev/null 2>&1
+  local key1 pub1
+  key1=$(cat "$AGENT_SECRETS_HOME/.config/secrets/age.key")
+  pub1=$(cat "$AGENT_SECRETS_HOME/.config/secrets/age.pub")
+  # age.pub is documented as a "non-secret recipient"; lose it (+ the wrapper, so state is 'partial' →
+  # the key ceremony re-runs). Pre-fix: age-keygen refused to overwrite the key, `2>/dev/null` hid it,
+  # set -e aborted → silent exit 1, permanent onboarding lockout.
+  rm -f "$AGENT_SECRETS_HOME/.config/secrets/age.pub" "$AGENT_SECRETS_HOME/bin/claude-agent"
+  run bash -c "printf '%s' v2 | AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$AGENT_SECRETS_HOME/.config/secrets/age.key")" = "$key1" ]   # same private key kept, not re-minted
+  [ "$(cat "$AGENT_SECRETS_HOME/.config/secrets/age.pub")" = "$pub1" ]   # public recipient re-derived, identical
+}
+
 @test "run without -- errors" {
   setup_store
   run agsec run printenv PATH

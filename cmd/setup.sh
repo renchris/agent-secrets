@@ -23,11 +23,19 @@ _preflight() {
 
 _key_ceremony() {
   local cfg; cfg="$(agsec_config_dir)"; mkdir -p "$cfg"; chmod 700 "$cfg" 2>/dev/null || true
-  if [ -s "$(agsec_age_key_file)" ] && [ -s "$(agsec_age_pub_file)" ]; then
+  local kf pf; kf="$(agsec_age_key_file)"; pf="$(agsec_age_pub_file)"
+  # Idempotency gates on the PRIVATE key ALONE — age.pub is a non-secret recipient we can always
+  # re-derive. Requiring BOTH wedged setup permanently: with age.key present but age.pub missing
+  # (an interrupt between the two keygens, or the user deleting the "non-secret" pubkey), the guard
+  # fell through to `age-keygen -o`, which REFUSES to overwrite the existing key (exit 1); the
+  # `2>/dev/null` hid the error and `set -e` aborted the wizard silently → permanent onboarding lockout.
+  if [ -s "$kf" ]; then
+    [ -s "$pf" ] || age-keygen -y "$kf" >"$pf"      # re-derive the public recipient when it's absent
     ui_ok "key already exists — not minting a second one"; kc_write_selector; store_init; return 0
   fi
-  age-keygen -o "$(agsec_age_key_file)" 2>/dev/null; chmod 600 "$(agsec_age_key_file)"
-  age-keygen -y "$(agsec_age_key_file)" >"$(agsec_age_pub_file)"
+  if [ -f "$kf" ]; then rm -f "$kf"; fi             # clear a 0-byte/partial key from an interrupted mint (age-keygen -o is O_EXCL)
+  age-keygen -o "$kf"; chmod 600 "$kf"              # NO 2>/dev/null — a real keygen failure must surface, not silently abort
+  age-keygen -y "$kf" >"$pf"
   local rec="$cfg/recovery.key"; age-keygen -o "$rec" 2>/dev/null; age-keygen -y "$rec" >"$cfg/recovery.pub"
   kc_write_selector
   ui_ok "generated your key + a recovery key (the store encrypts to both)"
