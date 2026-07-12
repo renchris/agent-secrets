@@ -59,6 +59,23 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   [[ "$output" == *"invalid name"* ]]
 }
 
+@test "list (text) survives a missing manifest row without truncating under set -e" {
+  setup_store
+  printf x | store_add ORPHAN_TOKEN
+  rm -f "$(agsec_manifest_toml)"                 # no manifest → _rotate_of's grep fails (exit non-zero)
+  run bash "$REPO_ROOT/bin/agent-secrets" list
+  [ "$status" -eq 0 ]                            # pre-fix: bare r=$(...) aborts under set -e after the header
+  [[ "$output" == *"ORPHAN_TOKEN"* ]]            # every name is listed, not truncated away
+  [[ "$output" == *"$AGENT_SECRETS_CANARY_NAME"* ]]
+}
+
+@test "run -- with no command gives run's usage (exit 2), not an internal helper message" {
+  setup_store
+  run bash "$REPO_ROOT/bin/agent-secrets" run --
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"run -- <cmd>"* ]]
+}
+
 @test "static: no secret value passed to a logging/status helper (transcript-leak guard)" {
   # The real leak risk is a value var reaching stderr/stdout via a log or status line (it lands in
   # ~/.claude transcripts). The sanctioned value sinks — a 0600 temp file redirect in

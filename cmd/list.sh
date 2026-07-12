@@ -13,11 +13,13 @@ fmt=text
 case "${1:-}" in
   ''|--format=text) fmt=text ;;
   --format=json) fmt=json ;;
-  *) agsec_die "usage: agent-secrets list [--format=json]" ;;
+  *) agsec_die "usage: agent-secrets list [--format=json]" 2 ;;
 esac
 
 man="$(agsec_manifest_toml)"
-_rotate_of() { grep -A6 "name = \"$1\"" "$man" 2>/dev/null | sed -n 's/.*rotate_by = "\(.*\)".*/\1/p' | head -1; }
+# `|| true`: a name with no manifest row makes grep exit 1; under `set -euo pipefail` a bare
+# `r="$(_rotate_of ...)"` assignment would then abort, truncating text-mode `list` to just the header.
+_rotate_of() { grep -A6 "name = \"$1\"" "$man" 2>/dev/null | sed -n 's/.*rotate_by = "\(.*\)".*/\1/p' | head -1 || true; }
 
 if [ ! -f "$(agsec_store_file)" ]; then
   if [ "$fmt" = json ]; then printf '[]\n'; else agsec_note "no secrets yet — run: agent-secrets add <NAME>"; fi
@@ -27,6 +29,7 @@ fi
 names="$(store_names 2>/dev/null || true)"
 
 if [ "$fmt" = json ]; then
+  agsec_require jq   # jq is provisioned by the installer; clean diagnostic (not a raw 127) if it's absent
   {
     while IFS= read -r n; do
       [ -n "$n" ] || continue

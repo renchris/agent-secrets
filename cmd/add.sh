@@ -12,9 +12,9 @@ case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render ad
 . "$AGENT_SECRETS_LIB/ui.sh"
 
 name="${1:-}"
-[ -n "$name" ] || agsec_die "usage: agent-secrets add <NAME>"
+[ -n "$name" ] || agsec_die "usage: agent-secrets add <NAME>" 2
 case "$name" in
-  [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*) agsec_die "invalid name '$name' — use letters, digits, underscore (start with a letter/_)";;
+  [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*) agsec_die "invalid name '$name' — use letters, digits, underscore (start with a letter/_)" 2;;
 esac
 [ -f "$(agsec_store_file)" ] || agsec_die "no store yet — run: agent-secrets setup"
 

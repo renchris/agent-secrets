@@ -66,8 +66,9 @@ else
   agsec_attn "rotate_by scan (no manifest)"
 fi
 
-# (6) npm ignore-scripts still set
+# (6) npm ignore-scripts still set — ADVISORY only (matches doctor's non-failing `attn`): npm absent
+# or ignore-scripts unset is not a smoke FAILURE, so it neither fails the weekly job nor fires a red alert.
 if agsec_have npm && _try v npm config get ignore-scripts && [ "$v" = true ]; then agsec_ok "ignore-scripts"
-else agsec_attn "ignore-scripts"; notify "agent-secrets smoke" "npm ignore-scripts not set"; fail=1; fi
+else agsec_attn "ignore-scripts (advisory — set: npm config set ignore-scripts true)"; fi
 
 exit "$fail"

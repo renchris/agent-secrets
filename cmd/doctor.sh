@@ -19,11 +19,12 @@ for arg in "$@"; do
     --fix)         FIX=1 ;;
     --gates)       GATES=1 ;;
     -h|--help) printf '%s\n' "usage: agent-secrets doctor [--format=json] [--redact] [--gates] [--fix]"; exit 0 ;;
-    *) agsec_die "doctor: unknown flag: $arg (see --help)" ;;
+    *) agsec_die "doctor: unknown flag: $arg (see --help)" 2 ;;
   esac
 done
 
-LAUNCHD_LABEL="${AGENT_SECRETS_LAUNCHD_LABEL:-com.agent-secrets.weekly-smoke}"
+# Must match install.sh's SMOKE_LABEL exactly, else the maintenance check can never pass.
+LAUNCHD_LABEL="${AGENT_SECRETS_LAUNCHD_LABEL:-com.agent-secrets.smoke}"
 had_bad=0
 JSON_ROWS=()
 
