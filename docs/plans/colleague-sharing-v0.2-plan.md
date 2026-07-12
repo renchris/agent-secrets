@@ -16,6 +16,9 @@
   Six UX decisions locked (below). Build NOT started. Next: Phase 0 team spawn, Wave 1 = foundation.
 - **2026-07-11 — BUILD COMPLETE (bats-green, shellcheck-clean, committed; NOT pushed).** All three verbs
   shipped via a 4-teammate Agent Team over 3 waves. See "Build outcome" below.
+- **2026-07-11 — HARDENING PASS (pre-ship adversarial review → fixes committed).** A 40-agent adversarial
+  review (7 dimensions × find→refute) confirmed 14 findings (19 of 33 raw refuted). Fixed in 5 commits;
+  bats 87 → **94**. Version stays **0.1.0** (user decision: pre-public, no v0.2.0 bump). See "Hardening pass" below.
 
 ## Build outcome — DONE 2026-07-11
 
@@ -60,6 +63,25 @@ purged in uninstall keep-mode.
   Full signed round-trip is deferred pending the §10 sidecar-transport research (saltpack/PGP prior art).
   A recipient CAN still verify manually with `ssh-keygen -Y verify`.
 - **PQ / signature-verify / TOFU-contacts-roster** were scoped out of v0.2 per the design's opt-in stance.
+
+## Hardening pass — DONE 2026-07-11 (bats 87 → 94; stays v0.1.0)
+
+A 40-agent adversarial review (7 dimensions, find→refute-verify) run before ship. 14 findings confirmed
+(19 of 33 raw refuted as overstated or intentional-limitation). Fixed in 5 atomic commits (linear on `main`):
+
+| Commit | Sev | Fix |
+|---|---|---|
+| `a5fb9a9` | HIGH×3 | **receive decrypt-stage** — EXIT trap shreds the decrypted-value + age-private-key temps on every exit path (a SIGINT / store_add sops-failure previously stranded plaintext in the config dir); undecodable armor now fails closed with the curated message instead of a silent `set -e` abort (bare-assignment pipefail hazard); advisory digest note points at the in-band `digest:` line (was incoherently framed vs share's recipient-key fingerprint). |
+| `b4ec32f` | HIGH | **share tty boundary** — the interactive-terminal check (the real agent-exfil boundary, design §3.10) was nested in the `AGENT_SECRETS_UNATTENDED` guard, so one env var disabled it; now always enforced, UNATTENDED gates only the y/N. |
+| `aa9b1e3` | LOW×2 | **share arg/NAME guards** — trailing `--to`/`--rename` `shift 2` silent-abort → exit-2 usage error; regex-metachar NAME grammar-validated (fail-fast "no such secret" vs raw sops error). |
+| `6ba92a0` | LOW×2 | **exit-code convention** — receive/pubkey usage errors now exit 2 (were 1, contradicting the published `exit_codes`); receive help `source=received:peer` (was aspirational `<label>`). |
+| `1d38b04` | LOW×2 | **docs** — bats badge/count 41 → 94; llms.txt `## Commands` lists share/receive/pubkey. |
+
+**Key learning:** age ciphertext is binary (NUL bytes) — it can never round-trip through a shell variable
+(command substitution strips NULs), so receive decodes the armor body ONCE to a 0600 temp and hashes/caps
+from the file. **Version decision (user, 2026-07-11):** pre-public, so the sharing feature is folded into
+**0.1.0** — no v0.2.0 bump. Deploy = push `main` + re-cut the pinned `v0.1.0` release from current HEAD so
+the one-command install delivers sharing.
 
 ## Source of truth (read these first)
 
