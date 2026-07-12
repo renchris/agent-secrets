@@ -45,6 +45,16 @@ load test_helper
   [ -f "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]
 }
 
+@test "non-interactive uninstall (stdin EOF) completes the rollback instead of aborting under set -e" {
+  setup_store
+  # stdin closed — an agent / cron / nohup context. Pre-fix: the bare `read` hit EOF, set -e aborted
+  # the script BEFORE manifest_rollback, exit 1, TOTAL residue. Post-fix: fail-closed to KEEP + rollback.
+  run bash "$REPO_ROOT/cmd/uninstall.sh" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"uninstall complete"* ]]                   # rollback ran to completion
+  [ -f "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]    # KEEP default → the user's store survives
+}
+
 @test "uninstall keep-mode purges the colleague-share roster from the retained manifest (decision #6)" {
   setup_store
   printf 'x' | store_add MY_SHARED

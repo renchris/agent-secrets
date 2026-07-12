@@ -31,7 +31,11 @@ main() {
     agsec_note "(dry-run) would ASK: keep or purge the encrypted store + age keys under $config_dir"
   else
     printf 'Also delete your encrypted store + age keys under %s? [y = purge / N = keep]: ' "$config_dir" >&2
-    local ans; read -r ans
+    # EOF-guard (matches setup.sh / share.sh / receive.sh): a bare `read` returns non-zero at stdin
+    # EOF and, under `set -euo pipefail`, would abort BEFORE manifest_rollback — leaving TOTAL residue
+    # (PATH block, launchd job, Keychain item, wrappers, settings.json edit). Fail closed to KEEP so the
+    # tool-artifact rollback still runs; the destructive store purge stays gated behind an explicit `y`.
+    local ans=''; read -r ans || ans=''
     case "$ans" in [yY]*) purge=1 ;; *) purge=0 ;; esac
   fi
 
