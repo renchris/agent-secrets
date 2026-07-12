@@ -96,6 +96,12 @@ check_store() {
   if [ -f "$sf" ]; then _row store ok "store file" "present"; else _row store bad "store file" "absent"; fi
   if _try v store_extract "$AGENT_SECRETS_CANARY_NAME" && [ -n "$v" ]; then
     _row store ok "decrypt self-test" "canary readable"
+    # Armed-canary status: comparing against the known placeholder constant leaks nothing.
+    if [ "$v" = "$AGENT_SECRETS_CANARY_PLACEHOLDER" ]; then
+      _row store attn "canary" "INERT decoy — no breach detection until armed (agent-secrets add $AGENT_SECRETS_CANARY_NAME)"
+    else
+      _row store ok "canary" "armed"
+    fi
   else
     _row store bad "decrypt self-test" "canary unreadable"
   fi

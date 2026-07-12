@@ -260,7 +260,8 @@ Full stance → **[SECURITY.md](SECURITY.md)** → *Sharing*.
 The store encrypts to a single `age` key. **This is all-or-nothing:** anything that runs as you and
 reads the key can read the whole store — the same ceiling a password-manager vault has. What this
 design adds is *keeping secrets out of the places they usually leak* and *bounding + detecting*
-misuse: an in-store **canary** trips an alert on any whole-store sweep, and a process-scoped **egress
+misuse: an in-store **canary** — which you arm with a tripwire token (`setup` offers to; `doctor`
+reminds you until you do) — trips an alert on any whole-store sweep, and a process-scoped **egress
 allowlist** bounds where a compromised agent can send data. It does **not** claim a per-secret audit
 trail on the free tier. Full threat model → **[SECURITY.md](SECURITY.md)**.
 

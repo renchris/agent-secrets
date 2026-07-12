@@ -185,5 +185,5 @@ store_exec() {
 # Seed the in-store canary: a plausibly-named honeytoken entry a whole-store sweep grabs.
 store_canary_insert() {
   store_has "$AGENT_SECRETS_CANARY_NAME" && return 0
-  printf '%s' "canarytoken-placeholder-replace-during-onboarding" | store_add "$AGENT_SECRETS_CANARY_NAME"
+  printf '%s' "$AGENT_SECRETS_CANARY_PLACEHOLDER" | store_add "$AGENT_SECRETS_CANARY_NAME"
 }

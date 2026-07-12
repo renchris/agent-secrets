@@ -39,7 +39,7 @@ If your network filters egress (Cisco Umbrella, Zscaler, a TLS-inspecting proxy)
 | `raw.githubusercontent.com` | fetches `install.sh` |
 | `github.com`, `objects.githubusercontent.com` | the pinned release tarball + `.sha256` |
 | `github.com/Homebrew`, `formulae.brew.sh`, `ghcr.io` | Homebrew + bottles for `age`, `sops`, `gum` (skipped if already installed) |
-| `canarytokens.org` | runtime only, and only if you enable the in-store canary |
+| `canarytokens.org` | runtime only, and only if you arm the in-store canary with a token you mint there |
 
 **Proxy + TLS inspection work with no changes:** `install.sh` uses `curl`, which honors
 `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`; and as long as your corporate root CA is trusted (Jamf/MDM

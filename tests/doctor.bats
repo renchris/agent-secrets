@@ -23,6 +23,16 @@ load test_helper
   [[ "$output" == *"VALID"* ]]
 }
 
+@test "doctor flags the unarmed canary as inert, then green once armed" {
+  setup_store                                   # seeds the INERT placeholder canary
+  run agsec doctor
+  [[ "$output" == *"INERT"* ]]                  # honest: no false 'active honeytoken' assurance
+  printf 'real-tripwire-token-xyz' | store_add "$AGENT_SECRETS_CANARY_NAME"   # arm it
+  run agsec doctor
+  [[ "$output" == *"armed"* ]]
+  [[ "$output" != *"INERT"* ]]
+}
+
 @test "doctor --gates runs and reports the c/d/e gates" {
   setup_store
   run agsec doctor --gates

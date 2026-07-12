@@ -75,6 +75,21 @@ _first_secret() {
   ui_ok "stored $name (value never shown)"
 }
 
+# Offer to ARM the breach canary. Until armed it is an inert decoy; arming = replacing the placeholder
+# with a real tripwire token (e.g. from canarytokens.org) so a whole-store sweep trips the operator's
+# own alert. Value via STDIN/ui_read_secret — names-only. Skipped in UNATTENDED (tests keep the decoy).
+_arm_canary() {
+  [ -n "$UNATTENDED" ] && return 0
+  ui_say "The breach canary ($AGENT_SECRETS_CANARY_NAME) ships as an INERT decoy — it detects a"
+  ui_say "whole-store sweep only once you arm it with a real tripwire token."
+  if _confirm "Arm it now? (paste a token you minted at canarytokens.org, or skip)" n; then
+    ui_read_secret "Paste your canary/tripwire token" | store_add "$AGENT_SECRETS_CANARY_NAME"
+    ui_ok "canary armed — a whole-store sweep now trips your alert"
+  else
+    ui_say "Skipped — arm later with:  agent-secrets add $AGENT_SECRETS_CANARY_NAME  (doctor will remind you)."
+  fi
+}
+
 _wire_tools() {
   local bindir; bindir="$(agsec_bin_dir)"; mkdir -p "$bindir"
   local w
@@ -134,7 +149,7 @@ main() {
   esac
   ui_step 2 7 "Preflight";        _preflight;      _state preflight
   ui_step 3 7 "Your one key";     _key_ceremony;   _state key
-  ui_step 4 7 "Your first secret";_first_secret;   _state secret
+  ui_step 4 7 "Your first secret";_first_secret;   _arm_canary; _state secret
   ui_step 5 7 "Wire your tools";  _wire_tools;     _state wired
   ui_step 6 7 "Health check";     bash "$AGENT_SECRETS_CMD/doctor.sh" || true
   ui_step 7 7 "Done";             _done_screen;    _state 'done'

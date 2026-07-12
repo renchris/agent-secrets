@@ -18,6 +18,10 @@ AGENT_SECRETS_VERSION="0.1.0"
 AGENT_SECRETS_KC_SERVICE="agent-age-key"              # Keychain service: the bootstrap age key
 AGENT_SECRETS_KC_PREFIX="agent-"                      # uninstall enumerates Keychain by this prefix
 AGENT_SECRETS_CANARY_NAME="AWS_BACKUP_ACCESS_KEY_ID"  # in-store canary (plausible name)
+# The canary ships as this INERT decoy value — it provides breach detection only after the operator
+# ARMS it by replacing the value with a real tripwire token (e.g. a canarytokens.org token bound to
+# their own alert). setup offers to arm it; doctor warns while it is still the placeholder.
+AGENT_SECRETS_CANARY_PLACEHOLDER="canary-INERT-arm-me-with-a-real-tripwire-token"
 AGENT_SECRETS_ROTATE_DAYS_DEFAULT=180                 # age key rotation cadence
 AGSEC_SHARE_ENVELOPE_VERSION="v1"                     # colleague-share envelope; receive rejects unknown versions
 

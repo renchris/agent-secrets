@@ -38,10 +38,13 @@ and returned to Claude Code's `apiKeyHelper` on demand — and never to a termin
 
 ## Detection: the in-store canary
 
-The store includes one plausibly-named decoy secret (a [canarytokens.org](https://canarytokens.org)
-honeytoken). Any process that decrypts the whole store and *uses* what it found trips an
-out-of-band alert. It is listed in the manifest among the real entries on purpose, so a
-manifest-guided exfiltration loop grabs it first.
+The store seeds one plausibly-named **decoy** secret. It ships **INERT** — it provides breach
+detection only once you **arm** it by replacing the placeholder value with a real tripwire token
+(e.g. a [canarytokens.org](https://canarytokens.org) honeytoken bound to your own alert channel):
+`setup` offers to arm it, or run `agent-secrets add AWS_BACKUP_ACCESS_KEY_ID` and paste your token.
+Once armed, any process that decrypts the whole store and *uses* what it found trips your out-of-band
+alert. It is listed in the manifest among the real entries on purpose, so a manifest-guided
+exfiltration loop grabs it first. `doctor` reports `attn` while it is still the unarmed placeholder.
 
 ## Sharing (`share` / `receive` / `pubkey`)
 
