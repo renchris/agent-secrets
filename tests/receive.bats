@@ -81,6 +81,13 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   [ "$output" = "original-value" ]            # untouched
 }
 
+@test "an unknown receive flag is a usage error (exit 2, per the documented convention)" {
+  setup_store
+  run bash "$(receive_bin)" receive --bogus </dev/null
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown flag"* ]]
+}
+
 @test "unknown envelope version is rejected" {
   setup_store
   make_blob_ver MY_TOKEN 'v' v9 > "$BATS_TEST_TMPDIR/blob"

@@ -11,7 +11,7 @@ copy=0
 case "${1:-}" in
   ''|-) : ;;
   --copy) copy=1 ;;
-  *) agsec_die "usage: agent-secrets pubkey [--copy]" ;;
+  *) agsec_die "usage: agent-secrets pubkey [--copy]" 2 ;;
 esac
 
 pub="$(agsec_age_pub_file)"

@@ -42,3 +42,9 @@ load test_helper
   [ "$status" -ne 0 ]
   [[ "$output" == *"setup"* ]]
 }
+
+@test "an unknown pubkey flag is a usage error (exit 2, per the documented convention)" {
+  setup_store
+  run agsec pubkey --bogus
+  [ "$status" -eq 2 ]
+}

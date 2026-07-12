@@ -21,10 +21,10 @@ rename=""
 yes_reviewed=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --rename) shift; rename="${1:-}"; [ -n "$rename" ] || agsec_die "--rename needs a NAME";;
+    --rename) shift; rename="${1:-}"; [ -n "$rename" ] || agsec_die "--rename needs a NAME" 2;;
     --rename=*) rename="${1#--rename=}";;
     --yes-i-reviewed) yes_reviewed=1;;
-    *) agsec_die "unknown flag: $1";;
+    *) agsec_die "unknown flag: $1" 2;;
   esac
   shift
 done

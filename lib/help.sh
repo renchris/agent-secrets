@@ -117,7 +117,7 @@ receive	flag	--yes-i-reviewed	non-interactive ingest for CI; skips the tty promp
 receive	env	AGENT_SECRETS_HOME	base dir for all state (default $HOME); set to an isolated dir for tests/CI
 receive	example	agent-secrets receive	run, then paste the envelope on STDIN and press Ctrl-D
 receive	reads	STDIN (the pasted v1 envelope)
-receive	writes	~/.config/secrets/secrets.env, manifest.toml (direction=received, source=received:<label>)
+receive	writes	~/.config/secrets/secrets.env, manifest.toml (direction=received, source=received:peer)
 receive	exit	0	stored
 receive	exit	1	bad/unknown-version envelope, canary name, NAME collision, or no tty
 receive	exit	2	usage error
@@ -131,6 +131,7 @@ pubkey	reads	~/.config/secrets/age.pub
 pubkey	writes	nothing
 pubkey	exit	0	printed
 pubkey	exit	1	no public key yet (run setup)
+pubkey	exit	2	usage error
 pubkey	namesonly	a PUBLIC key — safe on stdout/argv/clipboard, unlike every value path
 SPEC
 }
