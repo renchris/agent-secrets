@@ -34,6 +34,11 @@ _key_ceremony() {
     ui_ok "key already exists — not minting a second one"; kc_write_selector; store_init; return 0
   fi
   if [ -f "$kf" ]; then rm -f "$kf"; fi             # clear a 0-byte/partial key from an interrupted mint (age-keygen -o is O_EXCL)
+  # Strand guard: a store already present + no key = a restore scenario. Minting a NEW key here would
+  # make that store permanently undecryptable — route the user to the restore path instead.
+  if [ -s "$(agsec_store_file)" ]; then
+    agsec_die "a store exists at $(agsec_store_file) but there is no key to decrypt it — run: agent-secrets setup --restore (paste your saved age key). Minting a new key would strand it."
+  fi
   age-keygen -o "$kf"; chmod 600 "$kf"              # NO 2>/dev/null — a real keygen failure must surface, not silently abort
   age-keygen -y "$kf" >"$pf"
   local rec="$cfg/recovery.key"; age-keygen -o "$rec" 2>/dev/null; age-keygen -y "$rec" >"$cfg/recovery.pub"
@@ -100,11 +105,27 @@ _done_screen() {
   ui_say "Docs: README.md. Local-only store? keep a second copy (doctor warns if you don't)."
 }
 
+# Disaster recovery on a new machine: re-establish key custody from the saved age key + a restored
+# store copy, verify decryption, then re-wire the tools. Runs BEFORE any key mint (restore_flow +
+# _key_ceremony's strand guard never let a fresh key clobber the restored store).
+_restore_screen() {
+  ui_title "agent-secrets restore"
+  ui_say "Restoring on a new machine. First copy your backed-up encrypted store to:"
+  ui_say "  $(agsec_store_file)"
+  ui_say "then paste your saved age private key to re-establish custody."
+  restore_flow || agsec_die "restore did not complete — see the message above (copy your store copy into place, then re-run: agent-secrets setup --restore)"
+  _wire_tools
+  _done_screen
+}
+
 main() {
+  local do_restore=0
+  [ "${1:-}" = "--restore" ] && do_restore=1
   if [ -z "$UNATTENDED" ] && agsec_in_agent_session; then
     agsec_die "refusing the key ceremony inside an agent session (transcripts are secret-bearing) — run in a normal terminal (or AGENT_SECRETS_UNATTENDED=1 for a fake-value test)"
   fi
   agsec_secure_umask
+  if [ "$do_restore" -eq 1 ]; then _restore_screen; _state 'done'; return 0; fi
   ui_title "agent-secrets setup"
   case "$(restore_returning_user_check)" in
     installed) ui_say "agent-secrets is already set up."

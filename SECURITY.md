@@ -74,8 +74,9 @@ The bootstrap age key is custodied in the login Keychain (primary) with a `0600`
 file fallback, behind one selector script. If a macOS upgrade breaks the Keychain path, custody
 degrades to the file automatically — tracked by `doctor`, not an outage. Rotate the key every
 180 days (tracked by a `rotate_by` row and the weekly smoke job). Your **recovery key** (a second
-age recipient saved offline during setup) is what makes a full-machine restore possible — the setup
-wizard's restore branch and the documented restore drill verify it.
+age recipient saved offline during setup) is what makes a full-machine restore possible — the
+`agent-secrets setup --restore` path (paste the saved key over a restored store copy) and the
+documented restore drill verify it.
 
 ## Reporting a vulnerability
 

@@ -11,9 +11,9 @@ value on screen.
 
 During setup the tool creates a **recovery key** in addition to your main key and encrypts your store
 to both. Save the recovery key where you keep important things (a password manager, or a printed
-sheet in a safe). To restore on a new machine: install the tool, run `agent-secrets setup`, choose
-the restore option, and paste your saved key — your store decrypts. (There's a tested "restore
-drill" for exactly this.)
+sheet in a safe). To restore on a new machine: install the tool, copy your backed-up encrypted store
+into place (`~/.config/secrets/secrets.env`), run `agent-secrets setup --restore`, and paste your
+saved key — your store decrypts. (There's a tested "restore drill" for exactly this.)
 
 ### Do I need to back up my store?
 

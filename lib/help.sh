@@ -30,13 +30,14 @@ agsec_help_spec() {
 	exit	2	usage error / unknown command / reserved verb
 	seealso	AGENTS.md	agent-facing usage guide (read this first if you are an agent)
 	seealso	SECURITY.md	threat model + the honest ceiling
-setup	synopsis	agent-secrets setup
+setup	synopsis	agent-secrets setup [--restore]
 setup	summary	One-time onboarding wizard: generate your key, add your first secret, wire your tools.
-setup	desc	Idempotent — safe to re-run; detects an existing install and never mints a second key. Screens: preflight → key ceremony (Keychain + file fallback + recovery leg) → first secret → wire wrappers/apiKeyHelper → health check → done. Refuses to run its key ceremony inside an agent session (transcripts are secret-bearing) unless AGENT_SECRETS_UNATTENDED=1.
+setup	desc	Idempotent — safe to re-run; detects an existing install and never mints a second key. Screens: preflight → key ceremony (Keychain + file fallback + recovery leg) → first secret → wire wrappers/apiKeyHelper → health check → done. --restore recovers on a new machine: paste your saved age key to re-establish custody over a restored store copy (verifies decryption; never mints a new key). Refuses to run its key ceremony inside an agent session (transcripts are secret-bearing) unless AGENT_SECRETS_UNATTENDED=1.
+setup	flag	--restore	recover on a new machine — paste your saved age key to re-establish custody over a restored store copy (never mints a new key)
 setup	env	AGENT_SECRETS_UNATTENDED	1 = non-interactive with FAKE placeholder values (tests/CI); reads the first secret value from STDIN if piped
 setup	example	agent-secrets setup	run the interactive wizard (in a normal terminal, not an agent session)
-setup	example	printf '%s' "$V" | AGENT_SECRETS_UNATTENDED=1 agent-secrets setup	non-interactive fake-value setup for CI
-setup	writes	~/.config/secrets/{secrets.env,manifest.toml,age.key,.sops.yaml}, ~/bin wrappers, ~/.claude/settings.json (apiKeyHelper), launchd smoke job
+setup	example	agent-secrets setup --restore	recover on a new machine (copy your store copy into place first, then paste your saved key)
+setup	writes	~/.config/secrets/{secrets.env,manifest.toml,age.key,.sops.yaml}, ~/bin wrappers, ~/.claude/settings.json (apiKeyHelper)
 setup	exit	0	wizard completed (or returned early on an existing install)
 setup	exit	1	a step failed (see message)
 setup	namesonly	never prints the age key or any secret value; hidden input via read -s

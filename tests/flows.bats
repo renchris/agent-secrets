@@ -63,3 +63,28 @@ load test_helper
   [ "$status" -eq 0 ]
   [[ "$output" == *"verified"* ]] || [[ "$output" == *"decrypt"* ]]
 }
+
+@test "setup --restore recovers via the CLI: paste the saved key over a restored store -> decrypts" {
+  setup_store
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/keychain.sh"; . "$REPO_ROOT/lib/store.sh"
+  local saved; saved=$(cat "$(agsec_age_key_file)")
+  rm -f "$(agsec_age_key_file)"                 # wipe local key custody; the encrypted store copy remains
+  run bash -c "printf '%s' '$saved' | env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash '$REPO_ROOT/bin/agent-secrets' setup --restore"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"verified"* ]] || [[ "$output" == *"decrypt"* ]]
+  run store_extract "$AGENT_SECRETS_CANARY_NAME"   # store decryptable again after the CLI restore
+  [ "$status" -eq 0 ]
+}
+
+@test "setup refuses to mint a new key over an existing store — sends you to --restore (no strand)" {
+  setup_store
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  . "$REPO_ROOT/lib/common.sh"
+  rm -f "$(agsec_age_key_file)"                 # store present, key gone: the strand scenario
+  # Wipe the wizard state so restore_returning_user_check can't short-circuit to a health check.
+  rm -f "$(agsec_wizard_state)" "$AGENT_SECRETS_HOME/bin/claude-agent"
+  run bash -c "printf '%s' x | env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--restore"* ]]              # directed to the restore path, not a silent strand
+}
