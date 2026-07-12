@@ -15,6 +15,9 @@
 - `list [--format=json]` — list secret names + rotate dates (never values).
 - `run -- <cmd>` — run a command with secrets JIT-injected into its process.
 - `doctor [--format=json] [--gates]` — health check; exit 0 healthy, 1 if any failure.
+- `pubkey [--copy]` — print your age recipient key + fingerprint (public key only; safe in agent sessions).
+- `share <NAME> --to <recipient>` — encrypt one secret to a colleague's key as a paste-able blob (human-gated; refuses in agent sessions).
+- `receive` — decrypt a colleague's pasted blob into your store (tty-gated; blob on STDIN, confirm on /dev/tty).
 - `uninstall [--dry-run]` — total, manifest-driven removal (human-gated).
 
 ## Docs

@@ -7,7 +7,7 @@
 [![CI](https://github.com/renchris/agent-secrets/actions/workflows/ci.yml/badge.svg)](https://github.com/renchris/agent-secrets/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-d4af37?style=flat-square)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.1.0-58a6ff?style=flat-square)](VERSION)
-[![Tests](https://img.shields.io/badge/bats-41%2F41-3fb950?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/bats-94%2F94-3fb950?style=flat-square)](tests)
 [![Security](https://img.shields.io/badge/values-names--only-3fb950?style=flat-square)](SECURITY.md)
 [![Crypto](https://img.shields.io/badge/crypto-sops%20%2B%20age-d4af37?style=flat-square)](https://github.com/getsops/sops)
 [![Agent-ready](https://img.shields.io/badge/agent--ready-AGENTS.md%20%C2%B7%20help%20--json-bc8cff?style=flat-square)](AGENTS.md)
@@ -293,7 +293,7 @@ Notes for maintaining this. Driving the CLI itself → [AGENTS.md](AGENTS.md).
 
 **Setup:** `brew install age sops shellcheck bats-core` (add `node` only to work on the diagrams).
 
-- **Test:** `bats tests/` — 41 tests under a synthetic `AGENT_SECRETS_HOME`; the real Keychain and store are never touched.
+- **Test:** `bats tests/` — 94 tests under a synthetic `AGENT_SECRETS_HOME`; the real Keychain and store are never touched.
 - **Lint:** `shellcheck bin/* cmd/*.sh lib/*.sh scripts/*.sh install.sh` — CI runs this plus a zero-telemetry gate and the bats suite.
 - **Diagrams:** edit `assets/diagrams/*.mmd`, then `npm install && npm run diagrams`, and commit the regenerated SVGs (CI fails on stale ones).
 - **Commits:** lowercase [Conventional Commits](https://www.conventionalcommits.org).
