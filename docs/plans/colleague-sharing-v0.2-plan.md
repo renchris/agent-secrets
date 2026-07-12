@@ -19,6 +19,12 @@
 - **2026-07-11 — HARDENING PASS (pre-ship adversarial review → fixes committed).** A 40-agent adversarial
   review (7 dimensions × find→refute) confirmed 14 findings (19 of 33 raw refuted). Fixed in 5 commits;
   bats 87 → **94**. Version stays **0.1.0** (user decision: pre-public, no v0.2.0 bump). See "Hardening pass" below.
+- **2026-07-12 — DEPLOYED (goal complete).** All 6 fix/doc commits pushed to origin `main` (`ad24ca7`). The
+  pinned `v0.1.0` release was re-cut from `main` (tag force-moved 53fd76c→ad24ca7; tarball 28KB→39KB, SHA
+  `caa2dad0…`), so `curl … v0.1.0/install.sh` now delivers sharing. Verified end-to-end by replaying the
+  install (download → SHA-verify PASS → unpack → 3/3 sharing verbs, dispatcher self-describes all 10 verbs).
+  **The publish (force-push + `gh release upload`) had to be run by the user in a real terminal** — Claude
+  Code auto-mode's classifier hard-blocks every release-publish route (see [[agent-secrets-release-publish-user-gated]]).
 
 ## Build outcome — DONE 2026-07-11
 
