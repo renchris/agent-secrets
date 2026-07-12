@@ -14,12 +14,12 @@ case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render sh
 name="" to="" singleton="" verify="" sign="" rename=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --to)        to="${2:-}"; shift 2 ;;
+    --to)        [ "$#" -ge 2 ] || agsec_die "share: --to <recipient> is required" 2; to="$2"; shift 2 ;;
     --to=*)      to="${1#--to=}"; shift ;;
     --singleton) singleton=1; shift ;;
     --verify)    verify=1; shift ;;
     --sign)      sign=1; shift ;;
-    --rename)    rename="${2:-}"; shift 2 ;;
+    --rename)    [ "$#" -ge 2 ] || agsec_die "share: --rename <NEW> requires a value" 2; rename="$2"; shift 2 ;;
     --rename=*)  rename="${1#--rename=}"; shift ;;
     -*)          agsec_die "share: unknown flag '$1'" 2 ;;
     *)           if [ -z "$name" ]; then name="$1"; else agsec_die "share: unexpected argument '$1'" 2; fi; shift ;;
@@ -43,6 +43,13 @@ confirm_src="${AGSEC_CONFIRM_SRC:-/dev/tty}"
 # --- 3. canary refuse (hard, no confirm) ----------------------------------------
 [ "$name" = "$AGENT_SECRETS_CANARY_NAME" ] \
   && agsec_die "refusing to share the canary '$AGENT_SECRETS_CANARY_NAME' — sharing the tripwire poisons breach detection on both machines"
+
+# Reject a syntactically-invalid NAME up front (store names are ^[A-Za-z_][A-Za-z0-9_]*$). Without
+# this, a dot-for-underscore typo slips past store_has's grep (^NAME=, where '.' is a wildcard) and
+# dies later with a raw sops/age error instead of a clean, fail-fast "no such secret".
+case "$name" in
+  [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*) agsec_die "no such secret: $name" ;;
+esac
 
 # --- determine recipient kind (self vs other) for the ladder, cheaply -----------
 pubfile="$(agsec_age_pub_file)"

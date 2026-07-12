@@ -129,6 +129,23 @@ EOF
   [ "$emb" = "$d1" ]
 }
 
+# --- argument-parse + NAME-grammar guards -------------------------------------
+@test "a trailing --to with no value fails with the usage error (exit 2), not a silent set -e abort" {
+  _share_fixture; _confirm y
+  _sh ANTHROPIC_API_KEY --to
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--to <recipient> is required"* ]]
+}
+
+@test "a NAME with regex metacharacters fails fast as 'no such secret', not a raw sops/age error" {
+  _share_fixture; _confirm y
+  _sh "ANTHROPIC.API.KEY" --to "$RECIP" --singleton     # '.' would wildcard-match ANTHROPIC_API_KEY in store_has's grep
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no such secret"* ]]
+  [[ "$output" != *"encryption failed"* ]]
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]
+}
+
 # --- store_extract | age, NOT sops -e (static) --------------------------------
 @test "share uses store_extract piped into age -r, never sops -e" {
   grep -q 'store_extract "\$name" | age' "$REPO_ROOT/cmd/share.sh"
