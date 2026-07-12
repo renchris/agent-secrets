@@ -197,11 +197,20 @@ EOF
   [[ "$output" == *"canary"* ]]
 }
 
-# --- AGENT_SECRETS_UNATTENDED skips only the confirm --------------------------
-@test "AGENT_SECRETS_UNATTENDED=1 skips the confirm but still emits the envelope" {
-  _share_fixture
-  export AGSEC_CONFIRM_SRC="$AGENT_SECRETS_HOME/nope/missing" AGENT_SECRETS_UNATTENDED=1
+# --- AGENT_SECRETS_UNATTENDED auto-answers the confirm, but never bypasses the tty gate ---
+@test "AGENT_SECRETS_UNATTENDED=1 auto-answers the confirm (openable terminal) and emits the envelope" {
+  _share_fixture; _confirm y            # openable confirm source (the tty gate passes)
+  export AGENT_SECRETS_UNATTENDED=1
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
   [ "$status" -eq 0 ]
   [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]]
+}
+
+@test "AGENT_SECRETS_UNATTENDED=1 does NOT bypass the interactive-terminal gate (agent-exfil boundary)" {
+  _share_fixture
+  export AGSEC_CONFIRM_SRC="$AGENT_SECRETS_HOME/nope/missing" AGENT_SECRETS_UNATTENDED=1
+  _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"interactive terminal"* ]]
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]     # nothing shared with no controlling tty
 }

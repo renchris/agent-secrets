@@ -35,9 +35,10 @@ trap 'rm -rf "$workdir"' EXIT
 # --- 2. agent-session refuse + interactive confirm source -----------------------
 agsec_in_agent_session && agsec_die "share refuses inside an agent session (transcripts are secret-bearing)"
 confirm_src="${AGSEC_CONFIRM_SRC:-/dev/tty}"
-if [ -z "${AGENT_SECRETS_UNATTENDED:-}" ]; then
-  ( : < "$confirm_src" ) 2>/dev/null || agsec_die "share needs an interactive terminal"
-fi
+# The interactive-terminal requirement is the REAL agent-exfil boundary (design §3.10): an injected
+# agent with no controlling tty hard-refuses HERE even after it strips CLAUDECODE. It is NOT gated by
+# AGENT_SECRETS_UNATTENDED — that flag only auto-answers the y/N confirm (step 7), never this gate.
+( : < "$confirm_src" ) 2>/dev/null || agsec_die "share needs an interactive terminal"
 
 # --- 3. canary refuse (hard, no confirm) ----------------------------------------
 [ "$name" = "$AGENT_SECRETS_CANARY_NAME" ] \

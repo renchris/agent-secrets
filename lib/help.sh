@@ -101,7 +101,7 @@ share	flag	--singleton	assert this is a true singleton (webhook/HMAC/account-onl
 share	flag	--verify	require the out-of-band digest readback before the envelope is emitted
 share	flag	--sign	attach a signature leg so the recipient can authenticate the sender
 share	flag	--rename NEW	label the envelope so the recipient stores it under NEW instead of NAME
-share	env	AGENT_SECRETS_UNATTENDED	1 = skip the interactive confirm (CI); ladder + canary hard-errors still apply
+share	env	AGENT_SECRETS_UNATTENDED	1 = auto-answer the y/N confirm (CI); the interactive-terminal, ladder + canary hard-errors still apply
 share	example	agent-secrets share ANTHROPIC_API_KEY --to github:dana	encrypt to dana's GitHub age key; prints an envelope to paste
 share	reads	~/.config/secrets/secrets.env (the one NAME only), manifest.toml
 share	writes	the manifest sharing row for NAME (shared_with/shared_at/direction=sent; values-free)
