@@ -199,7 +199,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   [[ "$output" == *"sender unverified"* ]]
 }
 
-@test "the locally-recomputed digest is displayed for the voice-compare" {
+@test "the locally-recomputed digest is displayed, pointed at the in-band 'digest:' line" {
   setup_store
   make_blob DIG 'digest-me' > "$BATS_TEST_TMPDIR/blob"
   # what receive should recompute, independently:
@@ -208,8 +208,44 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"compare aloud with the sender"* ]]
-  [[ "$output" == *"$expect"* ]]
+  [[ "$output" == *"digest $expect"* ]]                 # the recomputed value is shown …
+  [[ "$output" == *"matches the 'digest:' line"* ]]     # … and coherently framed (not the recipient-key fingerprint)
+}
+
+@test "chat-mangled armor (a non-base64 byte) fails closed with the curated message, never a silent abort" {
+  setup_store
+  # A marker-valid v1 envelope whose AGE body carries a non-ASCII byte (NBSP), exactly as a rich-text
+  # chat client can inject. base64 -D rejects it; receive must reach the curated 'could not decrypt',
+  # not a diagnostic-free set -e crash (the bare-assignment pipefail hazard).
+  {
+    printf -- '-----BEGIN AGENT-SECRETS SHARE v1-----\n'
+    printf 'name: MANGLED\ndirection: sent\ndigest: sha256:deadbeef0000\n'
+    printf -- '-----BEGIN AGE ENCRYPTED FILE-----\n'
+    printf 'AAAA\xc2\xa0BBBB\n'
+    printf -- '-----END AGE ENCRYPTED FILE-----\n'
+    printf -- '-----END AGENT-SECRETS SHARE v1-----\n'
+  } > "$BATS_TEST_TMPDIR/blob"
+  printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
+  run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
+  [ "$status" -ne 0 ]
+  [ -n "$output" ]                                       # NOT a silent zero-output abort
+  [[ "$output" == *"could not decrypt"* ]]
+  run store_has MANGLED
+  [ "$status" -ne 0 ]                                    # nothing stored
+}
+
+@test "a store-write failure AFTER decrypt leaves no plaintext temp behind (EXIT trap shreds it)" {
+  setup_store
+  make_blob TRAPPED 'plaintext-must-not-persist-9x' > "$BATS_TEST_TMPDIR/blob"
+  printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
+  # Shadow sops so the store write fails AFTER receive has already decrypted the value into its temp.
+  local shim="$BATS_TEST_TMPDIR/shim"; mkdir -p "$shim"
+  printf '#!/usr/bin/env bash\nexit 7\n' > "$shim/sops"; chmod +x "$shim/sops"
+  run env PATH="$shim:$PATH" AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
+  [ "$status" -ne 0 ]                                    # store write failed
+  # The decrypted VALUE must NOT survive as a stray temp in the config dir.
+  run grep -rl 'plaintext-must-not-persist-9x' "$AGENT_SECRETS_HOME/.config/secrets"
+  [ "$status" -ne 0 ]                                    # grep -l found nothing → the plaintext was shredded
 }
 
 @test "blob not encrypted to our key fails closed with a curated message and no age stderr fragment" {

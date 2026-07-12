@@ -91,17 +91,33 @@ case "$name" in
   [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*) agsec_die "invalid name '$name' — use letters, digits, underscore (start with a letter/_)";;
 esac
 
-# --- local digest recompute (design §3.4) ---------------------------------------
-# Hash the base64-DECODED ciphertext bytes — reflow-stable. The envelope's embedded digest is a
-# corruption HINT only (attacker-controllable text); never the security check.
-local_digest="$(printf '%s\n' "$body" | base64 -D 2>/dev/null | agsec_digest)"
-agsec_note "compare aloud with the sender: $local_digest"
+# --- secure temps + shred-on-every-exit (design §3.7: value/key never persist) --
+# Register the plaintext/key temps with an EXIT trap up front: a SIGINT or a store_add agsec_die
+# (sops-encrypt failure, custody race) must never strand the decrypted VALUE or the age private key
+# on disk. mktemp lands them in the 0700 config dir under a 0077 umask.
+agsec_secure_umask
+dbody=""; idf=""; armor_tmp=""; pt=""
+trap 'rm -f "$dbody" "$idf" "$armor_tmp" "$pt" 2>/dev/null' EXIT
+
+# --- decode the age body ONCE (binary → temp; NUL-safe single decode) -----------
+# base64 -D fails on chat-mangled armor (a stray non-base64 byte); route THAT to the same curated
+# fail-closed message age -d emits — never a silent `set -e` abort (a bare command-substitution
+# assignment would swallow the failure and exit 1 with no diagnostic).
+dbody="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"; chmod 600 "$dbody"
+printf '%s\n' "$body" | base64 -D >"$dbody" 2>/dev/null \
+  || agsec_die "could not decrypt — the envelope may be corrupt or not encrypted to your key"
+
+# --- local digest recompute (design §3.4) over the decoded ciphertext bytes -----
+# Reflow-stable, advisory ONLY: compare it to the block's own `digest:` line (a paste-integrity
+# check); a sender running `share --verify` reads this same value to you out-of-band.
+local_digest="$(agsec_digest <"$dbody")"
+agsec_note "digest $local_digest — matches the 'digest:' line in the block you pasted (a --verify sender reads it aloud)"
 if [ -n "$embedded_digest" ] && [ "$embedded_digest" != "$local_digest" ]; then
   agsec_warn "envelope digest hint ($embedded_digest) differs from the locally computed value — possible corruption"
 fi
 
 # --- cap 2: decoded ciphertext BEFORE decrypt -----------------------------------
-dec_bytes="$(printf '%s\n' "$body" | base64 -D 2>/dev/null | wc -c | tr -d ' ')"
+dec_bytes="$(wc -c <"$dbody" | tr -d ' ')"
 [ "$dec_bytes" -le "$AGSEC_RECEIVE_MAX_CIPHERTEXT" ] \
   || agsec_die "ciphertext too large ($dec_bytes bytes > $AGSEC_RECEIVE_MAX_CIPHERTEXT) — refusing before decrypt"
 
@@ -122,9 +138,9 @@ if store_has "$name"; then
 fi
 
 # --- decrypt → store (names-only; value never in a shell var/argv) --------------
-agsec_secure_umask
+# umask + the EXIT trap covering dbody/idf/armor_tmp/pt are already in place (above).
 idf="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"; chmod 600 "$idf"
-kc_read >"$idf" 2>/dev/null || { rm -f "$idf"; agsec_die "no local age key available — run: agent-secrets setup"; }
+kc_read >"$idf" 2>/dev/null || agsec_die "no local age key available — run: agent-secrets setup"
 armor_tmp="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"; chmod 600 "$armor_tmp"
 printf '%s\n' "$armor" >"$armor_tmp"
 pt="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"; chmod 600 "$pt"
@@ -132,10 +148,9 @@ pt="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"; chmod 600 "$pt"
 # stderr discipline (design §3.7): discard raw age/sops diagnostics (a corrupt blob's fragments can
 # leak into agent-readable scrollback) and emit ONE curated fail-closed message.
 if ! age -d -i "$idf" "$armor_tmp" 2>/dev/null >"$pt"; then
-  rm -f "$idf" "$armor_tmp" "$pt"
   agsec_die "could not decrypt — the envelope may be corrupt or not encrypted to your key"
 fi
-rm -f "$idf" "$armor_tmp"
+rm -f "$idf" "$armor_tmp" "$dbody"; idf=""; armor_tmp=""; dbody=""
 
 # Multi-line iff a newline exists that is not the sole trailing newline (a single-line API key stored
 # raw stays run-injectable; a PEM/JSON blob is base64-round-tripped so its newlines survive).
@@ -148,7 +163,7 @@ if [ "$effective_nl" -ge 1 ]; then
 else
   store_add "$name" <"$pt"
 fi
-rm -f "$pt"
+rm -f "$pt"; pt=""
 
 # --- manifest (design §3.8; values-free) ----------------------------------------
 store_manifest_set_sharing "$name" direction="received" source="received:peer"
