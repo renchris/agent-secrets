@@ -21,3 +21,7 @@ install-manifest.json
 .bats-run-*
 /coverage/
 node_modules/
+
+# release artifacts produced by scripts/release.sh (maintainer-only; never committed)
+agent-secrets-*.tar.gz
+agent-secrets-*.tar.gz.sha256

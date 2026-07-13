@@ -41,46 +41,52 @@ for _leak in install.sh scripts/telemetry-gate.sh scripts/record-demo.sh scripts
   fi
 done
 
-# 2) Compute the digest and BAKE it into install.sh (git-ref channel).
+# 2) BAKE the digest into install.sh as a TAG-ONLY commit. main's install.sh stays EMPTY (the
+# "empty on main / baked at the tag" invariant, install.sh:19-24): the baked install.sh lives only in
+# the tagged commit that raw-git serves at ${TAG}. Done via a temp index — the branch is never advanced,
+# the working tree is never dirtied.
 SHA="$(shasum -a 256 "$WORK/$PKG" | awk '{print $1}')"
 _say "==> tarball sha256: $SHA"
-CUR="$(sed -n 's/.*EXPECTED_SHA256="\([a-f0-9]*\)".*/\1/p' install.sh | head -1)"
-if [ "$CUR" = "$SHA" ]; then
-  _say "    install.sh already carries this digest — no bake needed"
-else
-  # Portable in-place edit (BSD + GNU sed): only the empty-or-old-hex literal is replaced.
-  sed -i.bak 's/EXPECTED_SHA256="[a-f0-9]*"/EXPECTED_SHA256="'"$SHA"'"/' install.sh && rm -f install.sh.bak
-  grep -q "EXPECTED_SHA256=\"$SHA\"" install.sh || _die "bake failed — EXPECTED_SHA256 not updated in install.sh"
-  _say "    baked EXPECTED_SHA256 into install.sh"
-  git add install.sh
-  git commit -m "chore(release): bake ${TAG} tarball digest into install.sh" >&2
-fi
+BAKED="$WORK/install.sh.baked"
+sed 's/EXPECTED_SHA256="[a-f0-9]*"/EXPECTED_SHA256="'"$SHA"'"/' install.sh >"$BAKED"
+grep -q "EXPECTED_SHA256=\"$SHA\"" "$BAKED" || _die "bake failed — EXPECTED_SHA256 not set in the staged install.sh"
+BLOB="$(git hash-object -w "$BAKED")"
+MODE="$(git ls-tree HEAD install.sh | awk '{print $1}')"; MODE="${MODE:-100644}"
+COMMIT="$(
+  GIT_INDEX_FILE="$WORK/index.tmp"; export GIT_INDEX_FILE
+  git read-tree HEAD
+  git update-index --cacheinfo "$MODE,$BLOB,install.sh"
+  TREE="$(git write-tree)"
+  printf 'chore(release): bake %s tarball digest into install.sh (tag-only)\n' "$TAG" | git commit-tree "$TREE" -p HEAD
+)"
+[ -n "$COMMIT" ] || _die "tag-only bake failed — could not create the baked commit"
+_say "    baked ${SHA:0:12}… into tag-only commit ${COMMIT:0:9} (main install.sh stays empty)"
 
-# 3) Move the tag onto the (possibly new) HEAD so raw-git serves the baked install.sh at ${TAG}.
-if _confirm "Move tag ${TAG} onto HEAD ($(git rev-parse --short HEAD))?"; then
-  git tag -f "$TAG" >&2
-  _say "    tag ${TAG} → $(git rev-parse --short HEAD)  (push with: git push -f origin ${TAG}; git push origin HEAD)"
+# 3) Point the tag at the baked commit so raw-git serves the baked install.sh at ${TAG} (main unchanged).
+if _confirm "Move tag ${TAG} onto the baked commit ${COMMIT:0:9}?"; then
+  git tag -f "$TAG" "$COMMIT" >&2
+  _say "    tag ${TAG} → ${COMMIT:0:9}  (push with: git push -f origin ${TAG})"
 else
   _say "    skipped tag move — do it yourself before publishing, or the baked install.sh won't be at ${TAG}"
 fi
 
-# 4) Write assets + publish. The baked digest (in install.sh, via the git-ref channel) is the real
-# integrity anchor; the sibling .sha256 is transport convenience. A RE-CUT replaces the prior release
-# (dropping its old assets) but keeps the freshly force-pushed tag; enable "immutable releases" in the
-# repo settings to stop assets being swapped AFTER publish (gh has no create-time flag for it).
+# 4) Write assets + publish. The baked digest (in the tagged install.sh, via the git-ref channel) is the
+# real integrity anchor; the sibling .sha256 is transport convenience. A RE-CUT replaces the prior
+# release (dropping its old assets) but keeps the freshly force-pushed tag; enable "immutable releases"
+# in the repo settings to stop assets being swapped AFTER publish (gh has no create-time flag for it).
 cp "$WORK/$PKG" "./$PKG"
 shasum -a 256 "$PKG" >"$PKG.sha256"
 _say "==> wrote ./$PKG and ./$PKG.sha256"
 _say ""
 _say "Publish:"
-_say "  git push -f origin ${TAG} && git push origin HEAD"
-_say "  gh release delete ${TAG} --yes   # re-cut only: drop the old release's assets (keeps the tag)"
+_say "  git push -f origin ${TAG}         # the baked, tag-only commit"
+_say "  git push origin HEAD              # main (unchanged install.sh)"
+_say "  gh release delete ${TAG} --yes    # re-cut only: drop the old release's assets (keeps the tag)"
 _say "  gh release create ${TAG} ${PKG} ${PKG}.sha256 --title ${TAG} --generate-notes"
-# The install.sh served via raw-git at ${TAG} MUST be the one whose baked digest matches THIS tarball
-# (built from HEAD). If the tag isn't at HEAD (tag move declined), publishing would strand a mismatched
-# installer at the tag — refuse.
-if [ "$(git rev-parse "$TAG" 2>/dev/null)" != "$(git rev-parse HEAD)" ]; then
-  _die "tag ${TAG} is not at HEAD — the install.sh served at the tag would not match this tarball's baked digest. Re-run and confirm the tag move before publishing."
+# The install.sh served via raw-git at ${TAG} MUST be the baked commit whose digest matches THIS tarball.
+# If the tag isn't at the baked commit (tag move declined), publishing would strand a mismatched installer.
+if [ "$(git rev-parse "$TAG" 2>/dev/null)" != "$COMMIT" ]; then
+  _die "tag ${TAG} is not at the baked commit — the install.sh served at the tag would not match this tarball's baked digest. Re-run and confirm the tag move before publishing."
 fi
 if _confirm "Run the gh release now?"; then
   git push -f origin "$TAG" && git push origin HEAD
