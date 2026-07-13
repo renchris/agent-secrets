@@ -96,6 +96,9 @@ egress_run() {
   export HTTPS_PROXY="http://127.0.0.1:$EGRESS_PORT" HTTP_PROXY="http://127.0.0.1:$EGRESS_PORT" ALL_PROXY="http://127.0.0.1:$EGRESS_PORT"
   export https_proxy="$HTTPS_PROXY" http_proxy="$HTTP_PROXY" all_proxy="$ALL_PROXY"
   export NO_PROXY="127.0.0.1,localhost" no_proxy="127.0.0.1,localhost"   # keep the proxy hop + local services direct
+  # Mark THIS proxy as ours so a nested `agent-secrets backup` drops exactly it — never a corporate
+  # loopback forwarder (Cntlm/px/ZTNA on 127.0.0.1) that just happens to be on loopback too.
+  export AGENT_SECRETS_EGRESS_PROXY="$HTTPS_PROXY"
   agsec_note "egress allowlist active (proxy 127.0.0.1:$EGRESS_PORT; $(egress_rule_count) rule(s)) — non-allowlisted hosts refused"
   trap '_egress_reap' EXIT INT TERM
   store_exec_managed -- "$@"

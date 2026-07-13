@@ -179,8 +179,15 @@ _manifest_rb_edit() {
   # and PRESERVE the user's later edits — a whole-file restore/delete would silently discard their
   # Claude Code config (model/hooks/permissions added after install).
   if [ -n "$marker" ] && [ -f "$p" ] && agsec_have jq; then
-    local tmp; tmp="$(mktemp)"
+    local tmp orig; tmp="$(mktemp)"
+    # The user's PRE-INSTALL value for this key (null if the tool added it fresh, or no backup exists).
+    orig="$(jq -c ".\"$marker\" // null" "$backup" 2>/dev/null || echo null)"
+    if [ "$orig" != null ] && jq --argjson v "$orig" ".\"$marker\" = \$v" "$p" >"$tmp" 2>/dev/null; then
+      # The user had their OWN apiKeyHelper before install → RESTORE it, don't delete the key.
+      mv -f "$tmp" "$p"; agsec_ok "restored pre-install .$marker: $p"; return 0
+    fi
     if jq "del(.\"$marker\")" "$p" >"$tmp" 2>/dev/null; then
+      # Tool added the key fresh (no pre-install value) → remove it, preserving the user's other keys.
       if [ "$created" = true ] && [ "$(tr -d '[:space:]' <"$tmp")" = "{}" ]; then
         rm -f "$tmp" "$p"; rmdir "$(dirname "$p")" 2>/dev/null || true
         agsec_ok "removed tool-created (now empty): $p"

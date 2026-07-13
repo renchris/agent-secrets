@@ -130,6 +130,22 @@ load test_helper
   [[ "$output" != *"apiKeyHelper"* ]]                                # only the tool's key removed
 }
 
+@test "rollback RESTORES a user's PRE-EXISTING apiKeyHelper value, not deletes it" {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+  local sj="$AGENT_SECRETS_HOME/settings.json" bak="$AGENT_SECRETS_HOME/day0.bak"
+  printf '{"model":"opus","apiKeyHelper":"/Users/me/orig.sh"}\n' >"$sj"   # user HAD their OWN apiKeyHelper
+  cp "$sj" "$bak"                                                          # install-day backup captures it
+  printf '{"model":"opus","apiKeyHelper":"/tool/apiKeyHelper"}\n' >"$sj"   # tool overwrote it
+  manifest_record_edit "$sj" "$bak" apiKeyHelper                          # pre-existing → RESTORE, not delete
+  manifest_rollback >/dev/null
+  run cat "$sj"
+  [[ "$output" == *'/Users/me/orig.sh'* ]]                               # user's ORIGINAL value restored
+  [[ "$output" != *'/tool/apiKeyHelper'* ]]                              # tool's value gone
+  [[ "$output" == *'opus'* ]]                                            # other keys preserved (jq pretty-prints)
+}
+
 @test "rollback strip KEEPS everything when the end marker is corrupted (no delete-to-EOF)" {
   export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
   # shellcheck source=/dev/null

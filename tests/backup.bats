@@ -86,6 +86,15 @@ _rm_remote() { [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] && rm -rf "$(dirname "$AGSEC_M
   rm -rf "$dir"
 }
 
+@test "backup drops ONLY its own marked egress proxy, never a bare loopback (corporate forwarder safe)" {
+  # Regression guard for the fresh-scan finding: backup must key off AGENT_SECRETS_EGRESS_PROXY (the
+  # exact URL egress_run stamped), NOT the broad *127.0.0.1* pattern that would nuke a corporate
+  # loopback forwarder (Cntlm/px/ZTNA on 127.0.0.1:3128).
+  grep -q 'AGENT_SECRETS_EGRESS_PROXY' "$REPO_ROOT/cmd/backup.sh"
+  ! grep -qE 'case[^\n]*HTTPS_PROXY[^\n]*127\.0\.0\.1' "$REPO_ROOT/cmd/backup.sh"
+  grep -q 'AGENT_SECRETS_EGRESS_PROXY="' "$REPO_ROOT/lib/egress.sh"   # egress_run stamps the marker
+}
+
 @test "backup REFUSES an existing PUBLIC repo (the secret-name inventory must stay private)" {
   setup_store
   local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/agsec-remote.XXXXXX")"
