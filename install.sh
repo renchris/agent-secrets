@@ -30,6 +30,7 @@ main() {
   local STATE_DIR="$HOME_DIR/.local/state/agent-secrets"
   local RC_FILE="$HOME_DIR/.zshenv"        # sourced by every zsh invocation incl. Cursor subshells
   local PATH_MARKER="agent-secrets"
+  local DISCOVERY_MARKER="agent-secrets"   # marker for the opt-in ~/.claude/CLAUDE.md discovery block (doctor greps it; uninstall strips it)
   local SMOKE_LABEL="com.agent-secrets.smoke"
   local SMOKE_PLIST="$HOME_DIR/Library/LaunchAgents/${SMOKE_LABEL}.plist"
 
@@ -51,6 +52,7 @@ main() {
     _say "  • add a marker-delimited PATH block to $RC_FILE"
     _say "  • install a weekly launchd smoke job ($SMOKE_LABEL)"
     _say "  • back up an existing ~/.claude/settings.json (revert point for setup's apiKeyHelper edit)"
+    _say "  • OFFER (opt-in) to add agent-secrets rules to ~/.claude/CLAUDE.md so agents in EVERY repo know to use it"
     _say "  • record every change to $STATE_DIR/install-manifest.json (one-command uninstall)"
     _say "  • run 'agent-secrets setup' (the interactive wizard) at the end"
     _say ""
@@ -160,9 +162,43 @@ main() {
     manifest_record_edit "$settings" "$backup" "apiKeyHelper"
   fi
 
+  # --- OPT-IN: machine-wide agent discovery ------------------------------------
+  # Claude Code loads ~/.claude/CLAUDE.md into EVERY session in EVERY repo, so a marker-delimited
+  # block there teaches agents everywhere that this Mac has agent-secrets (the repo AGENTS.md is
+  # repo-scoped; apiKeyHelper only auths Claude Code's own key). OPT-IN, recorded as a pathblock so
+  # uninstall strips it. Interactive stdin only — piped/CI installs skip it (safe default: no edit).
+  local claude_md="$HOME_DIR/.claude/CLAUDE.md"
+  if [ -t 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+    printf '\nMake every coding agent on this Mac aware of agent-secrets?\n' >&2
+    printf 'Appends a short, reversible block to ~/.claude/CLAUDE.md (Claude Code reads it in every repo).\n' >&2
+    printf '[y = yes, recommended · Enter = skip]: ' >&2
+    local dreply=''; read -r dreply || dreply=''
+    case "$dreply" in
+      [yY]*)
+        mkdir -p "$(dirname "$claude_md")"
+        manifest_pathblock_install "$claude_md" "$DISCOVERY_MARKER" "$(_discovery_block)"
+        _say "  → added agent-secrets rules to ~/.claude/CLAUDE.md (uninstall strips them)" ;;
+      *)
+        _say "  → skipped machine-wide discovery (add later by re-running the installer)" ;;
+    esac
+  fi
+
   _say ""
   _say "Installed. Launching the setup wizard…"
   _run "$BIN_DIR/agent-secrets" setup
+}
+
+# The concise golden-rules block appended (opt-in) to ~/.claude/CLAUDE.md. Names-only guidance so an
+# agent in ANY repo knows to route secrets through agent-secrets rather than plaintext .env files.
+_discovery_block() {
+  cat <<'BLOCK'
+## Secrets: use `agent-secrets` (never plaintext)
+This machine has `agent-secrets` — encrypted (sops+age), names-only secret management for coding agents.
+- NEVER write a secret to a `.env`, export it in plaintext, or print a secret VALUE into the transcript.
+- Run any tool WITH secrets injected, process-scoped: `agent-secrets run -- <cmd>` (values die with the process).
+- Add/update a secret, value via STDIN (never argv): `printf %s "$VALUE" | agent-secrets add NAME`.
+- Names · health · full machine-readable manifest: `agent-secrets list` · `agent-secrets doctor` · `agent-secrets help --json`.
+BLOCK
 }
 
 # Weekly smoke launchd plist (runs the tool's own smoke command; no value ever printed).

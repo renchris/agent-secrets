@@ -84,9 +84,13 @@ The installer is function-guarded and pins a SHA-256–verified release.
 </tr>
 </table>
 
-**Exactly what it changes on your Mac:** installs `age` + `sops` (Homebrew), the `agent-secrets`
-command, an encrypted store at `~/.config/secrets/`, a key in your login Keychain, and one `PATH`
-line — all removable in one command.
+**Exactly what it changes on your Mac:** installs `age`, `sops`, `gum`, `jq` (Homebrew); the
+`agent-secrets` command plus the `claude-agent`, `cursor-agent`, and `apiKeyHelper` wrappers in
+`~/bin`; an encrypted store at `~/.config/secrets/`; your age key in the login Keychain (with a
+`0600` file fallback); one `PATH` line in `~/.zshenv`; a weekly `launchd` smoke job; and the
+`apiKeyHelper` line in `~/.claude/settings.json`. It also *offers* (opt-in) to add a short
+agent-discovery block to `~/.claude/CLAUDE.md`. Every change is recorded in `install-manifest.json`
+and reversed by `agent-secrets uninstall` — all removable in one command.
 
 > **Behind a corporate firewall or air-gapped?** If `raw.githubusercontent.com` is blocked, install
 > from an internal mirror: `AGENT_SECRETS_BASE_URL=<mirror> sh install.sh` (see [FAQ](docs/FAQ.md) → corporate install).
@@ -275,6 +279,20 @@ agent-secrets help --json          # authoritative machine-readable command mani
 agent-secrets <command> --help     # detailed per-command help (side-effect-free, even `uninstall --help`)
 ```
 
+**Machine-wide discovery — how agents in *other* repos find out.** This repo's `AGENTS.md` is
+repo-scoped, and the `apiKeyHelper` only auths Claude Code's own key, so by default an agent working
+in some *other* project has no idea this Mac has `agent-secrets`. To close that gap the installer
+*offers* (opt-in, and reversed by `uninstall`) to append a short marker-delimited block to
+`~/.claude/CLAUDE.md` — the memory Claude Code loads into **every** session in **every** repo — with
+the golden rules (no plaintext `.env`; `agent-secrets run -- <cmd>`; `printf %s "$V" | agent-secrets
+add NAME`; `agent-secrets help --json`). `agent-secrets doctor` reports whether that block is present.
+Nothing is written to your global memory unless you say yes.
+
+- **Claude Code:** automatic once you opt in (the `~/.claude/CLAUDE.md` block above).
+- **Cursor:** there is no stable file-based global-rules path, so add it once by hand — **Cursor
+  Settings → Rules → User Rules** — pasting the same four golden rules. Cursor also reads a repo's
+  `AGENTS.md`, so per-project guidance already carries over.
+
 ## More
 
 - **[AGENTS.md](AGENTS.md)** · **[llms.txt](llms.txt)** — agent-facing usage guide + large language model (LLM) link index
@@ -285,8 +303,9 @@ agent-secrets <command> --help     # detailed per-command help (side-effect-free
 ## Uninstall
 
 `agent-secrets uninstall` reverses every recorded change — files, wrappers, the `PATH` line, the
-launchd job, the `settings.json` edit, and the Keychain items — then **asks** whether to keep or
-delete your encrypted store and keys. Add `--dry-run` to preview the plan without changing anything.
+launchd job, the `settings.json` edit, the `~/.claude/CLAUDE.md` discovery block (if you opted in),
+and the Keychain items — then **asks** whether to keep or delete your encrypted store and keys. Add
+`--dry-run` to preview the plan without changing anything.
 
 ## Development
 

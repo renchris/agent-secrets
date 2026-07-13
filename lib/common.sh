@@ -24,6 +24,7 @@ AGENT_SECRETS_CANARY_NAME="AWS_BACKUP_ACCESS_KEY_ID"  # in-store canary (plausib
 AGENT_SECRETS_CANARY_PLACEHOLDER="canary-INERT-arm-me-with-a-real-tripwire-token"
 AGENT_SECRETS_ROTATE_DAYS_DEFAULT=180                 # age key rotation cadence
 AGSEC_SHARE_ENVELOPE_VERSION="v1"                     # colleague-share envelope; receive rejects unknown versions
+AGENT_SECRETS_DISCOVERY_MARKER="agent-secrets"        # marker for the opt-in ~/.claude/CLAUDE.md discovery block (install writes, doctor greps, uninstall strips)
 
 # --- Home / path resolution (synthetic-HOME aware) ------------------------------
 agsec_home()            { printf '%s\n' "${AGENT_SECRETS_HOME:-$HOME}"; }

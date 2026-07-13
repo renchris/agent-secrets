@@ -126,6 +126,16 @@ check_injection() {
   fi
 }
 
+check_discovery() {  # is the opt-in machine-wide agent-discovery block present in the GLOBAL Claude memory?
+  local cm marker; cm="$(agsec_home)/.claude/CLAUDE.md"
+  marker="# >>> ${AGENT_SECRETS_DISCOVERY_MARKER} >>>"
+  if [ -f "$cm" ] && grep -qF "$marker" "$cm" 2>/dev/null; then
+    _row discovery ok "global agent rules" "present in ~/.claude/CLAUDE.md"
+  else
+    _row discovery attn "global agent rules" "not installed (opt-in — agents outside this repo won't know agent-secrets exists; re-run the installer to add)"
+  fi
+}
+
 check_hygiene() {
   local pd mode sj cpd; pd="$(agsec_home)/.claude/projects"
   if [ -d "$pd" ]; then
@@ -177,6 +187,7 @@ run_checks() {
   check_custody
   check_store
   check_injection
+  check_discovery
   check_hygiene
   check_maintenance
   check_supply
