@@ -28,8 +28,8 @@ agsec_help_spec() {
 	exit	0	success
 	exit	1	runtime error (see the message; names-only)
 	exit	2	usage error / unknown command / reserved verb
-	seealso	AGENTS.md	agent-facing usage guide (read this first if you are an agent)
-	seealso	SECURITY.md	threat model + the honest ceiling
+	seealso	https://github.com/renchris/agent-secrets/blob/v0.1.0/AGENTS.md	agent-facing usage guide (read this first if you are an agent)
+	seealso	https://github.com/renchris/agent-secrets/blob/v0.1.0/SECURITY.md	threat model + the honest ceiling
 setup	synopsis	agent-secrets setup [--restore]
 setup	summary	One-time onboarding wizard: generate your key, add your first secret, wire your tools.
 setup	desc	Idempotent — safe to re-run; detects an existing install and never mints a second key. Screens: preflight → key ceremony (Keychain + file fallback + recovery leg) → first secret → wire wrappers/apiKeyHelper → health check → done. --restore recovers on a new machine: paste your saved age key to re-establish custody over a restored store copy (verifies decryption; never mints a new key). Refuses to run its key ceremony inside an agent session (transcripts are secret-bearing) unless AGENT_SECRETS_UNATTENDED=1.
@@ -37,7 +37,7 @@ setup	flag	--restore	recover on a new machine — paste your saved age key to re
 setup	env	AGENT_SECRETS_UNATTENDED	1 = non-interactive with FAKE placeholder values (tests/CI); reads the first secret value from STDIN if piped
 setup	example	agent-secrets setup	run the interactive wizard (in a normal terminal, not an agent session)
 setup	example	agent-secrets setup --restore	recover on a new machine (copy your store copy into place first, then paste your saved key)
-setup	writes	~/.config/secrets/{secrets.env,manifest.toml,age.key,.sops.yaml}, ~/bin wrappers, ~/.claude/settings.json (apiKeyHelper)
+setup	writes	~/.config/secrets/{age.key,age.pub,recovery.pub,age-key-cmd.sh,secrets.env,.sops.yaml,manifest.toml}, ~/bin wrappers, ~/.claude/settings.json (apiKeyHelper)
 setup	exit	0	wizard completed (or returned early on an existing install)
 setup	exit	1	a step failed (see message)
 setup	namesonly	never prints the age key or any secret value; hidden input via read -s
@@ -50,16 +50,18 @@ add	example	agent-secrets add OPENAI_API_KEY	interactive hidden prompt for the v
 add	reads	STDIN (the value, if piped)
 add	writes	~/.config/secrets/secrets.env, ~/.config/secrets/manifest.toml
 add	exit	0	stored
-add	exit	1	invalid NAME, no store yet (run setup), or encrypt failed
+add	exit	1	no store yet (run setup), or encrypt failed
+add	exit	2	usage error (missing or invalid NAME, or a multi-line value)
 add	namesonly	the value is never printed, logged, or placed on argv
-list	synopsis	agent-secrets list [--format=json]
-list	summary	List secret NAMES (and rotation dates). Never values.
+list	synopsis	agent-secrets list [--format=json]   (alias: ls)
+list	summary	List secret NAMES (and rotation dates). Never values. Alias: `ls`.
 list	desc	Prints the names in the store with their manifest.toml rotate_by dates. Use --format=json for a value-free machine-readable array an agent can parse.
 list	flag	--format=json	emit a JSON array of {name, rotate_by}; no values
 list	example	agent-secrets list	human-readable names + rotate dates
 list	example	agent-secrets list --format=json	[{"name":"ANTHROPIC_API_KEY","rotate_by":"2027-01-06"}, ...]
 list	reads	~/.config/secrets/secrets.env (names only), manifest.toml
 list	exit	0	ok (prints a friendly note if the store is empty/absent)
+list	exit	2	usage error (unknown flag)
 list	namesonly	prints names + metadata only; never a value
 run	synopsis	agent-secrets run [--no-egress] -- <cmd> [args...]
 run	summary	Run a command with secrets injected just-in-time, process-scoped.
@@ -76,7 +78,7 @@ run	namesonly	values enter the child env only; the tool never prints them
 doctor	synopsis	agent-secrets doctor [--format=json] [--redact] [--gates] [--fix]
 doctor	summary	Health check across custody, store, injection, hygiene, maintenance, supply-chain.
 doctor	desc	Each check reports ✓/⚠/✗ with NAMES and status only. Exit is 0 when there is no ✗, else 1 — so an agent can gate on it. Non-destructive by default; --fix applies only safe fixes.
-doctor	flag	--format=json	machine-readable results (array of {category, status, detail}); no values
+doctor	flag	--format=json	machine-readable object {"checks":[{category,status,check,detail}],"exit":0|1}; exit=1 iff any status is "bad"; parse with jq '.checks[]|select(.status=="bad")' (status ∈ ok|attn|bad); no values
 doctor	flag	--redact	replace any sensitive-looking token with a sha256: digest in output
 doctor	flag	--gates	also run the execution gates (c: Keychain read, d: sops exec-env, e: egress allowlist + firewall)
 doctor	flag	--fix	apply SAFE fixes only (never runs without this flag)
@@ -85,6 +87,7 @@ doctor	example	agent-secrets doctor --format=json	parse status programmatically
 doctor	example	agent-secrets doctor --gates	verify the deployment gates before an unattended run
 doctor	exit	0	no ✗ checks
 doctor	exit	1	at least one ✗ check
+doctor	exit	2	usage error (unknown flag)
 doctor	namesonly	reports names/status only; verifies values are non-empty via length, never prints them
 uninstall	synopsis	agent-secrets uninstall [--dry-run]
 uninstall	summary	Remove everything this tool installed (manifest-driven, total). Prompts before touching your secrets.
@@ -184,6 +187,7 @@ agsec_help_render() {
   fi
 
   # per-verb detail
+  [ "$want" = ls ] && want=list      # `help ls` / `ls --help` → the list verb (documented alias)
   case " $AGSEC_VERBS " in *" $want "*) : ;; *) agsec_die "no such command: '$want' (try: agent-secrets help)" 2 ;; esac
   printf '%s%s%s — %s\n\n' "$C_BOLD" "agent-secrets $want" "$C_RESET" "$(_f summary | cut -f3)"
   printf '%sUsage:%s %s\n\n' "$C_BOLD" "$C_RESET" "$(_f synopsis | cut -f3)"

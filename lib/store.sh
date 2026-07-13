@@ -64,7 +64,7 @@ store_add() {
   # lands in a shell var exactly as `value` already does (no new exposure) and is never printed.
   if IFS= read -r _rest || [ -n "${_rest:-}" ]; then
     unset value _rest
-    agsec_die "add takes a SINGLE-LINE value (received more than one line). Multi-line secrets travel via share/receive; a single-line value is what 'run' can inject as an env var."
+    agsec_die "add takes a SINGLE-LINE value (received more than one line). Multi-line secrets travel via share/receive; a single-line value is what 'run' can inject as an env var." 2
   fi
   local recips; recips="$(_store_recipients)" || agsec_die "store_add: no age recipients (run setup)"
   local store plain; store="$(agsec_store_file)"; plain="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"

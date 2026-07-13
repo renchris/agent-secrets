@@ -244,6 +244,7 @@ flowchart LR
 | `agent-secrets pubkey` | print your `age` recipient string + fingerprint — hand it to a sender (`--copy`) |
 | `agent-secrets share <NAME>` | encrypt one secret to a colleague's key as a paste-able blob (last-rung — prefer the ladder) |
 | `agent-secrets receive` | decrypt a colleague's pasted blob into your store (confirms on the terminal) |
+| `agent-secrets backup` | push your **encrypted** store (ciphertext only, never the age key) to a private GitHub repo |
 | `agent-secrets uninstall` | remove everything it installed (prompts about your secrets) |
 
 Wrappers `claude-agent` and `cursor-agent` launch those tools with the store injected.

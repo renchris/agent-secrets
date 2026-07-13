@@ -18,6 +18,7 @@
 - `pubkey [--copy]` — print your age recipient key + fingerprint (public key only; safe in agent sessions).
 - `share <NAME> --to <recipient>` — encrypt one secret to a colleague's key as a paste-able blob (human-gated; refuses in agent sessions).
 - `receive` — decrypt a colleague's pasted blob into your store (tty-gated; blob on STDIN, confirm on /dev/tty).
+- `backup [--repo owner/name]` — push your ENCRYPTED store (ciphertext only, never the age key) to a private GitHub repo (off-machine copy).
 - `uninstall [--dry-run]` — total, manifest-driven removal (human-gated).
 
 ## Docs

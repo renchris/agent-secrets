@@ -73,11 +73,14 @@ does **not** buy you:
   once they `receive` it, they hold a durable copy. Nothing in this tool can reach out and unshare it.
   **Rotating the secret at the provider is the only revocation** — the shared copy simply stops
   authenticating. There is no expiry, no "burn after reading."
-- **Sender authentication is opt-in.** A plain blob proves *nothing* about who produced it — an
-  unsigned `receive` is trusting whoever pasted the text. The digest read-back you confirm on
-  `receive` catches an **accidental** paste/transport mismatch only; it can **never** catch
-  substitution — an attacker who swaps the blob swaps the digest with it. Use `share --sign` (and
-  verify against `allowed_signers`) when the sender's identity actually matters.
+- **Sender authentication is opt-in — and, in v0.1, emit-only.** A plain blob proves *nothing* about
+  who produced it; an unsigned `receive` is trusting whoever pasted the text (it says so loudly:
+  "sender unverified"). The digest read-back catches an **accidental** paste/transport mismatch only;
+  it can **never** catch substitution — an attacker who swaps the blob swaps the digest with it. When
+  the sender's identity matters, `share --sign` attaches a detached `ssh-keygen -Y sign` signature
+  block; **`receive` does not auto-verify it in v0.1** — the recipient verifies it **manually** with
+  `ssh-keygen -Y verify` against their own `allowed_signers` roster. That opt-in sidecar is the sole
+  offline defense against substitution.
 - **No delivery proof.** The tool cannot tell you the blob arrived, was received once, or was received
   by the intended person. Delivery and its confidentiality in transit are the paste channel's problem.
 - **The manifest becomes a values-free social graph.** `share`/`receive` record a `shared_with` /
@@ -91,9 +94,13 @@ does **not** buy you:
 
 ## Custody and recovery
 
-The bootstrap age key is custodied in the login Keychain (primary) with a `0600` FileVault-backed
-file fallback, behind one selector script. If a macOS upgrade breaks the Keychain path, custody
-degrades to the file automatically — tracked by `doctor`, not an outage. Rotate the key every
+The bootstrap age key is custodied behind one selector script with two paths. An **attended** `setup`
+populates the login Keychain via the interactive paste prompt (primary; prompt-free thereafter). An
+**automated / `AGENT_SECRETS_UNATTENDED`** install — or a declined Keychain prompt — stores the key in
+the `0600` FileVault-backed file **by default** (on current macOS the no-argv Keychain write can't be
+populated without an interactive paste, so unattended installs run on file custody now, not someday).
+That is a normal, `doctor`-tracked steady state shown as "degraded (file custody)" — fully supported,
+not an outage; a later macOS upgrade breaking the Keychain path is just one more trigger for it. Rotate the key every
 180 days (tracked by a `rotate_by` row and the weekly smoke job). Your **recovery key** (a second
 age recipient saved offline during setup) is what makes a full-machine restore possible — the
 `agent-secrets setup --restore` path (paste the saved key over a restored store copy) and the

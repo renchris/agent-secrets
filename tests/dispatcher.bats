@@ -54,3 +54,23 @@ load test_helper
   [[ "$output" != *"unknown command"* ]]
   [[ "$output" == *"keychain read"* ]]         # it actually ran the maintenance checks
 }
+
+@test "ls is a documented alias for list (help --json advertises it; help ls renders list)" {
+  setup_store
+  printf 'x' | store_add DOC_ALIAS_CHECK
+  run agsec ls                                 # the alias routes to the list verb
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DOC_ALIAS_CHECK"* ]]
+  run agsec help ls                            # help for the alias renders list's help (no error)
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agent-secrets list"* ]]
+}
+
+@test "the redundant 'version' subcommand is gone; -V/--version is the documented route" {
+  run agsec version                            # removed → falls through to unknown-command (exit 2)
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"unknown command"* ]]
+  run agsec -V                                 # the documented flag still prints the version
+  [ "$status" -eq 0 ]
+  [[ "$output" == "agent-secrets "* ]]
+}

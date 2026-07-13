@@ -93,8 +93,9 @@ simply stops authenticating. Treat every share as permanent until you rotate.
 They install it (the one-line installer), run `agent-secrets setup` once, then
 `agent-secrets receive` and paste your blob. **Do not** talk them through `age -d` into a plaintext
 file — that dumps the decrypted secret straight to disk, exactly the leak this tool exists to
-prevent. `receive` pipes the decrypted value directly into their encrypted store; it never touches a
-temp plaintext file or their scrollback.
+prevent. `receive` decrypts only into a private `0600` temp inside the encrypted-config dir that is
+shredded (FileVault-backed erasure) the instant the value lands in their sops store — no durable
+plaintext file to forget, and nothing in their scrollback, stdout, or argv.
 
 ### How do I remove everything?
 

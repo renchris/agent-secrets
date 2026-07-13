@@ -54,7 +54,7 @@ writes, names_only }`. **Everything you need to construct a valid invocation is 
 | `run [--no-egress] -- <cmd>` | run a tool with secrets | JIT-injected into that process; `--` required; bounds egress to `~/.config/secrets/egress.allow` when set (`--no-egress` opts out) |
 | `doctor [--format=json] [--gates]` | check health / gate | exit `0` healthy, `1` if any ✗ |
 | `pubkey [--copy]` | print your recipient key | **safe in an agent session** — public key only, never a secret |
-| `share <NAME>` | encrypt a secret to a colleague | **refuses in an agent session** (extracts a plaintext value) |
+| `share <NAME> --to <age1…\|github:user\|self>` | encrypt a secret to a colleague | **refuses in an agent session** (extracts a plaintext value); `--sign` emits a signature the recipient verifies manually |
 | `receive` | ingest a pasted blob | **tty-gated** — refuses with no controlling terminal; blob on STDIN, confirm on `/dev/tty` |
 | `backup [--repo owner/name] [--yes]` | push an off-machine copy | **ciphertext only** to a private GitHub repo via `gh`; never the age private key; safe in a session |
 | `uninstall [--dry-run]` | remove everything | human-gated; `--dry-run` previews |
@@ -81,8 +81,10 @@ agent-secrets run -- printenv ANTHROPIC_API_KEY | wc -c      # >1 means present
 # Health-gate before doing work; branch on exit code
 if agent-secrets doctor >/dev/null 2>&1; then echo healthy; else agent-secrets doctor; fi
 
-# Machine-readable health for decisions
-agent-secrets doctor --format=json | jq '[.[] | select(.status=="fail")]'
+# Machine-readable health for decisions — the payload is an OBJECT:
+#   {"checks":[{category,status,check,detail}],"exit":0|1}   (status ∈ ok|attn|bad; exit=1 iff any "bad")
+# List the failing checks (iterate .checks, match "bad" — NOT .[] / "fail"):
+agent-secrets doctor --format=json | jq '[.checks[] | select(.status=="bad")]'
 ```
 
 ## Environment variables
