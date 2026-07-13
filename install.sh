@@ -6,6 +6,32 @@
 # Install from a PINNED release tag (never main); SHA-256 verify any artifact before running it.
 # AGENT_SECRETS_BASE_URL overrides the source (private-repo / corporate mirror; the smoke test
 # uses it). Records every TOOL artifact via lib/manifest.sh; no secret value ever handled.
+
+# --- bash guard (must be POSIX-clean: NOTHING above this may use a bashism) -------------------
+# The README one-liner runs this via `bash -c "$(curl…)"`. If a user instead pipes it to `sh`
+# (`sh -c "$(curl…)"`, or `sh install.sh`), macOS runs it under /bin/sh, which sources lib/manifest.sh
+# and dies on its process substitution (`< <(…)`) with "syntax error near unexpected token \`<'".
+# Re-exec under a real bash so the install works whether the user typed `bash` OR `sh`.
+# CRUCIAL: macOS /bin/sh IS bash 3.2 in POSIX mode — it SETS BASH_VERSION yet still rejects that syntax
+# — so keying only on BASH_VERSION would SKIP the re-exec on the exact `sh` invocations we target
+# (verified: /bin/sh has BASH_VERSION set AND `shopt -qo posix` true). Re-exec when there is no bash at
+# all OR bash is in POSIX mode. AGSEC_REEXECED is a sentinel so the re-exec'd (non-POSIX) bash can never
+# loop. File case ($0 is a real path) re-execs in place; the curl-pipe case re-fetches (mirror override
+# via AGENT_SECRETS_INSTALL_URL). `shopt` never runs under a true POSIX sh: `[ -z BASH_VERSION ]` is
+# true there and short-circuits the `||`.
+if [ -z "${AGSEC_REEXECED:-}" ] && { [ -z "${BASH_VERSION:-}" ] || shopt -qo posix 2>/dev/null; }; then
+  AGSEC_REEXECED=1; export AGSEC_REEXECED
+  if [ -f "$0" ]; then exec bash "$0" "$@"; fi        # file case: re-exec in place, no re-download
+  # curl-pipe case ($0 is "sh", no file): re-fetch from the pinned raw-git channel and hand to bash.
+  # Capture first so a failed re-fetch fails LOUD — `bash -c "$(curl…)"` inline would silently run an
+  # empty program (exit 0) on a network error, a no-op masquerading as success.
+  _agsec_tag="v0.1.0"; _agsec_repo="renchris/agent-secrets"
+  _agsec_self_url="${AGENT_SECRETS_INSTALL_URL:-https://raw.githubusercontent.com/${_agsec_repo}/${_agsec_tag}/install.sh}"
+  _agsec_src="$(curl -fsSL "$_agsec_self_url")" || _agsec_src=""
+  [ -n "$_agsec_src" ] || { printf 'ERROR: could not re-fetch install.sh to re-exec under bash. Re-run the README one-liner with bash (not sh) — it curl-pipes this URL: %s\n' "$_agsec_self_url" >&2; exit 1; }
+  exec bash -c "$_agsec_src" bash "$@"
+fi
+
 set -euo pipefail
 
 main() {
@@ -46,7 +72,7 @@ main() {
   _render_plan() {
     _say ""
     _say "agent-secrets installer — this will:"
-    _say "  • install Homebrew (if absent), then: age, sops, gum, jq"
+    _say "  • ensure age, sops, gum, jq (reuse yours · Homebrew if present · else pinned, SHA-256-verified downloads — no sudo)"
     _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG, SHA-256 verified)"
     _say "  • symlink the command + wrappers into $BIN_DIR   (agent-secrets, claude-agent, cursor-agent, apiKeyHelper)"
     _say "  • add a marker-delimited PATH block to $RC_FILE"
@@ -54,7 +80,7 @@ main() {
     _say "  • back up an existing ~/.claude/settings.json (revert point for setup's apiKeyHelper edit)"
     _say "  • OFFER (opt-in) to add agent-secrets rules to ~/.claude/CLAUDE.md so agents in EVERY repo know to use it"
     _say "  • record every change to $STATE_DIR/install-manifest.json (one-command uninstall)"
-    _say "  • run 'agent-secrets setup' (the interactive wizard) at the end"
+    _say "  • run 'agent-secrets setup' at the end (in a coding-agent session: install now, then finish setup in a real terminal)"
     _say ""
   }
 
@@ -66,27 +92,28 @@ main() {
     return 0
   fi
   _render_plan
-  # No --force / env bypass: consent is mandatory.
-  printf '[Enter] continue · [d] show the full dry-run first · Ctrl-C stop: ' >&2
-  local reply; read -r reply
-  if [ "$reply" = "d" ] || [ "$reply" = "D" ]; then
-    DRY_RUN=1; _render_plan; DRY_RUN=0
-    printf '[Enter] continue · Ctrl-C stop: ' >&2; read -r reply
+  # Consent is an interactive, human gate (no --force/env bypass). When stdin is a TTY, require the
+  # keypress. When it is NOT a tty — a piped `curl … | bash`, or a coding-agent session whose stdin is
+  # /dev/null or an open-but-empty pipe — there is no human at the terminal: the plan was just shown
+  # (the disclosure) and running the installer IS the consent, so proceed. Blocking on `read` here would
+  # otherwise abort under `set -e` on EOF (closed stdin) or hang forever (open pipe) — and, for an agent
+  # session, would never reach the exit-0 key-ceremony deferral below.
+  if [ -t 0 ]; then
+    printf '[Enter] continue · [d] show the full dry-run first · Ctrl-C stop: ' >&2
+    local reply=""; read -r reply || reply=""
+    if [ "$reply" = "d" ] || [ "$reply" = "D" ]; then
+      DRY_RUN=1; _render_plan; DRY_RUN=0
+      printf '[Enter] continue · Ctrl-C stop: ' >&2; read -r reply || reply=""
+    fi
+  else
+    _say "(non-interactive stdin — proceeding with the plan above; run in a terminal to review step by step)"
   fi
 
-  # --- toolchain ---------------------------------------------------------------
-  if ! command -v brew >/dev/null 2>&1; then
-    _say "Installing Homebrew…"
-    # Homebrew's canonical HEAD bootstrap is the ecosystem-standard trust anchor; pinning ITS installer
-    # to a commit is unsupported and rots. This is the ONE intentional moving-ref exception to the
-    # "install from a pinned tag" rule above — trusted-upstream, NOT SHA-pinned by us (see SECURITY.md's
-    # honest ceiling). The "never run an unverified artifact" rule covers the tool's OWN release only.
-    _run /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  fi
-  # jq is REQUIRED, not optional: lib/manifest.sh (the install/uninstall manifest backbone),
-  # `help --json`, and `list --format=json` all call jq unguarded — omitting it aborts the install
-  # mid-way under `set -euo pipefail`, leaving partial residue.
-  _run brew install age sops gum jq
+  # --- toolchain: resolved AFTER unpack, from the tool's own lib/deps.sh -----------------------------
+  # (This USED to `brew install age sops gum jq` behind a sudo-gated Homebrew bootstrap — the #1
+  #  corporate blocker in ONE_COMMAND_INSTALL_FEEDBACK.md. deps_ensure below now resolves each tool
+  #  NO-SUDO: reuse a PATH copy → Homebrew if already present → else a pinned, SHA-256-verified static
+  #  binary. It lives in lib/deps.sh, so it can only run once the tarball is unpacked — hence the move.)
 
   # --- download + SHA-256 verify (never execute an unverified artifact) --------
   local work; work="$(mktemp -d)"
@@ -120,9 +147,32 @@ main() {
   [ "$DRY_RUN" -eq 1 ] || [ -f "$INSTALL_DIR/lib/common.sh" ] \
     || _die "unexpected tarball layout (need one top-level prefix dir) — re-cut with: git archive --prefix=agent-secrets-\${TAG}/ \${TAG}"
 
+  # Cleanup trap for the pre-manifest window: from here until $INSTALL_DIR is recorded, an abort — e.g. a
+  # REQUIRED dependency that can't be fetched on a locked-down network (deps_ensure below) — would strand
+  # the unpacked tool with NO manifest to roll back (the residue regression the reorder introduced).
+  # Remove ONLY what we just created: $INSTALL_DIR (always ours) plus the two tool dirs if still empty
+  # (rmdir is a no-op on a pre-existing ~/bin holding the user's files). Disarmed the instant the manifest
+  # records $INSTALL_DIR, so the success path + uninstall are unaffected.
+  # The paths MUST be baked in NOW (%q-quoted so any shell metacharacter in an exotic AGENT_SECRETS_HOME
+  # stays safe): a named handler is NOT an option — main()'s locals are already out of scope by the time
+  # the EXIT trap fires while the shell unwinds through an `exit` on an abort (verified under bash 3.2).
+  local _cleanup_cmd
+  printf -v _cleanup_cmd 'rm -rf -- %q; rmdir -- %q %q 2>/dev/null || true' "$INSTALL_DIR" "$STATE_DIR" "$BIN_DIR"
+  # shellcheck disable=SC2064  # expand-now via the pre-built %q string is DELIBERATE (see above)
+  trap "$_cleanup_cmd" EXIT
+
   # From here on the tool's own libs exist — source them to record artifacts.
   # shellcheck source=/dev/null
   . "$INSTALL_DIR/lib/common.sh"
+  # Resolve the toolchain NO-SUDO before anything below needs it: manifest.sh + every artifact-record
+  # call use jq, and setup/store need age+sops. deps_ensure reuses a PATH copy → Homebrew if present →
+  # else fetches pinned SHA-256-verified binaries into $INSTALL_DIR/vendor/bin (inside the recorded
+  # install dir, so uninstall removes them) and puts that dir on PATH for the rest of this install
+  # (common.sh re-adds it at runtime for the wrappers).
+  # shellcheck source=/dev/null
+  . "$INSTALL_DIR/lib/deps.sh"
+  export AGENT_SECRETS_VENDOR_BIN="$INSTALL_DIR/vendor/bin"
+  deps_ensure
   # shellcheck source=/dev/null
   . "$INSTALL_DIR/lib/manifest.sh"
   agsec_secure_umask
@@ -132,6 +182,7 @@ main() {
   # sibling lib/ under $INSTALL_DIR — a plain copy would strand them from lib/). Record each symlink
   # for rollback, and record $INSTALL_DIR itself so uninstall removes the unpacked tool (no residue).
   manifest_record_file "$INSTALL_DIR" >/dev/null 2>&1 || true
+  trap - EXIT   # $INSTALL_DIR is now recorded → uninstall can roll it back; disarm the pre-manifest cleanup
   local f
   _run ln -sf "$INSTALL_DIR/bin/agent-secrets" "$BIN_DIR/agent-secrets"
   manifest_record_file "$BIN_DIR/agent-secrets"
@@ -179,7 +230,28 @@ main() {
     esac
   fi
 
+  # --- finish: the key ceremony ------------------------------------------------
+  # setup mints your age key and takes your first secret — a secret-bearing ceremony. Inside a coding-
+  # agent session (Cursor/Claude Code) the transcript would capture those, so setup refuses there. The
+  # TOOL install above is complete and exit-0 regardless; we simply route the human to a real terminal
+  # for the ceremony instead of running (and failing) it here. UNATTENDED (tests/CI) runs it with fakes.
   _say ""
+  if agsec_in_agent_session && [ -z "${AGENT_SECRETS_UNATTENDED:-}" ]; then
+    _say "${C_GREEN}✓${C_RESET} agent-secrets is installed — one step left."
+    _say ""
+    _say "You're in a coding-agent session, so the key ceremony was ${C_BOLD}not${C_RESET} run here on"
+    _say "purpose: it mints your encryption key and takes your first secret, and an agent"
+    _say "transcript is secret-bearing. Finish it in a ${C_BOLD}real terminal${C_RESET}:"
+    _say ""
+    _say "    ${C_BOLD}1.${C_RESET} open Terminal.app (or iTerm) — a new window picks up your PATH"
+    _say "    ${C_BOLD}2.${C_RESET} run:  ${C_BOLD}agent-secrets setup${C_RESET}"
+    _say ""
+    _say "       (if the command isn't found yet, use the full path:"
+    _say "        ${BIN_DIR}/agent-secrets setup)"
+    _say ""
+    _say "Then you're done. Undo everything anytime with:  agent-secrets uninstall"
+    return 0
+  fi
   _say "Installed. Launching the setup wizard…"
   _run "$BIN_DIR/agent-secrets" setup
 }

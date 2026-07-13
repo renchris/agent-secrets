@@ -14,6 +14,28 @@
 # Sourced library: do NOT `set -e`/`set -u` here (would leak into callers).
 set -o pipefail 2>/dev/null || true
 
+# Vendored dependency binaries (age/sops/gum/jq fetched without Homebrew by lib/deps.sh) live at
+# <install-root>/vendor/bin. Prepend it here — common.sh is sourced by the dispatcher, every cmd/*.sh,
+# AND all three wrappers — so those binaries are found at runtime WITHOUT editing bin/. common.sh is at
+# <root>/lib/common.sh, so vendor/bin is a sibling of lib/. Idempotent; only prepends when it exists
+# (a Homebrew/PATH toolchain never creates it, so this is a no-op for the classic install).
+_agsec_root="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")/.." >/dev/null 2>&1 && pwd)"
+if [ -n "${_agsec_root:-}" ] && [ -d "$_agsec_root/vendor/bin" ]; then
+  case ":$PATH:" in
+    *":$_agsec_root/vendor/bin:"*) : ;;
+    *) PATH="$_agsec_root/vendor/bin:$PATH"; export PATH ;;
+  esac
+fi
+unset _agsec_root
+
+# Disable sops's online "is this the latest?" update-check. By default `sops --version` calls
+# api.github.com with NO client timeout, so on a locked-down corporate network (the exact target — the
+# firewall may allow the release CDN but black-hole api.github.com) every version probe hangs 60-120s:
+# in deps.sh's version gate + verify-by-exec, and in `doctor`'s toolchain check. This env var (honored
+# by every sops that ships the check) makes `--version` return instantly; runtime decrypt calls never
+# checked anyway. Unknown to an ancient sops → harmlessly ignored. Exported so child sops calls inherit it.
+export SOPS_DISABLE_VERSION_CHECK=1
+
 AGENT_SECRETS_VERSION="0.1.0"
 AGENT_SECRETS_KC_SERVICE="agent-age-key"              # Keychain service: the bootstrap age key
 AGENT_SECRETS_KC_PREFIX="agent-"                      # uninstall enumerates Keychain by this prefix

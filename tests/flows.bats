@@ -11,6 +11,32 @@ load test_helper
   [[ "$output" != *"fakeseed_val"* ]]
 }
 
+@test "unattended wizard seeds from AGENT_SECRETS_SEED_VALUE with NO stdin (deterministic automation)" {
+  run env AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" AGENT_SECRETS_UNATTENDED=1 \
+      AGENT_SECRETS_SEED_NAME=OPENAI_API_KEY AGENT_SECRETS_SEED_VALUE=env-seed-xyz \
+      bash "$REPO_ROOT/bin/agent-secrets" setup </dev/null
+  [ "$status" -eq 0 ]
+  run agsec list
+  [[ "$output" == *"OPENAI_API_KEY"* ]]
+  [[ "$output" != *"env-seed-xyz"* ]]     # value never surfaced
+}
+
+@test "unattended wizard cannot hang on an open-but-empty stdin (feedback BLOCKER #3)" {
+  # Reproduce an agent session's inherited stdin: a pipe held OPEN with no data (never sends EOF). The
+  # old val="\$(cat)" blocked here forever; the bounded read must fall through to the placeholder. A perl
+  # fork+alarm hard-kills a genuine hang (exit 124) so the suite fails loudly instead of hanging.
+  command -v perl >/dev/null 2>&1 || skip "perl needed for the timeout guard"
+  local fifo="$AGENT_SECRETS_HOME/seed.fifo"; mkfifo "$fifo"
+  exec 9<>"$fifo"                          # hold a writer end open with nothing written
+  run perl -e 'my $p=fork; if(!$p){exec @ARGV or die} local $SIG{ALRM}=sub{kill "KILL",$p; exit 124}; alarm 20; waitpid $p,0; exit($? >> 8)' \
+      env AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" AGENT_SECRETS_UNATTENDED=1 \
+      bash "$REPO_ROOT/bin/agent-secrets" setup <"$fifo"
+  exec 9>&-
+  [ "$status" -eq 0 ]                      # 124 ⇒ it hung past the alarm (the old cat bug)
+  run agsec list
+  [[ "$output" == *"ANTHROPIC_API_KEY"* ]] # placeholder still seeded the default name
+}
+
 @test "wizard is idempotent: re-run mints no second key (resume)" {
   printf '%s' v1 | AGENT_SECRETS_UNATTENDED=1 bash "$REPO_ROOT/bin/agent-secrets" setup >/dev/null 2>&1
   local pub1; pub1=$(cat "$AGENT_SECRETS_HOME/.config/secrets/age.pub")

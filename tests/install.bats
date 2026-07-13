@@ -64,3 +64,62 @@ teardown() {
   [ -f "$AGENT_SECRETS_HOME/.agent-secrets/lib/common.sh" ]
   [ -L "$AGENT_SECRETS_HOME/bin/agent-secrets" ]
 }
+
+@test "install under /bin/sh completes a REAL install — re-execs out of POSIX mode, past manifest.sh (feedback BLOCKER #1)" {
+  _build_mirror
+  local baked="$MIRROR/install.sh"
+  sed "s/EXPECTED_SHA256=\"[a-f0-9]*\"/EXPECTED_SHA256=\"$BUILT_SHA\"/" "$REPO_ROOT/install.sh" >"$baked"
+  # macOS /bin/sh IS bash-3.2 in POSIX mode and SETS BASH_VERSION, so a BASH_VERSION-only guard would
+  # skip the re-exec and die on lib/manifest.sh's process substitution. Drive a REAL (non-dry-run)
+  # install via /bin/sh: it must re-exec and run to completion (past manifest_init + symlink wiring),
+  # not merely render --dry-run (which returns before manifest.sh is ever sourced — false confidence).
+  run bash -c "printf 'fake-value\n' | AGENT_SECRETS_UNATTENDED=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' /bin/sh '$baked'"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"SHA-256 verified"* ]]
+  [ -L "$AGENT_SECRETS_HOME/bin/agent-secrets" ]                                 # wrappers wired ⇒ got past manifest.sh
+  [ -f "$AGENT_SECRETS_HOME/.local/state/agent-secrets/install-manifest.json" ]  # manifest_init ran
+}
+
+@test "install in an agent session with CLOSED stdin defers the key ceremony, exit 0 (feedback BLOCKER #2)" {
+  _build_mirror
+  local baked="$MIRROR/install.sh"
+  sed "s/EXPECTED_SHA256=\"[a-f0-9]*\"/EXPECTED_SHA256=\"$BUILT_SHA\"/" "$REPO_ROOT/install.sh" >"$baked"
+  # A real Cursor/Claude-Code session has NON-tty stdin (often /dev/null). The feedback saw "Installed."
+  # then exit 1; a naive fix still aborts at the consent `read` (EOF under set -e) before the deferral.
+  # With no stdin piped, the tool install must SUCCEED (exit 0) and route the human to a real terminal.
+  run bash -c "CLAUDECODE=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked' </dev/null"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"real terminal"* ]]
+  [[ "$output" == *"agent-secrets setup"* ]]
+  [ -f "$AGENT_SECRETS_HOME/.agent-secrets/lib/common.sh" ]     # tool unpacked
+  [ -L "$AGENT_SECRETS_HOME/bin/agent-secrets" ]                # wired onto PATH
+  [ ! -f "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]    # key ceremony correctly SKIPPED
+}
+
+@test "a required-dependency failure removes the unpacked tool — no unrecorded residue (cleanup trap)" {
+  _build_mirror
+  local baked="$MIRROR/install.sh"
+  sed "s/EXPECTED_SHA256=\"[a-f0-9]*\"/EXPECTED_SHA256=\"$BUILT_SHA\"/" "$REPO_ROOT/install.sh" >"$baked"
+  # The corporate failure: no age/sops/gum on PATH, no Homebrew, dep downloads blocked (age is not in the
+  # mock mirror). deps_ensure aborts on the REQUIRED age AFTER the tool is unpacked. The cleanup trap must
+  # remove ~/.agent-secrets so `agent-secrets uninstall` is never left with un-rollback-able residue.
+  run bash -c "PATH='$BATS_TEST_DIRNAME/mocks:/usr/bin:/bin:/usr/sbin:/sbin' AGSEC_MOCK_DL_DIR='$MIRROR' AGENT_SECRETS_DEPS_NO_BREW=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked' </dev/null"
+  [ "$status" -ne 0 ]                                           # required dep unresolved → abort
+  [ ! -d "$AGENT_SECRETS_HOME/.agent-secrets" ]                 # trap removed the unpacked tool
+  [ ! -e "$AGENT_SECRETS_HOME/bin/agent-secrets" ]             # nothing left wired
+}
+
+@test "cleanup trap survives a shell metacharacter (single quote) in the install home (%q quoting)" {
+  _build_mirror
+  local baked="$MIRROR/install.sh"
+  sed "s/EXPECTED_SHA256=\"[a-f0-9]*\"/EXPECTED_SHA256=\"$BUILT_SHA\"/" "$REPO_ROOT/install.sh" >"$baked"
+  # An install path with a single quote (e.g. an exotic AGENT_SECRETS_HOME) must not break the cleanup
+  # trap's stored command — expand-now single-quoting would abort with an unmatched-quote parse error and
+  # leave residue. Force the required-dep failure and assert the tool is still removed.
+  local qhome; qhome="$(mktemp -d)/o'brien"; mkdir -p "$qhome"
+  run env "PATH=$BATS_TEST_DIRNAME/mocks:/usr/bin:/bin:/usr/sbin:/sbin" "AGSEC_MOCK_DL_DIR=$MIRROR" \
+      AGENT_SECRETS_DEPS_NO_BREW=1 "AGENT_SECRETS_HOME=$qhome" bash "$baked" </dev/null
+  [ "$status" -ne 0 ]
+  [ ! -d "$qhome/.agent-secrets" ]                              # trap ran cleanly despite the quote
+  rm -rf "$(dirname "$qhome")"
+}

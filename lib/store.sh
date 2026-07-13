@@ -10,7 +10,17 @@ _store_keycmd_path() {
   if declare -F age_key_cmd_path >/dev/null 2>&1; then age_key_cmd_path
   else printf '%s\n' "$(agsec_config_dir)/age-key-cmd.sh"; fi
 }
-_store_export_key() { SOPS_AGE_KEY_CMD="$(_store_keycmd_path)"; export SOPS_AGE_KEY_CMD; }
+_store_export_key() {
+  SOPS_AGE_KEY_CMD="$(_store_keycmd_path)"; export SOPS_AGE_KEY_CMD
+  # Belt-and-suspenders for an unexpectedly-OLD sops (SOPS_AGE_KEY_CMD landed in sops v3.10.0; the
+  # feedback's BLOCKER #4 was a 3.9.4 that silently ignored KEY_CMD → the store looked "unreadable").
+  # Also point at the 0600 key file: sops ≥3.11 pools every identity source and tolerates a failing
+  # KEY_CMD, while a pre-3.10 sops ignores the unknown KEY_CMD and decrypts via KEY_FILE — so the store
+  # stays readable across the whole sops version range. Our KEY_CMD selector always exits 0 (Keychain
+  # || file), which also covers the fragile 3.10.0–3.10.2 early-return window. Same key either way.
+  local _kf; _kf="$(agsec_age_key_file)"
+  if [ -s "$_kf" ]; then SOPS_AGE_KEY_FILE="$_kf"; export SOPS_AGE_KEY_FILE; fi
+}
 
 # Age public recipients: primary (required) + recovery (optional). Public keys — safe in argv.
 _store_recipients() {

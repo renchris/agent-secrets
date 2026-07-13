@@ -73,7 +73,21 @@ _first_secret() {
   local name val
   if [ -n "$UNATTENDED" ]; then
     name="${AGENT_SECRETS_SEED_NAME:-ANTHROPIC_API_KEY}"
-    if [ ! -t 0 ]; then val="$(cat)"; else val="unattended-placeholder-value"; fi
+    # Seed-value resolution that CANNOT hang (feedback BLOCKER #3): the old `val="$(cat)"` blocked on
+    # `cat` forever when stdin was an OPEN-but-empty pipe (an agent session's inherited stdin never
+    # sends EOF). Resolve in priority order, none of which blocks unboundedly:
+    #   1. AGENT_SECRETS_SEED_VALUE env var (deterministic automation — no stdin plumbing needed)
+    #   2. a single piped line, read with a BOUNDED timeout (works with or without a trailing newline;
+    #      a 5s ceiling turns the old infinite hang into a fast fall-through)
+    #   3. a fake placeholder (the test/CI default)
+    if [ -n "${AGENT_SECRETS_SEED_VALUE+x}" ]; then
+      val="$AGENT_SECRETS_SEED_VALUE"
+    elif [ ! -t 0 ]; then
+      IFS= read -r -t 5 val 2>/dev/null || true      # val is set even on EOF-without-newline; timeout ⇒ empty
+      [ -n "$val" ] || val="unattended-placeholder-value"
+    else
+      val="unattended-placeholder-value"
+    fi
     printf '%s' "$val" | store_add "$name"; unset val; ui_ok "stored $name"; return 0
   fi
   name="$(ui_menu 'Which secret first?' ANTHROPIC_API_KEY OPENAI_API_KEY 'custom')"

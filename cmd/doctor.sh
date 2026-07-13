@@ -10,6 +10,7 @@ case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render do
 . "$AGENT_SECRETS_LIB/store.sh"       # every call below is guarded against an unset/absent store
 . "$AGENT_SECRETS_LIB/keychain.sh"    # guarded against an unset/absent store
 . "$AGENT_SECRETS_LIB/egress.sh"      # egress allowlist status for gate (e)
+. "$AGENT_SECRETS_LIB/deps.sh"        # toolchain adequacy (sops SOPS_AGE_KEY_CMD version gate) — fn defs only
 
 FORMAT=text ; REDACT=0 ; FIX=0 ; GATES=0
 for arg in "$@"; do
@@ -69,6 +70,26 @@ check_custody() {
   else
     _row custody bad "keychain custody" "unavailable (not set up)"
   fi
+}
+
+check_toolchain() {  # age + sops present, and sops NEW ENOUGH for SOPS_AGE_KEY_CMD (feedback BLOCKER #4)
+  local v
+  if agsec_have age && agsec_have age-keygen; then _row toolchain ok "age" "present"
+  else _row toolchain bad "age" "missing — re-run the installer (or install age)"; fi
+  if agsec_have sops; then
+    v="$(sops --version 2>/dev/null | head -1 | awk '{print $2}')"
+    if [ -n "$v" ] && _deps_ver_ge "$v" "$DEPS_SOPS_MIN"; then
+      _row toolchain ok "sops" "$v (SOPS_AGE_KEY_CMD supported)"
+    else
+      # THE feedback failure, named: an old sops silently ignores SOPS_AGE_KEY_CMD and the store reads
+      # as "canary unreadable" with no clue why. Point straight at the cause + the fix.
+      _row toolchain bad "sops" "${v:-unknown} < $DEPS_SOPS_MIN — lacks SOPS_AGE_KEY_CMD; store won't decrypt via the Keychain selector. Re-run the installer (vendors $DEPS_SOPS_VER) or: brew upgrade sops"
+    fi
+  else
+    _row toolchain bad "sops" "missing — re-run the installer (or install sops >= $DEPS_SOPS_MIN)"
+  fi
+  if agsec_have gum; then _row toolchain ok "gum" "present"
+  else _row toolchain attn "gum" "absent (optional — plain-text UI is used)"; fi
 }
 
 _scan_rotate() {  # manifest.toml rotate_by scan — names + days only, never values
@@ -205,6 +226,7 @@ check_gates() {  # execution gates (c)/(d)/(e) — (c) degradation is a note, ne
 
 run_checks() {
   check_custody
+  check_toolchain
   check_store
   check_backup
   check_injection
