@@ -153,14 +153,10 @@ main() {
     manifest_record_launchd "$SMOKE_LABEL" "$SMOKE_PLIST"
   fi
 
-  # Record a REVERT point for the ~/.claude/settings.json apiKeyHelper edit that `setup` applies.
-  # We own the record + rollback, not the write (the wizard/injection step performs the edit).
-  local settings="$HOME_DIR/.claude/settings.json"
-  if [ -f "$settings" ]; then
-    local backup="$STATE_DIR/settings.json.pre-install.bak"
-    _run cp "$settings" "$backup"
-    manifest_record_edit "$settings" "$backup" "apiKeyHelper"
-  fi
+  # The ~/.claude/settings.json apiKeyHelper edit + its revert point are owned SOLELY by `setup`
+  # (_wire_tools): it records a write-once backup when the file pre-existed, or a `created` marker when
+  # it did not (rollback then deletes the tool-made file instead of leaving an empty {}). Recording it
+  # here too would double the revert record, so the installer intentionally does not.
 
   # --- OPT-IN: machine-wide agent discovery ------------------------------------
   # Claude Code loads ~/.claude/CLAUDE.md into EVERY session in EVERY repo, so a marker-delimited

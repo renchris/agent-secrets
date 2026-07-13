@@ -102,10 +102,18 @@ _wire_tools() {
   ui_ok "installed wrappers to $bindir"
   local sj; sj="$(agsec_home)/.claude/settings.json"
   if agsec_have jq; then
-    mkdir -p "$(dirname "$sj")"; [ -f "$sj" ] || printf '{}\n' >"$sj"
-    local bak; bak="$(agsec_state_dir)/settings.json.bak"; mkdir -p "$(dirname "$bak")"; cp "$sj" "$bak"
+    mkdir -p "$(dirname "$sj")"
+    local pre=1; [ -f "$sj" ] || pre=0            # existed BEFORE we touched it?
+    [ "$pre" = 1 ] || printf '{}\n' >"$sj"
+    local bak; bak="$(agsec_state_dir)/settings.json.bak"; mkdir -p "$(dirname "$bak")"
+    if [ "$pre" = 1 ]; then
+      [ -f "$bak" ] || cp "$sj" "$bak"            # WRITE-ONCE: a re-run must not overwrite the pristine backup
+      manifest_record_edit "$sj" "$bak" apiKeyHelper >/dev/null 2>&1 || true
+    else
+      # We created settings.json → rollback DELETES it (restoring an empty {} would leave residue).
+      manifest_record_edit "$sj" "$bak" apiKeyHelper created >/dev/null 2>&1 || true
+    fi
     jq --arg h "$bindir/apiKeyHelper" '.apiKeyHelper=$h' "$sj" >"$sj.new" && mv "$sj.new" "$sj"
-    manifest_record_edit "$sj" "$bak" apiKeyHelper >/dev/null 2>&1 || true
     ui_ok "wired apiKeyHelper into settings.json (reversible)"
   fi
   ui_say "The Dock Cursor stays secret-free on purpose — use 'cursor-agent' for agent work."

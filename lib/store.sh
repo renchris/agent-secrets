@@ -59,6 +59,13 @@ store_add() {
   case "$name" in [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*) agsec_die "store_add: invalid name '$name'";; esac
   agsec_secure_umask
   local value; IFS= read -r value || true
+  # Fail CLOSED on a multi-line value: a second line means the caller piped a multi-line/file secret to
+  # `add`, which stores only the first line — a silent truncation reported as success. The extra line
+  # lands in a shell var exactly as `value` already does (no new exposure) and is never printed.
+  if IFS= read -r _rest || [ -n "${_rest:-}" ]; then
+    unset value _rest
+    agsec_die "add takes a SINGLE-LINE value (received more than one line). Multi-line secrets travel via share/receive; a single-line value is what 'run' can inject as an env var."
+  fi
   local recips; recips="$(_store_recipients)" || agsec_die "store_add: no age recipients (run setup)"
   local store plain; store="$(agsec_store_file)"; plain="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"
   # Shred the whole-store plaintext (+ transient copies) on an interrupt: without this, a SIGINT
@@ -78,10 +85,12 @@ store_add() {
 
 # Upsert NAME with a MULTI-LINE value from STDIN (for share/receive: PEM keys, JSON blobs, etc.).
 # sops dotenv rejects raw newlines in a value (verified: "invalid dotenv input line"), so the value is
-# base64-encoded to a single dotenv line. CONSUMERS MUST base64-DECODE on extract: the stored bytes are
-# base64(value), so `store_extract NAME | base64 -D` yields the original value byte-for-byte. Like
-# store_add the value never enters a shell variable or argv — STDIN pipes straight through base64 into
-# the 0600 plaintext temp; only the encrypted store and the base64 line ever touch disk.
+# base64-encoded to a single dotenv line AND the manifest row is flagged `encoding = "base64"`. On
+# injection, store_exec/_store_b64_prelude base64-DECODES exactly the flagged names so `run` gives the
+# child the ORIGINAL bytes, not base64 (store_extract still returns the raw base64 — decode with
+# `store_extract NAME | base64 -D`). UNLIKE store_add (which briefly holds the one-line value in a
+# `value` shell variable), the multi-line path pipes STDIN straight through base64 into the 0600
+# plaintext temp — the value never enters a shell variable or argv; only the ciphertext + base64 line touch disk.
 store_add_multiline() {
   local name="${1:?store_add_multiline: NAME required}"
   case "$name" in [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*) agsec_die "store_add_multiline: invalid name '$name'";; esac
@@ -99,6 +108,31 @@ store_add_multiline() {
     || { _store_shred "$plain"; _store_shred "$store.new"; agsec_die "store_add_multiline: sops encrypt failed"; }
   mv -f "$store.new" "$store"; _store_shred "$plain"; trap - INT TERM
   _store_manifest_upsert "$name"
+  store_manifest_set_sharing "$name" encoding=base64   # flag for _store_b64_prelude to decode on inject
+}
+
+# Names of store entries whose manifest row is flagged `encoding = "base64"` (multi-line values that
+# must be base64-decoded at injection time). Names only — never a value. Matches store_add's NAME regex.
+_store_b64_names() {
+  local man; man="$(agsec_manifest_toml)"; [ -f "$man" ] || return 0
+  awk '
+    /^\[\[credential\]\]/ { name=""; enc="" }
+    /^name = "/           { n=$0; sub(/^name = "/,"",n); sub(/".*/,"",n); name=n }
+    /^encoding = "base64"/ { if (name!="") print name }
+  ' "$man"
+}
+
+# A POSIX-sh prelude (empty when nothing is flagged) that sops exec-env runs BEFORE the child command:
+# it base64-decodes exactly the flagged env vars IN PLACE, so the child sees the original multi-line
+# value byte-for-byte. Names come from the manifest and match ^[A-Za-z_][A-Za-z0-9_]*$, so they are
+# safe to embed. The `printf X`/`%%X` guard preserves any TRAILING newline that `$(...)` would strip.
+_store_b64_prelude() {
+  local names; names="$(_store_b64_names)"; [ -n "$names" ] || return 0
+  names="$(printf '%s' "$names" | tr '\n' ' ')"
+  # The single quotes are DELIBERATE: $__n/$__v/$__d and the $(...) are for the downstream `sh -c` that
+  # sops exec-env runs, not for bash here. (SC2016 would "fix" that by expanding them now — wrong.)
+  # shellcheck disable=SC2016
+  printf 'for __n in %s; do eval __v="\\$$__n"; [ -n "$__v" ] && { __d=$(printf %%s "$__v" | base64 -D; printf X); export "$__n=${__d%%X}"; }; done; unset __n __v __d; ' "$names"
 }
 
 # Append a values-free manifest.toml row if NAME is not already present.
@@ -184,7 +218,7 @@ store_exec() {
   [ "$#" -ge 1 ] || agsec_die "store_exec: usage: store_exec -- <cmd> [args...]"
   _store_export_key
   local cmd; printf -v cmd '%q ' "$@"
-  exec sops exec-env "$(agsec_store_file)" "$cmd"
+  exec sops exec-env "$(agsec_store_file)" "$(_store_b64_prelude)$cmd"
 }
 
 # Like store_exec but does NOT replace the process — runs the child in a subshell and RETURNS its exit
@@ -195,7 +229,7 @@ store_exec_managed() {
   [ "$#" -ge 1 ] || agsec_die "store_exec_managed: usage: store_exec_managed -- <cmd> [args...]"
   _store_export_key
   local cmd; printf -v cmd '%q ' "$@"
-  sops exec-env "$(agsec_store_file)" "$cmd"
+  sops exec-env "$(agsec_store_file)" "$(_store_b64_prelude)$cmd"
 }
 
 # Seed the in-store canary: a plausibly-named honeytoken entry a whole-store sweep grabs.

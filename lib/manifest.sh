@@ -42,9 +42,11 @@ manifest_record_file() {
 }
 
 manifest_record_edit() {
-  local p="$1" backup="$2" marker="${3:-}"
-  _manifest_append "$(jq -cn --arg path "$p" --arg backup "$backup" --arg marker "$marker" \
-    '{type:"edit",path:$path,backup:$backup,marker:$marker}')"
+  local p="$1" backup="$2" marker="${3:-}" created="${4:-}"
+  # created="created" ⇒ the tool CREATED this file (there was nothing before); rollback DELETES it
+  # rather than restoring the backup (which would leave an empty {} residue).
+  _manifest_append "$(jq -cn --arg path "$p" --arg backup "$backup" --arg marker "$marker" --arg created "$created" \
+    '{type:"edit",path:$path,backup:$backup,marker:$marker,created:($created=="created")}')"
 }
 
 manifest_record_keychain() {
@@ -57,15 +59,15 @@ manifest_record_launchd() {
 }
 
 manifest_record_pathblock() {
-  _manifest_append "$(jq -cn --arg file "$1" --arg marker "$2" \
-    '{type:"pathblock",file:$file,marker:$marker}')"
+  _manifest_append "$(jq -cn --arg file "$1" --arg marker "$2" --arg created "${3:-0}" \
+    '{type:"pathblock",file:$file,marker:$marker,created:($created=="1")}')"
 }
 
 # --- write a marker-delimited PATH block idempotently + record it ---------------
 # install.sh delegates here so the WRITE format matches the rollback STRIP format.
 manifest_pathblock_install() {
-  local file="$1" marker="$2" line="$3" body
-  [ -f "$file" ] || : >"$file"
+  local file="$1" marker="$2" line="$3" body created=0
+  [ -f "$file" ] || { created=1; : >"$file"; }          # note when WE create the rc / CLAUDE.md file
   body="$(_manifest_strip_block "$file" "$marker")"      # drop any prior block first
   {
     printf '%s\n' "$body"
@@ -73,7 +75,7 @@ manifest_pathblock_install() {
     printf '%s\n' "$line"
     _manifest_block_end "$marker"; printf '\n'
   } >"${file}.new" && mv "${file}.new" "$file"
-  manifest_record_pathblock "$file" "$marker"
+  manifest_record_pathblock "$file" "$marker" "$created"
 }
 
 # --- list -----------------------------------------------------------------------
@@ -155,10 +157,18 @@ _manifest_rb_file() {
 }
 
 _manifest_rb_edit() {
-  local rec="$1" dry="$2" p backup
-  p="$(jq -r '.path' <<<"$rec")"; backup="$(jq -r '.backup' <<<"$rec")"
-  if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) restore edit: $p <- $backup"; return 0; fi
-  if [ -f "$backup" ]; then cp "$backup" "$p" && agsec_ok "reverted edit: $p"
+  local rec="$1" dry="$2" p backup created
+  p="$(jq -r '.path' <<<"$rec")"; backup="$(jq -r '.backup' <<<"$rec")"; created="$(jq -r '.created // false' <<<"$rec")"
+  if [ "$dry" -eq 1 ]; then
+    if [ "$created" = true ]; then agsec_note "(dry-run) remove tool-created file: $p"
+    else agsec_note "(dry-run) restore edit: $p <- $backup"; fi
+    return 0
+  fi
+  if [ "$created" = true ]; then
+    # We created this file (e.g. settings.json where none existed) → delete it, don't leave an empty {}.
+    rm -f "$p" && agsec_ok "removed tool-created: $p"
+    rmdir "$(dirname "$p")" 2>/dev/null || true      # drop a now-empty ~/.claude the tool made
+  elif [ -f "$backup" ]; then cp "$backup" "$p" && agsec_ok "reverted edit: $p"
   else agsec_warn "edit backup missing, left as-is: $p"; fi
 }
 
@@ -177,11 +187,17 @@ _manifest_rb_launchd() {
 }
 
 _manifest_rb_pathblock() {
-  local rec="$1" dry="$2" file marker stripped
-  file="$(jq -r '.file' <<<"$rec")"; marker="$(jq -r '.marker' <<<"$rec")"
-  if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) strip PATH block '$marker' from: $file"; return 0; fi
+  local rec="$1" dry="$2" file marker stripped created
+  file="$(jq -r '.file' <<<"$rec")"; marker="$(jq -r '.marker' <<<"$rec")"; created="$(jq -r '.created // false' <<<"$rec")"
+  if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) strip block '$marker' from: $file"; return 0; fi
   [ -f "$file" ] || return 0
   stripped="$(_manifest_strip_block "$file" "$marker")"
-  printf '%s\n' "$stripped" >"${file}.new" && mv "${file}.new" "$file"
-  agsec_ok "stripped PATH block: $file"
+  # If WE created this file and only blank lines remain after stripping our block, remove it — don't
+  # leave an orphaned empty ~/.zshenv / ~/.claude/CLAUDE.md (the "zero tool residue" claim).
+  if [ "$created" = true ] && ! printf '%s' "$stripped" | grep -q '[^[:space:]]'; then
+    rm -f "$file" && agsec_ok "removed tool-created: $file"
+  else
+    printf '%s\n' "$stripped" >"${file}.new" && mv "${file}.new" "$file"
+    agsec_ok "stripped block: $file"
+  fi
 }

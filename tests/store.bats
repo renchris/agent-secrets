@@ -85,3 +85,29 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   run bash -c "grep -rnE '(agsec_log|agsec_note|agsec_warn|agsec_die|agsec_ok|agsec_attn|agsec_bad|ui_say|ui_ok|ui_warn|ui_bad|echo)[^\n]*\\\$(value|val|secret|apikey)([^A-Za-z_]|\$)' '$REPO_ROOT/lib' '$REPO_ROOT/cmd' || true"
   [ -z "$output" ]
 }
+
+@test "add fails CLOSED on a multi-line value (no silent first-line truncation)" {
+  setup_store
+  run bash -c "printf 'line-one\nline-two\n' | bash '$REPO_ROOT/bin/agent-secrets' add MULTI_ADD"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"SINGLE-LINE"* ]]
+  # nothing stored under that name
+  run bash "$REPO_ROOT/bin/agent-secrets" list
+  [[ "$output" != *"MULTI_ADD"* ]]
+}
+
+@test "multi-line value injects DECODED byte-for-byte (trailing newline preserved) via run" {
+  setup_store
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/keychain.sh"; . "$REPO_ROOT/lib/store.sh"
+  printf -- '-----BEGIN-----\nlineA\nlineB\n-----END-----\n' >"$AGENT_SECRETS_HOME/pem.in"   # note trailing \n
+  store_add_multiline PEM_KEY <"$AGENT_SECRETS_HOME/pem.in"
+  # run injects the DECODED value; child writes it to a file so a trailing newline survives capture
+  bash "$REPO_ROOT/bin/agent-secrets" run -- sh -c 'printf %s "$PEM_KEY" > "$AGENT_SECRETS_HOME/pem.out"'
+  cmp "$AGENT_SECRETS_HOME/pem.in" "$AGENT_SECRETS_HOME/pem.out"     # byte-for-byte, incl. trailing newline
+  # and the child must see decoded text, never the base64 form
+  run bash "$REPO_ROOT/bin/agent-secrets" run -- sh -c 'printf %s "$PEM_KEY"'
+  [[ "$output" == *"BEGIN"* ]]
+  [[ "$output" != *"LS0tLS1CRUdJTi"* ]]   # base64 of "-----BEGIN"; absence proves it was decoded
+}

@@ -66,3 +66,51 @@ load test_helper
   run grep -c '^direction = ' "$(agsec_manifest_toml)"; [ "$output" -eq 0 ]
   run grep -c 'name = "MY_SHARED"' "$(agsec_manifest_toml)"; [ "$output" -eq 1 ] # credential row survives
 }
+
+@test "rollback DELETES a tool-created settings.json (no empty {} residue)" {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+  local sj="$AGENT_SECRETS_HOME/settings.json" bak="$AGENT_SECRETS_HOME/nobak"
+  printf '{"apiKeyHelper":"x"}\n' >"$sj"          # the tool created + edited it (no pre-existing backup)
+  manifest_record_edit "$sj" "$bak" apiKeyHelper created
+  manifest_rollback >/dev/null
+  [ ! -f "$sj" ]                                   # removed, not restored to {}
+}
+
+@test "rollback RESTORES a pre-existing settings.json to its pristine backup" {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+  local sj="$AGENT_SECRETS_HOME/settings.json" bak="$AGENT_SECRETS_HOME/pristine.bak"
+  printf '{"user":"kept"}\n' >"$sj"; cp "$sj" "$bak"          # pristine backup captured pre-edit
+  printf '{"user":"kept","apiKeyHelper":"x"}\n' >"$sj"        # tool's edit
+  manifest_record_edit "$sj" "$bak" apiKeyHelper              # no created flag → restore
+  manifest_rollback >/dev/null
+  run cat "$sj"; [[ "$output" == *'"user":"kept"'* ]]; [[ "$output" != *"apiKeyHelper"* ]]
+}
+
+@test "rollback removes a tool-CREATED rc file left empty after stripping the PATH block" {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+  local rc="$AGENT_SECRETS_HOME/.zshenv-created"
+  [ ! -f "$rc" ]                                              # absent → install must note created=1
+  manifest_pathblock_install "$rc" "agent-secrets" 'export PATH="$HOME/bin:$PATH"'
+  [ -f "$rc" ]
+  manifest_rollback >/dev/null
+  [ ! -f "$rc" ]                                              # orphan removed (only our block was in it)
+}
+
+@test "rollback keeps a PRE-EXISTING rc file, stripping only our block" {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+  local rc="$AGENT_SECRETS_HOME/.zshenv-existing"
+  printf 'export EDITOR=vim\n' >"$rc"                         # user content pre-exists → created=0
+  manifest_pathblock_install "$rc" "agent-secrets" 'export PATH="$HOME/bin:$PATH"'
+  manifest_rollback >/dev/null
+  [ -f "$rc" ]                                                # kept
+  run grep -c 'EDITOR=vim' "$rc"; [ "$output" -eq 1 ]        # user line preserved
+  run grep -c 'HOME/bin' "$rc"; [ "$output" -eq 0 ]          # our block stripped
+}

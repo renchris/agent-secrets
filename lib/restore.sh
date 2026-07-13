@@ -19,7 +19,15 @@ restore_flow() {
   agsec_secure_umask
   local key
   if [ -t 0 ]; then
-    key="$(ui_read_secret 'Paste your saved age private key')"
+    # An age key file is MULTI-LINE (comment lines + the AGE-SECRET-KEY-1 line), so a single-line
+    # ui_read_secret would capture only the leading comment. Read the whole paste hidden (stty -echo),
+    # ended by Ctrl-D — the same full material kc_add expects.
+    ui_say "Paste your saved age private key (all lines), then press Ctrl-D:"
+    local _stty; _stty="$(stty -g 2>/dev/null || true)"
+    stty -echo 2>/dev/null || true
+    key="$(cat)"
+    [ -n "$_stty" ] && stty "$_stty" 2>/dev/null || true
+    printf '\n' >&2
   else
     key="$(cat)"   # full multi-line key material (age key files carry comment lines)
   fi

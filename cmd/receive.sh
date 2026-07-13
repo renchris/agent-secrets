@@ -152,8 +152,9 @@ if ! age -d -i "$idf" "$armor_tmp" 2>/dev/null >"$pt"; then
 fi
 rm -f "$idf" "$armor_tmp" "$dbody"; idf=""; armor_tmp=""; dbody=""
 
-# Multi-line iff a newline exists that is not the sole trailing newline (a single-line API key stored
-# raw stays run-injectable; a PEM/JSON blob is base64-round-tripped so its newlines survive).
+# Multi-line iff a newline exists beyond a sole trailing newline. A single-line value is stored raw; a
+# PEM/JSON blob is base64-encoded and its manifest row flagged encoding=base64 so the newlines survive
+# dotenv — and `run` base64-DECODES flagged entries on injection, so the child gets the original bytes.
 nl_count="$(tr -dc '\n' <"$pt" | wc -c | tr -d ' ')"
 trailing=0
 if [ -s "$pt" ] && [ "$(tail -c1 "$pt" | wc -l | tr -d ' ')" -eq 1 ]; then trailing=1; fi
