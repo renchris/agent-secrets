@@ -25,6 +25,11 @@ agsec_require gh
 agsec_require git
 gh auth status >/dev/null 2>&1 || agsec_die "gh is not authenticated — run: gh auth login"
 
+# If we inherited OUR OWN egress loopback proxy (from a wrapping claude-agent/run), it must NOT bound
+# backup's gh/git push — backup is a trusted, ciphertext-only push, not agent egress. Drop a 127.0.0.1
+# proxy so the push reaches GitHub; KEEP a corporate (non-loopback) proxy so backup still honors it.
+case "${HTTPS_PROXY:-}" in *127.0.0.1*|*localhost*) unset HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy ;; esac
+
 cfg="$(agsec_config_dir)"
 [ -f "$(agsec_store_file)" ] || agsec_die "no store to back up — run: agent-secrets setup"
 marker="$cfg/backup-repo"
@@ -40,7 +45,13 @@ fi
 case "$REPO" in */*) : ;; *) agsec_die "--repo must be owner/name (got: $REPO)" 2 ;; esac
 
 # Ensure the PRIVATE repo exists (creating one is a side effect → confirm unless --yes/UNATTENDED).
-if ! gh repo view "$REPO" >/dev/null 2>&1; then
+if gh repo view "$REPO" >/dev/null 2>&1; then
+  # Exists already → it MUST be private. The ciphertext is safe, but the store's secret-NAME inventory
+  # and your age recipients are not for the public — refuse to push into a public repo.
+  if [ "$(gh repo view "$REPO" --json isPrivate -q .isPrivate 2>/dev/null)" = "false" ]; then
+    agsec_die "$REPO is PUBLIC — refusing to back up there (the encrypted store's secret-name inventory must stay private). Make it private, or choose another repo with --repo."
+  fi
+else
   if [ -z "$ASSUME_YES" ]; then
     ui_confirm "Create PRIVATE GitHub repo $REPO for your encrypted-store backup?" y || agsec_die "backup cancelled"
   fi

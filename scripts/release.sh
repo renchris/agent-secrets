@@ -33,9 +33,13 @@ _say "==> archiving ${TAG} → ${PKG}"
 git archive --prefix="agent-secrets-${TAG}/" HEAD -o "$WORK/$PKG"
 tar -tzf "$WORK/$PKG" | grep -q "^agent-secrets-${TAG}/lib/common.sh$" \
   || _die "archive layout check failed — expected agent-secrets-${TAG}/lib/common.sh"
-if tar -tzf "$WORK/$PKG" | grep -q "^agent-secrets-${TAG}/install.sh$"; then
-  _die "install.sh leaked into the tarball — check .gitattributes export-ignore (baking would be circular)"
-fi
+# Nothing export-ignored may leak into the runtime tarball: install.sh (baking would be circular) and
+# the maintainer-only scripts (telemetry-gate/record-demo/release). Assert each is absent.
+for _leak in install.sh scripts/telemetry-gate.sh scripts/record-demo.sh scripts/release.sh; do
+  if tar -tzf "$WORK/$PKG" | grep -q "^agent-secrets-${TAG}/${_leak}$"; then
+    _die "$_leak leaked into the tarball — check .gitattributes export-ignore"
+  fi
+done
 
 # 2) Compute the digest and BAKE it into install.sh (git-ref channel).
 SHA="$(shasum -a 256 "$WORK/$PKG" | awk '{print $1}')"
@@ -72,6 +76,12 @@ _say "Publish:"
 _say "  git push -f origin ${TAG} && git push origin HEAD"
 _say "  gh release delete ${TAG} --yes   # re-cut only: drop the old release's assets (keeps the tag)"
 _say "  gh release create ${TAG} ${PKG} ${PKG}.sha256 --title ${TAG} --generate-notes"
+# The install.sh served via raw-git at ${TAG} MUST be the one whose baked digest matches THIS tarball
+# (built from HEAD). If the tag isn't at HEAD (tag move declined), publishing would strand a mismatched
+# installer at the tag — refuse.
+if [ "$(git rev-parse "$TAG" 2>/dev/null)" != "$(git rev-parse HEAD)" ]; then
+  _die "tag ${TAG} is not at HEAD — the install.sh served at the tag would not match this tarball's baked digest. Re-run and confirm the tag move before publishing."
+fi
 if _confirm "Run the gh release now?"; then
   git push -f origin "$TAG" && git push origin HEAD
   gh release delete "$TAG" --yes >/dev/null 2>&1 || true   # re-cut: remove the old release, keep our new tag

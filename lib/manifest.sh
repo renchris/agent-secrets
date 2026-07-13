@@ -222,6 +222,7 @@ _manifest_rb_pathblock() {
   # leave an orphaned empty ~/.zshenv / ~/.claude/CLAUDE.md (the "zero tool residue" claim).
   if [ "$created" = true ] && ! printf '%s' "$stripped" | grep -q '[^[:space:]]'; then
     rm -f "$file" && agsec_ok "removed tool-created: $file"
+    rmdir "$(dirname "$file")" 2>/dev/null || true   # drop a now-empty tool-created dir (e.g. ~/.claude)
   else
     printf '%s\n' "$stripped" >"${file}.new" && mv "${file}.new" "$file"
     agsec_ok "stripped block: $file"

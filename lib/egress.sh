@@ -65,8 +65,15 @@ egress_start() {
   EGRESS_PORT="$port"
 }
 
-# _egress_reap — kill the proxy iff we hold a real PID. NEVER `kill 0`/`kill ""` (SIGTERMs the group).
-_egress_reap() { case "${EGRESS_PROXY_PID:-}" in ''|0|*[!0-9]*) : ;; *) kill "$EGRESS_PROXY_PID" 2>/dev/null || true ;; esac; }
+# _egress_reap — tear down the proxy iff we hold a real PID. The proxy made itself a process-group
+# leader, so `kill -TERM -PID` (negative = the whole group) sweeps its forked per-connection children
+# too; fall back to the single PID. NEVER `kill 0`/`kill ""` (that SIGTERMs the CALLER'S group).
+_egress_reap() {
+  case "${EGRESS_PROXY_PID:-}" in
+    ''|0|*[!0-9]*) return 0 ;;
+  esac
+  kill -TERM "-$EGRESS_PROXY_PID" 2>/dev/null || kill "$EGRESS_PROXY_PID" 2>/dev/null || true
+}
 
 # The single entry point for `run` and the wrappers: inject secrets AND, when an allowlist is configured
 # (and not opted out via AGENT_SECRETS_NO_EGRESS), route the child's HTTP(S) through the loopback bound.

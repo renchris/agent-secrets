@@ -76,7 +76,7 @@ run	exit	1	no store (run setup)
 run	exit	2	usage error (missing `--` or no command)
 run	namesonly	values enter the child env only; the tool never prints them
 doctor	synopsis	agent-secrets doctor [--format=json] [--redact] [--gates] [--fix]
-doctor	summary	Health check across custody, store, injection, hygiene, maintenance, supply-chain.
+doctor	summary	Health check across custody, store, backup, injection, discovery, hygiene, maintenance, supply-chain.
 doctor	desc	Each check reports ✓/⚠/✗ with NAMES and status only. Exit is 0 when there is no ✗, else 1 — so an agent can gate on it. Non-destructive by default; --fix applies only safe fixes.
 doctor	flag	--format=json	machine-readable object {"checks":[{category,status,check,detail}],"exit":0|1}; exit=1 iff any status is "bad"; parse with jq '.checks[]|select(.status=="bad")' (status ∈ ok|attn|bad); no values
 doctor	flag	--redact	replace any sensitive-looking token with a sha256: digest in output

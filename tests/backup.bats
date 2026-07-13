@@ -86,6 +86,18 @@ _rm_remote() { [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] && rm -rf "$(dirname "$AGSEC_M
   rm -rf "$dir"
 }
 
+@test "backup REFUSES an existing PUBLIC repo (the secret-name inventory must stay private)" {
+  setup_store
+  local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/agsec-remote.XXXXXX")"
+  export AGSEC_MOCK_GH_REMOTE="$dir/store.git"
+  git init --bare -q "$AGSEC_MOCK_GH_REMOTE"       # repo exists…
+  export AGSEC_MOCK_GH_PRIVATE=false               # …and is PUBLIC
+  run agsec backup --repo me/store --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"PUBLIC"* ]]
+  unset AGSEC_MOCK_GH_PRIVATE; rm -rf "$dir"
+}
+
 @test "backup strips the colleague-share social graph from the pushed manifest" {
   setup_store
   printf 'x' | store_add SHARED_ONE

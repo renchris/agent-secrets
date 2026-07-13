@@ -30,13 +30,18 @@ open(my $pf, '>', $portfile) or die "egress-proxy: cannot write portfile $portfi
 print $pf $server->sockport;
 close $pf;
 
+# Become our own process-group leader so the parent's reap (`kill -TERM -PID`) sweeps every forked
+# per-connection child too, leaving no orphaned relay processes after `run` exits.
+eval { setpgrp(0, 0); 1 } or do { };   # best-effort; harmless where setpgrp is unavailable
+
 sub load_rules {
   my @rules;
   open(my $fh, '<', $allowfile) or return @rules;
   while (my $l = <$fh>) {
     $l =~ s/\r?\n$//;
+    $l =~ s/#.*//;                 # strip a whole-line OR inline comment (hostnames never contain #)
     $l =~ s/^\s+|\s+$//g;
-    next if $l eq '' || $l =~ /^#/;
+    next if $l eq '';
     push @rules, lc $l;
   }
   close $fh;
@@ -119,6 +124,7 @@ sub handle {
 
 while (my $client = $server->accept) {
   my $pid = fork;
+  if (!defined $pid) { close $client; next; }   # fork failed → drop THIS connection, keep the proxy alive
   next if $pid;            # parent keeps accepting
   $server->close;          # child
   handle($client);

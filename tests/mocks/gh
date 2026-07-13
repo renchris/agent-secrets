@@ -19,7 +19,10 @@ case "$sub" in
     action="${1:-}"; shift || true
     [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] || exit 0
     case "$action" in
-      view)   [ -d "$AGSEC_MOCK_GH_REMOTE" ] ;;
+      view)
+        [ -d "$AGSEC_MOCK_GH_REMOTE" ] || exit 1                       # not created → does not exist
+        case " $* " in *" --json "*) printf '%s\n' "${AGSEC_MOCK_GH_PRIVATE:-true}" ;; esac  # isPrivate query
+        exit 0 ;;
       create) # GitHub defaults new repos to `main`; mirror that so remote HEAD isn't a dangling `master`
         git init --bare -q -b main "$AGSEC_MOCK_GH_REMOTE" 2>/dev/null \
           || { git init --bare -q "$AGSEC_MOCK_GH_REMOTE"; git -C "$AGSEC_MOCK_GH_REMOTE" symbolic-ref HEAD refs/heads/main; } ;;

@@ -15,6 +15,9 @@ case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render un
 
 main() {
   local dry=0
+  # Reject an unknown first arg — a mistyped `--dry-run` (e.g. `--dryrun`) must NOT silently fall
+  # through to a real, destructive uninstall.
+  case "${1:-}" in ''|--dry-run) : ;; *) agsec_die "uninstall: unknown argument: $1 (only --dry-run or --help)" 2 ;; esac
   [ "${1:-}" = "--dry-run" ] && dry=1
 
   # manifest_rollback drives EVERYTHING through jq (record parsing + rewrites). Without jq it would fail
@@ -66,7 +69,7 @@ main() {
     agsec_note "(dry-run) rm tool state dir: $state_dir"
   else
     rm -rf "$state_dir"
-    agsec_ok "uninstall complete — zero tool residue$([ "$purge" -eq 1 ] && printf '; store purged' || printf '; store kept')"
+    agsec_ok "uninstall complete — every recorded artifact removed$([ "$purge" -eq 1 ] && printf '; store purged' || printf '; store kept')"
   fi
 }
 
