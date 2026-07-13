@@ -126,6 +126,15 @@ check_injection() {
   fi
 }
 
+check_backup() {  # is an off-machine second copy configured? (makes disaster recovery real, not a hope)
+  local marker; marker="$(agsec_config_dir)/backup-repo"
+  if [ -f "$marker" ] && [ -s "$marker" ]; then
+    _row backup ok "off-machine backup" "configured ($(cat "$marker"))"
+  else
+    _row backup attn "off-machine backup" "none — run: agent-secrets backup (or keep a copy of ~/.config/secrets/ somewhere safe)"
+  fi
+}
+
 check_discovery() {  # is the opt-in machine-wide agent-discovery block present in the GLOBAL Claude memory?
   local cm marker; cm="$(agsec_home)/.claude/CLAUDE.md"
   marker="# >>> ${AGENT_SECRETS_DISCOVERY_MARKER} >>>"
@@ -186,6 +195,7 @@ check_gates() {  # execution gates (c)/(d)/(e) — (c) degradation is a note, ne
 run_checks() {
   check_custody
   check_store
+  check_backup
   check_injection
   check_discovery
   check_hygiene

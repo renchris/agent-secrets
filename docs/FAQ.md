@@ -17,10 +17,13 @@ saved key — your store decrypts. (There's a tested "restore drill" for exactly
 
 ### Do I need to back up my store?
 
-If you let the tool create a **private GitHub repo** for your store, it's already backed up there. If
-you keep the store local-only, keep a second copy of `~/.config/secrets/` somewhere safe —
-`agent-secrets doctor` warns you when it has no second copy. Losing both the store and your keys
-means the secrets are unrecoverable (which is the point — no one else can read them either).
+Yes — keep one off-machine copy. The easy path: **`agent-secrets backup`** pushes your **encrypted**
+store (ciphertext only — never your age private key) to a private GitHub repo via `gh`, so a lost or
+dead Mac stays recoverable. `agent-secrets doctor` reports whether that off-machine copy is configured.
+Prefer to do it by hand? Keep a copy of `~/.config/secrets/` somewhere safe. Either way, restore on a
+new machine with `agent-secrets setup --restore` and your password-manager-saved key. Losing **both**
+the store and your key means the secrets are unrecoverable — which is the point: no one else can read
+them either.
 
 ### Why does my Dock Cursor not have my secrets?
 

@@ -49,8 +49,9 @@ load test_helper
   [[ "$output" != *"separator is REQUIRED"* ]]   # did not fall into run's help
 }
 
-@test "help --json is a valid manifest with all 10 commands" {
-  run bash -c "bash '$REPO_ROOT/bin/agent-secrets' help --json | jq -e '.tool==\"agent-secrets\" and (.commands|length==10)'"
+@test "help --json is a valid manifest with all 11 commands" {
+  # top-level "agent-secrets" + 10 verbs (setup add list run doctor uninstall share receive pubkey backup)
+  run bash -c "bash '$REPO_ROOT/bin/agent-secrets' help --json | jq -e '.tool==\"agent-secrets\" and (.commands|length==11)'"
   [ "$status" -eq 0 ]
 }
 
@@ -58,6 +59,7 @@ load test_helper
   run bash -c "bash '$REPO_ROOT/bin/agent-secrets' help --json | jq -e '
     (.commands[] | select(.name==\"add\") | .examples[0].command | test(\"STDIN|printf|\\\\|\")) and
     (.commands[] | select(.name==\"doctor\") | .exit_codes | map(.code) | contains([0,1])) and
+    (.commands[] | select(.name==\"backup\") | .names_only | test(\"private key\")) and
     (.commands[] | select(.name==\"run\") | .synopsis | test(\"--\"))'"
   [ "$status" -eq 0 ]
 }

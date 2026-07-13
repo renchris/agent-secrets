@@ -1,2 +1,33 @@
 #!/usr/bin/env bash
-exit 0
+# tests/mocks/gh — GitHub CLI stand-in for the backup suite (and presence checks elsewhere).
+# A local BARE repo at $AGSEC_MOCK_GH_REMOTE stands in for the private GitHub repo:
+#   auth status         -> 0 (authenticated)
+#   api user -q .login  -> prints $AGSEC_MOCK_GH_LOGIN (default: testuser)
+#   repo view REPO      -> 0 iff the bare remote exists ("repo already created")
+#   repo create REPO …  -> git init --bare the remote
+#   repo clone REPO DIR -> git clone the remote into DIR
+# With no $AGSEC_MOCK_GH_REMOTE set every path still exits 0, so `agsec_have gh` / setup preflight
+# (which only check presence) keep working unchanged.
+set -euo pipefail
+sub="${1:-}"; shift || true
+case "$sub" in
+  auth) exit 0 ;;
+  api)
+    case " $* " in *" user "*) printf '%s\n' "${AGSEC_MOCK_GH_LOGIN:-testuser}" ;; esac
+    exit 0 ;;
+  repo)
+    action="${1:-}"; shift || true
+    [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] || exit 0
+    case "$action" in
+      view)   [ -d "$AGSEC_MOCK_GH_REMOTE" ] ;;
+      create) # GitHub defaults new repos to `main`; mirror that so remote HEAD isn't a dangling `master`
+        git init --bare -q -b main "$AGSEC_MOCK_GH_REMOTE" 2>/dev/null \
+          || { git init --bare -q "$AGSEC_MOCK_GH_REMOTE"; git -C "$AGSEC_MOCK_GH_REMOTE" symbolic-ref HEAD refs/heads/main; } ;;
+      clone)
+        repo="${1:-}"; dir="${2:-}"; : "$repo"
+        [ -n "$dir" ] || exit 1
+        git clone -q "$AGSEC_MOCK_GH_REMOTE" "$dir" ;;
+      *) exit 0 ;;
+    esac ;;
+  *) exit 0 ;;
+esac

@@ -18,7 +18,7 @@ _preflight() {
   if agsec_have fdesetup && fdesetup status 2>/dev/null | grep -q On; then ui_ok "FileVault on"
   else ui_warn "FileVault off — enable it for at-rest protection (guided, not silent)"; fi
   if agsec_have age && agsec_have sops; then ui_ok "age + sops present"; else ui_warn "age/sops missing — the installer bootstraps them"; fi
-  if agsec_have gh; then ui_ok "gh present (optional)"; else ui_say "  gh not present (optional — only for the private store repo)"; fi
+  if agsec_have gh; then ui_ok "gh present (enables: agent-secrets backup)"; else ui_say "  gh not present (optional — install it to use: agent-secrets backup)"; fi
 }
 
 _key_ceremony() {
@@ -117,7 +117,8 @@ _done_screen() {
   ui_say "  agent-secrets add <NAME>    — add a secret (value never shown)"
   ui_say "  agent-secrets run -- <cmd>  — run a command with secrets injected"
   ui_say "  agent-secrets doctor        — health check"
-  ui_say "Docs: README.md. Local-only store? keep a second copy (doctor warns if you don't)."
+  ui_say "Off-machine backup: run  agent-secrets backup  (doctor tracks whether you have one)."
+  ui_say "Docs: https://github.com/renchris/agent-secrets"
 }
 
 # Disaster recovery on a new machine: re-establish key custody from the saved age key + a restored

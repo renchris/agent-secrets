@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# cmd/backup.sh — push the ENCRYPTED store (ciphertext only) to a private GitHub repo via gh, so a
+# lost or dead Mac stays recoverable. This off-machine copy + your password-manager-saved age key =
+# a full restore (setup --restore). Names-only AND private-key-safe: only the sops-encrypted
+# secrets.env plus PUBLIC metadata ever leave; the age PRIVATE key is never staged, and a hard guard
+# refuses the push if any AGE-SECRET-KEY material is detected in the staging area.
+set -euo pipefail
+. "${AGENT_SECRETS_LIB:?run via bin/agent-secrets}/common.sh"
+case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render backup; exit 0 ;; esac
+. "$AGENT_SECRETS_LIB/ui.sh"
+
+REPO=""
+ASSUME_YES="${AGENT_SECRETS_UNATTENDED:+1}"   # automation implies "yes" to the create-repo confirm
+while [ "${1:-}" != "" ]; do
+  case "$1" in
+    --repo)    shift; REPO="${1:-}"; [ -n "$REPO" ] || agsec_die "--repo needs an owner/name argument" 2 ;;
+    --repo=*)  REPO="${1#--repo=}" ;;
+    --yes|-y)  ASSUME_YES=1 ;;
+    *)         agsec_die "backup: unknown argument: $1 (see --help)" 2 ;;
+  esac
+  shift
+done
+
+agsec_require gh
+agsec_require git
+gh auth status >/dev/null 2>&1 || agsec_die "gh is not authenticated — run: gh auth login"
+
+cfg="$(agsec_config_dir)"
+[ -f "$(agsec_store_file)" ] || agsec_die "no store to back up — run: agent-secrets setup"
+marker="$cfg/backup-repo"
+
+# Resolve the target repo: --repo > saved marker > env > derive <your-login>/agent-secrets-store.
+[ -z "$REPO" ] && [ -f "$marker" ] && REPO="$(cat "$marker")"
+[ -z "$REPO" ] && [ -n "${AGENT_SECRETS_BACKUP_REPO:-}" ] && REPO="$AGENT_SECRETS_BACKUP_REPO"
+if [ -z "$REPO" ]; then
+  login="$(gh api user -q .login 2>/dev/null || true)"
+  [ -n "$login" ] || agsec_die "could not determine your GitHub login — pass --repo owner/name"
+  REPO="$login/agent-secrets-store"
+fi
+case "$REPO" in */*) : ;; *) agsec_die "--repo must be owner/name (got: $REPO)" 2 ;; esac
+
+# Ensure the PRIVATE repo exists (creating one is a side effect → confirm unless --yes/UNATTENDED).
+if ! gh repo view "$REPO" >/dev/null 2>&1; then
+  if [ -z "$ASSUME_YES" ]; then
+    ui_confirm "Create PRIVATE GitHub repo $REPO for your encrypted-store backup?" y || agsec_die "backup cancelled"
+  fi
+  gh repo create "$REPO" --private >/dev/null 2>&1 || agsec_die "could not create $REPO (check gh permissions)"
+  agsec_ok "created private repo $REPO"
+fi
+
+# Stage CIPHERTEXT ONLY into a fresh clone (gh clone handles auth + the remote URL).
+stage="$(mktemp -d)"
+trap 'rm -rf "$stage"' EXIT
+gh repo clone "$REPO" "$stage" >/dev/null 2>&1 || agsec_die "could not clone $REPO"
+git -C "$stage" checkout -q -B main 2>/dev/null || true
+
+# The encrypted store + PUBLIC metadata needed to use it. NEVER age.key / recovery.key (private keys).
+copied=0
+for f in secrets.env .sops.yaml manifest.toml age.pub recovery.pub; do
+  [ -f "$cfg/$f" ] || continue
+  cp "$cfg/$f" "$stage/$f"; copied=1
+done
+[ "$copied" = 1 ] || agsec_die "nothing to back up (no store files under $cfg)"
+
+# Hard invariant: refuse to push if ANY private-key material slipped into staging (defense in depth —
+# the file list above already excludes age.key; this catches a future mistake before it leaves the Mac).
+if grep -rql "AGE-SECRET-KEY-1" "$stage" 2>/dev/null; then
+  agsec_die "refusing to push — private age key material detected in staging (backup is ciphertext-only)"
+fi
+
+# A README in the backup repo (written once) so a future you knows what this is and how to restore.
+if [ ! -f "$stage/README.md" ]; then
+  { printf '# agent-secrets encrypted-store backup\n\n'
+    printf 'Ciphertext only, sops+age encrypted. USELESS without your age PRIVATE key (saved in your\n'
+    printf 'password manager, NEVER stored here). Restore: copy secrets.env into ~/.config/secrets/,\n'
+    printf 'then run:  agent-secrets setup --restore  and paste your saved key.\n'; } >"$stage/README.md"
+fi
+
+git -C "$stage" add -A
+if git -C "$stage" diff --cached --quiet 2>/dev/null; then
+  agsec_ok "backup already up to date ($REPO)"
+else
+  git -C "$stage" -c user.email="agent-secrets@localhost" -c user.name="agent-secrets" \
+    commit -q -m "backup $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  git -C "$stage" push -q -u origin main 2>/dev/null || agsec_die "push to $REPO failed (check gh auth + repo access)"
+  agsec_ok "encrypted store backed up to $REPO (ciphertext only)"
+fi
+
+printf '%s\n' "$REPO" >"$marker"   # record the target so doctor can report the off-machine second copy

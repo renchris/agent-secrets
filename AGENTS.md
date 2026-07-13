@@ -56,6 +56,7 @@ writes, names_only }`. **Everything you need to construct a valid invocation is 
 | `pubkey [--copy]` | print your recipient key | **safe in an agent session** — public key only, never a secret |
 | `share <NAME>` | encrypt a secret to a colleague | **refuses in an agent session** (extracts a plaintext value) |
 | `receive` | ingest a pasted blob | **tty-gated** — refuses with no controlling terminal; blob on STDIN, confirm on `/dev/tty` |
+| `backup [--repo owner/name] [--yes]` | push an off-machine copy | **ciphertext only** to a private GitHub repo via `gh`; never the age private key; safe in a session |
 | `uninstall [--dry-run]` | remove everything | human-gated; `--dry-run` previews |
 
 Wrappers `claude-agent` / `cursor-agent` are `run` specialized for those tools. `rotate` and `demo`

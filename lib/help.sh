@@ -9,7 +9,7 @@
 #          | flag|arg|example|exit|env|seealso        (pair   → A=key/name, B=description)
 # VERB "" = top-level (agent-secrets itself).
 
-AGSEC_VERBS="setup add list run doctor uninstall share receive pubkey"
+AGSEC_VERBS="setup add list run doctor uninstall share receive pubkey backup"
 
 agsec_help_spec() {
   # NOTE: keep this the ONLY place command facts live; both renderers below read it.
@@ -134,6 +134,20 @@ pubkey	exit	0	printed
 pubkey	exit	1	no public key yet (run setup)
 pubkey	exit	2	usage error
 pubkey	namesonly	a PUBLIC key — safe on stdout/argv/clipboard, unlike every value path
+backup	synopsis	agent-secrets backup [--repo owner/name] [--yes]
+backup	summary	Push your ENCRYPTED store (ciphertext only) to a private GitHub repo — an off-machine second copy.
+backup	desc	Backs up the sops-encrypted secrets.env plus PUBLIC metadata (.sops.yaml recipients, manifest.toml, age.pub, recovery.pub) to a private GitHub repo via gh. The age PRIVATE key is NEVER included, so the backup is useless to anyone without the key you saved in your password manager — safe even if the repo leaks. Creates the private repo on first run (with a confirm), then snapshots on each call, and records the target so doctor can report the second copy. Recover on a new machine with `setup --restore`.
+backup	flag	--repo owner/name	the private GitHub repo to back up to (default: <your-login>/agent-secrets-store; saved after first use)
+backup	flag	--yes	skip the create-repo confirmation for automation (also implied by AGENT_SECRETS_UNATTENDED)
+backup	env	AGENT_SECRETS_BACKUP_REPO	default target repo when --repo is not given and none is saved yet
+backup	example	agent-secrets backup	back up to <your-login>/agent-secrets-store (creates it private on first run)
+backup	example	agent-secrets backup --repo me/secrets-backup	back up to a specific private repo
+backup	reads	~/.config/secrets/{secrets.env,.sops.yaml,manifest.toml,age.pub,recovery.pub} (ciphertext + public only)
+backup	writes	a commit to the private GitHub repo; ~/.config/secrets/backup-repo (the saved target)
+backup	exit	0	backed up (or already up to date)
+backup	exit	1	no store, gh not authenticated, or push failed
+backup	exit	2	usage error
+backup	namesonly	only ciphertext + public keys leave the Mac; the age private key and every secret value stay put
 SPEC
 }
 
