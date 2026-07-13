@@ -52,7 +52,9 @@ fi
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 gh repo clone "$REPO" "$stage" >/dev/null 2>&1 || agsec_die "could not clone $REPO"
-git -C "$stage" checkout -q -B main 2>/dev/null || true
+# Use the repo's ACTUAL default branch (empty repo → the clone's unborn branch, usually main). Forcing
+# `main` onto a repo whose default is `master` made every subsequent backup a non-fast-forward reject.
+branch="$(git -C "$stage" symbolic-ref --short HEAD 2>/dev/null || echo main)"
 
 # The encrypted store + PUBLIC metadata needed to use it. NEVER age.key / recovery.key (private keys).
 copied=0
@@ -62,10 +64,24 @@ for f in secrets.env .sops.yaml manifest.toml age.pub recovery.pub; do
 done
 [ "$copied" = 1 ] || agsec_die "nothing to back up (no store files under $cfg)"
 
-# Hard invariant: refuse to push if ANY private-key material slipped into staging (defense in depth —
-# the file list above already excludes age.key; this catches a future mistake before it leaves the Mac).
+# Strip the colleague-share SOCIAL GRAPH (shared_with/shared_at/direction + received: sources) from the
+# PUSHED manifest — pushing it would publish who-shared-with-whom to GitHub. Mirrors uninstall keep-mode.
+if [ -f "$stage/manifest.toml" ]; then
+  if grep -vE '^(shared_with|shared_at|direction) = |^source = "received:' "$stage/manifest.toml" >"$stage/manifest.toml.tmp" 2>/dev/null; then
+    mv "$stage/manifest.toml.tmp" "$stage/manifest.toml"
+  else
+    rm -f "$stage/manifest.toml.tmp"   # grep printed nothing (empty/all-sharing manifest) — keep the copy as-is
+  fi
+fi
+
+# Hard invariants before anything leaves the Mac (defense in depth):
+#  (1) NO private-key material (the file list already excludes age.key; this catches a future mistake).
 if grep -rql "AGE-SECRET-KEY-1" "$stage" 2>/dev/null; then
   agsec_die "refusing to push — private age key material detected in staging (backup is ciphertext-only)"
+fi
+#  (2) secrets.env must actually be sops CIPHERTEXT (an unencrypted store would leak values verbatim).
+if [ -f "$stage/secrets.env" ] && ! grep -q 'ENC\[' "$stage/secrets.env" 2>/dev/null; then
+  agsec_die "refusing to push — secrets.env is not sops ciphertext (no ENC[...] found); aborting to avoid pushing plaintext"
 fi
 
 # A README in the backup repo (written once) so a future you knows what this is and how to restore.
@@ -82,7 +98,7 @@ if git -C "$stage" diff --cached --quiet 2>/dev/null; then
 else
   git -C "$stage" -c user.email="agent-secrets@localhost" -c user.name="agent-secrets" \
     commit -q -m "backup $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  git -C "$stage" push -q -u origin main 2>/dev/null || agsec_die "push to $REPO failed (check gh auth + repo access)"
+  git -C "$stage" push -q -u origin "HEAD:$branch" 2>/dev/null || agsec_die "push to $REPO failed (check gh auth + repo access)"
   agsec_ok "encrypted store backed up to $REPO (ciphertext only)"
 fi
 

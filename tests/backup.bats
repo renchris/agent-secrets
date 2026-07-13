@@ -60,3 +60,41 @@ _rm_remote() { [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] && rm -rf "$(dirname "$AGSEC_M
   [[ "$output" == *"no store to back up"* ]]
   _rm_remote
 }
+
+@test "backup pushes to the repo's default branch (master), not a divergent main" {
+  setup_store
+  local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/agsec-remote.XXXXXX")"
+  export AGSEC_MOCK_GH_REMOTE="$dir/store.git"
+  git init --bare -q -b master "$AGSEC_MOCK_GH_REMOTE" 2>/dev/null \
+    || { git init --bare -q "$AGSEC_MOCK_GH_REMOTE"; git -C "$AGSEC_MOCK_GH_REMOTE" symbolic-ref HEAD refs/heads/master; }
+  agsec backup --repo me/store --yes >/dev/null
+  git -C "$AGSEC_MOCK_GH_REMOTE" rev-parse --verify master >/dev/null 2>&1      # landed on master…
+  ! git -C "$AGSEC_MOCK_GH_REMOTE" rev-parse --verify main >/dev/null 2>&1      # …not a new main
+  run agsec backup --repo me/store --yes                                        # 2nd run: clean no-op, not a reject
+  [ "$status" -eq 0 ]
+  rm -rf "$dir"
+}
+
+@test "backup refuses a non-ciphertext secrets.env (defense in depth)" {
+  setup_store
+  local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/agsec-remote.XXXXXX")"
+  export AGSEC_MOCK_GH_REMOTE="$dir/store.git"
+  printf 'PLAINTEXT_KEY=oops-not-encrypted\n' >"$(agsec_config_dir)/secrets.env"  # simulate a broken/plaintext store
+  run agsec backup --repo me/store --yes
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not sops ciphertext"* ]]
+  rm -rf "$dir"
+}
+
+@test "backup strips the colleague-share social graph from the pushed manifest" {
+  setup_store
+  printf 'x' | store_add SHARED_ONE
+  store_manifest_set_sharing SHARED_ONE shared_with='sha256:deadbeef1234' direction='sent'
+  _mk_remote
+  agsec backup --repo me/store --yes >/dev/null
+  local work; work="$(mktemp -d)"; git clone -q "$AGSEC_MOCK_GH_REMOTE" "$work"
+  grep -q 'name = "SHARED_ONE"' "$work/manifest.toml"          # credential name kept
+  ! grep -q '^shared_with = ' "$work/manifest.toml"            # social graph stripped
+  ! grep -q '^direction = ' "$work/manifest.toml"
+  rm -rf "$work"; _rm_remote
+}
