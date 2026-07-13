@@ -17,8 +17,11 @@ kc_add() {
   local f; f="$(agsec_age_key_file)"; mkdir -p "$(dirname "$f")"
   printf '%s' "$key" >"$f"; chmod 600 "$f" 2>/dev/null || true      # primary custody: 0600 file
   # Mirror into the login Keychain without the value in argv (STDIN form; -U to update).
-  printf '%s' "$key" | security add-generic-password -U -a "${USER:-agent}" \
-    -s "$AGENT_SECRETS_KC_SERVICE" -w >/dev/null 2>&1 || true
+  if printf '%s' "$key" | security add-generic-password -U -a "${USER:-agent}" \
+       -s "$AGENT_SECRETS_KC_SERVICE" -w >/dev/null 2>&1; then
+    # Record the item so uninstall reverts it by RECORD (with the exact-service scan as belt-and-suspenders).
+    command -v manifest_record_keychain >/dev/null 2>&1 && manifest_record_keychain "$AGENT_SECRETS_KC_SERVICE" >/dev/null 2>&1 || true
+  fi
   unset key
 }
 

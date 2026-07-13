@@ -17,6 +17,10 @@ main() {
   local dry=0
   [ "${1:-}" = "--dry-run" ] && dry=1
 
+  # manifest_rollback drives EVERYTHING through jq (record parsing + rewrites). Without jq it would fail
+  # silently mid-rollback yet still print "zero residue" — leaving artifacts behind. Fail LOUD instead.
+  agsec_require jq
+
   local config_dir state_dir
   config_dir="$(agsec_config_dir)"     # store, manifest.toml, .sops.yaml, age.key fallback, age.pub
   state_dir="$(agsec_state_dir)"       # install-manifest.json, wizard-state, edit backups

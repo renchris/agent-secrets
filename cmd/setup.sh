@@ -41,7 +41,11 @@ _key_ceremony() {
   fi
   age-keygen -o "$kf"; chmod 600 "$kf"              # NO 2>/dev/null — a real keygen failure must surface, not silently abort
   age-keygen -y "$kf" >"$pf"
-  local rec="$cfg/recovery.key"; age-keygen -o "$rec" 2>/dev/null; age-keygen -y "$rec" >"$cfg/recovery.pub"
+  # Same O_EXCL hardening as the primary key above: clear a stale/partial recovery.key so age-keygen -o
+  # (which REFUSES to overwrite) can recreate it, and drop 2>/dev/null so a real keygen failure surfaces
+  # instead of silently aborting the wizard under set -e (the exact wedge the primary key mint had).
+  local rec="$cfg/recovery.key"; [ -f "$rec" ] && rm -f "$rec"
+  age-keygen -o "$rec"; age-keygen -y "$rec" >"$cfg/recovery.pub"
   kc_write_selector
   ui_ok "generated your key + a recovery key (the store encrypts to both)"
   if [ -z "$UNATTENDED" ]; then
@@ -52,8 +56,11 @@ _key_ceremony() {
     if [ "$pb" = "$(cat "$(agsec_age_pub_file)")" ]; then ui_ok "verified"; else ui_warn "no match — the real check is the restore drill later"; fi
     if _confirm "Store the key in your login Keychain for prompt-free use? (paste it once)" y; then
       ui_say "Paste your key at the next hidden prompt:"
-      security add-generic-password -U -a "${USER:-agent}" -s "$AGENT_SECRETS_KC_SERVICE" -w 2>/dev/null \
-        || ui_warn "Keychain populate skipped — running on file custody (fully supported)"
+      if security add-generic-password -U -a "${USER:-agent}" -s "$AGENT_SECRETS_KC_SERVICE" -w 2>/dev/null; then
+        manifest_record_keychain "$AGENT_SECRETS_KC_SERVICE" >/dev/null 2>&1 || true   # reversible: uninstall removes it
+      else
+        ui_warn "Keychain populate skipped — running on file custody (fully supported)"
+      fi
     fi
     agsec_have pbcopy && printf '' | pbcopy
     ui_say "Move $cfg/recovery.key to offline/printed storage now; it's being removed from disk."

@@ -90,21 +90,30 @@ manifest_list() {
 }
 
 # --- rollback -------------------------------------------------------------------
-# Strip the marker-delimited block from FILE, print the remainder (touches nothing).
+# Strip the COMPLETE marker-delimited block (begin..end) from FILE, print the remainder. If a begin
+# marker has NO matching end before EOF (a user corrupted/trimmed the end line), keep EVERYTHING —
+# never delete begin→EOF, which would eat unrelated content below a hand-edited ~/.claude/CLAUDE.md.
 _manifest_strip_block() {
   local file="$1" marker="$2" b e
   b="$(_manifest_block_begin "$marker")"
   e="$(_manifest_block_end "$marker")"
   [ -f "$file" ] || return 0
-  awk -v b="$b" -v e="$e" '$0==b{skip=1;next} $0==e{skip=0;next} !skip{print}' "$file"
+  awk -v b="$b" -v e="$e" '
+    $0==b { if(bufn){ for(i=1;i<=bufn;i++) print buf[i] }; buffering=1; bufn=0; buf[++bufn]=$0; next }
+    buffering && $0==e { buffering=0; bufn=0; next }        # complete block → drop it
+    buffering { buf[++bufn]=$0; next }
+    { print }
+    END { if(buffering){ for(i=1;i<=bufn;i++) print buf[i] } }   # unterminated block → keep it all
+  ' "$file"
 }
 
-# Enumerate login-keychain generic-password services matching the prefix. An attribute
-# dump does NOT prompt (only reading a secret data blob would); best-effort.
+# Enumerate login-keychain generic-password services the tool created — scoped to the EXACT service
+# (not the broad `agent-` prefix, which would over-delete a user's unrelated `agent-*` items). An
+# attribute dump does NOT prompt (only reading a secret data blob would); best-effort.
 _manifest_kc_by_prefix() {
   security dump-keychain 2>/dev/null \
     | sed -n 's/^[[:space:]]*"svce"<blob>="\(.*\)"$/\1/p' \
-    | grep -E "^${AGENT_SECRETS_KC_PREFIX}" 2>/dev/null | sort -u
+    | grep -Fx "$AGENT_SECRETS_KC_SERVICE" 2>/dev/null | sort -u
 }
 
 _manifest_kc_delete() {  # delete every item under a service (loops to clear duplicates)
@@ -157,17 +166,34 @@ _manifest_rb_file() {
 }
 
 _manifest_rb_edit() {
-  local rec="$1" dry="$2" p backup created
-  p="$(jq -r '.path' <<<"$rec")"; backup="$(jq -r '.backup' <<<"$rec")"; created="$(jq -r '.created // false' <<<"$rec")"
+  local rec="$1" dry="$2" p backup created marker
+  p="$(jq -r '.path' <<<"$rec")"; backup="$(jq -r '.backup' <<<"$rec")"
+  created="$(jq -r '.created // false' <<<"$rec")"; marker="$(jq -r '.marker // ""' <<<"$rec")"
   if [ "$dry" -eq 1 ]; then
-    if [ "$created" = true ]; then agsec_note "(dry-run) remove tool-created file: $p"
+    if [ -n "$marker" ]; then agsec_note "(dry-run) remove key .$marker from: $p$([ "$created" = true ] && printf ' (delete if now empty)')"
+    elif [ "$created" = true ]; then agsec_note "(dry-run) remove tool-created file: $p"
     else agsec_note "(dry-run) restore edit: $p <- $backup"; fi
     return 0
   fi
+  # SURGICAL revert: the tool only ADDED one key (marker, e.g. apiKeyHelper). Remove exactly that key
+  # and PRESERVE the user's later edits — a whole-file restore/delete would silently discard their
+  # Claude Code config (model/hooks/permissions added after install).
+  if [ -n "$marker" ] && [ -f "$p" ] && agsec_have jq; then
+    local tmp; tmp="$(mktemp)"
+    if jq "del(.\"$marker\")" "$p" >"$tmp" 2>/dev/null; then
+      if [ "$created" = true ] && [ "$(tr -d '[:space:]' <"$tmp")" = "{}" ]; then
+        rm -f "$tmp" "$p"; rmdir "$(dirname "$p")" 2>/dev/null || true
+        agsec_ok "removed tool-created (now empty): $p"
+      else
+        mv -f "$tmp" "$p"; agsec_ok "reverted edit (removed .$marker): $p"
+      fi
+      return 0
+    fi
+    rm -f "$tmp"   # jq failed → fall through to the coarse path
+  fi
+  # Fallback (no marker recorded / no jq / not a regular file): the coarse behavior.
   if [ "$created" = true ]; then
-    # We created this file (e.g. settings.json where none existed) → delete it, don't leave an empty {}.
-    rm -f "$p" && agsec_ok "removed tool-created: $p"
-    rmdir "$(dirname "$p")" 2>/dev/null || true      # drop a now-empty ~/.claude the tool made
+    rm -f "$p" && agsec_ok "removed tool-created: $p"; rmdir "$(dirname "$p")" 2>/dev/null || true
   elif [ -f "$backup" ]; then cp "$backup" "$p" && agsec_ok "reverted edit: $p"
   else agsec_warn "edit backup missing, left as-is: $p"; fi
 }

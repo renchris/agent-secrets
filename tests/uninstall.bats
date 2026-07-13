@@ -114,3 +114,32 @@ load test_helper
   run grep -c 'EDITOR=vim' "$rc"; [ "$output" -eq 1 ]        # user line preserved
   run grep -c 'HOME/bin' "$rc"; [ "$output" -eq 0 ]          # our block stripped
 }
+
+@test "rollback SURGICALLY removes only .apiKeyHelper, preserving keys the user added AFTER install" {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+  local sj="$AGENT_SECRETS_HOME/settings.json" bak="$AGENT_SECRETS_HOME/day0.bak"
+  printf '{"model":"opus"}\n' >"$sj"; cp "$sj" "$bak"                 # install-day backup
+  printf '{"model":"opus","apiKeyHelper":"x","hooks":{"Stop":"y"}}\n' >"$sj"   # tool edit + user's LATER hooks
+  manifest_record_edit "$sj" "$bak" apiKeyHelper                      # pre-existing → surgical del by marker
+  manifest_rollback >/dev/null
+  run cat "$sj"
+  [[ "$output" == *'"model":"opus"'* ]]                              # preserved
+  [[ "$output" == *'"hooks"'* ]]                                     # user's POST-install addition preserved (not snapshot-reverted)
+  [[ "$output" != *"apiKeyHelper"* ]]                                # only the tool's key removed
+}
+
+@test "rollback strip KEEPS everything when the end marker is corrupted (no delete-to-EOF)" {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+  local cm="$AGENT_SECRETS_HOME/CLAUDE.md"
+  printf '# top user rules\n' >"$cm"
+  manifest_pathblock_install "$cm" "agent-secrets" 'agent-secrets discovery block'
+  printf '# BELOW the block — important user content\n' >>"$cm"
+  sed -i.bak 's/^# <<< agent-secrets <<<$/# CORRUPTED-END/' "$cm"; rm -f "$cm.bak"   # user breaks the end marker
+  manifest_rollback >/dev/null
+  grep -q '# BELOW the block' "$cm"                                  # content below the block SURVIVES
+  grep -q '# top user rules' "$cm"                                   # content above survives
+}
