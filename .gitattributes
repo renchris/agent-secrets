@@ -1,6 +1,13 @@
-# Release-tarball hygiene: keep `git archive` (the v0.1.0 install tarball that install.sh unpacks
-# into ~/.agent-secrets) to the RUNTIME only. Dev tooling, docs, CI, and README/diagram assets stay
-# in the repo but are excluded from the tarball — the tool ships bin/ lib/ cmd/ scripts/*.sh + LICENSE/VERSION.
+# Release-tarball hygiene: keep `git archive` (the install tarball that install.sh unpacks into
+# ~/.agent-secrets) to what the INSTALLED tool actually runs. The tarball ships exactly:
+#   bin/  lib/  cmd/  scripts/keychain-smoke.sh (operational custody gate)  LICENSE  VERSION.
+# Everything else is excluded — docs, CI, diagram/demo assets, dev tooling, AND:
+#   • install.sh          — the bootstrap is delivered via raw-git at the pinned tag (README one-liner),
+#                           NOT from the tarball; export-ignoring it also breaks the baked-digest
+#                           fixed-point (the tarball SHA baked into install.sh cannot depend on install.sh).
+#   • scripts/telemetry-gate.sh — CI-only no-exfil gate (scans .github/workflows, absent in the tarball).
+#   • scripts/record-demo.sh    — maintainer-only VHS demo tool (its assets/ + mocks refs are stripped).
+install.sh                  export-ignore
 assets/                     export-ignore
 tests/                      export-ignore
 docs/                       export-ignore
@@ -12,6 +19,9 @@ llms.txt                    export-ignore
 package.json                export-ignore
 package-lock.json           export-ignore
 scripts/render-diagrams.mjs export-ignore
+scripts/telemetry-gate.sh   export-ignore
+scripts/record-demo.sh      export-ignore
+scripts/release.sh          export-ignore
 .shellcheckrc               export-ignore
 .gitignore                  export-ignore
 .gitattributes              export-ignore

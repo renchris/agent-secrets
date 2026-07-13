@@ -16,9 +16,12 @@ main() {
   local PINNED_TAG="v0.1.0"
   local REPO="renchris/agent-secrets"   # keep the old name reserved forever on any future rename
   local BASE_URL="${AGENT_SECRETS_BASE_URL:-https://github.com/${REPO}}"
-  # EXPECTED_SHA256 is baked in at release-tag time; THIS curl'd script is the trust root, so the
-  # digest lives here, not in a sibling file an attacker could swap. Empty ⇒ fall back to the
-  # published .sha256 (dev/mirror convenience only).
+  # EXPECTED_SHA256 is BAKED IN at release-tag time by the release runbook (README "Cut a release").
+  # THIS curl'd script travels the git-ref channel (raw.githubusercontent at the PINNED tag), so the
+  # digest is the trust root — a channel DISTINCT from the swappable release-asset tarball it verifies.
+  # It is empty on `main` (unreleased): the default production URL then REFUSES to install (a same-origin
+  # .sha256 is no defense against a swapped asset); only a dev/mirror (AGENT_SECRETS_BASE_URL) falls back
+  # to the sibling .sha256 for transport integrity. See the SHA-256 gate below.
   local EXPECTED_SHA256=""
 
   local HOME_DIR="${AGENT_SECRETS_HOME:-$HOME}"
@@ -44,9 +47,10 @@ main() {
     _say "agent-secrets installer — this will:"
     _say "  • install Homebrew (if absent), then: age, sops, gum, jq"
     _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG, SHA-256 verified)"
-    _say "  • install wrappers into $BIN_DIR   (claude-agent, cursor-agent, apiKeyHelper)"
+    _say "  • symlink the command + wrappers into $BIN_DIR   (agent-secrets, claude-agent, cursor-agent, apiKeyHelper)"
     _say "  • add a marker-delimited PATH block to $RC_FILE"
     _say "  • install a weekly launchd smoke job ($SMOKE_LABEL)"
+    _say "  • back up an existing ~/.claude/settings.json (revert point for setup's apiKeyHelper edit)"
     _say "  • record every change to $STATE_DIR/install-manifest.json (one-command uninstall)"
     _say "  • run 'agent-secrets setup' (the interactive wizard) at the end"
     _say ""
@@ -71,6 +75,10 @@ main() {
   # --- toolchain ---------------------------------------------------------------
   if ! command -v brew >/dev/null 2>&1; then
     _say "Installing Homebrew…"
+    # Homebrew's canonical HEAD bootstrap is the ecosystem-standard trust anchor; pinning ITS installer
+    # to a commit is unsupported and rots. This is the ONE intentional moving-ref exception to the
+    # "install from a pinned tag" rule above — trusted-upstream, NOT SHA-pinned by us (see SECURITY.md's
+    # honest ceiling). The "never run an unverified artifact" rule covers the tool's OWN release only.
     _run /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   fi
   # jq is REQUIRED, not optional: lib/manifest.sh (the install/uninstall manifest backbone),
@@ -87,10 +95,16 @@ main() {
   local got expect
   got="$(shasum -a 256 "$pkg" | awk '{print $1}')"
   if [ -n "$EXPECTED_SHA256" ]; then
+    # Production path: the digest was baked into THIS script (git-ref channel) at release-tag time, so a
+    # swapped release-asset tarball fails here — real release-asset tamper-evidence, not same-origin trust.
     expect="$EXPECTED_SHA256"
-  else
+  elif [ -n "${AGENT_SECRETS_BASE_URL:-}" ]; then
+    # Dev/mirror convenience ONLY (BASE_URL overridden): trust a sibling .sha256 from the mirror you
+    # control. This is transport integrity (corruption/partial-download), NOT release-asset tamper-evidence.
     _run curl -fsSL "$url.sha256" -o "$pkg.sha256"
     expect="$(awk '{print $1}' "$pkg.sha256")"
+  else
+    _die "this install.sh carries no baked release digest (EXPECTED_SHA256 empty) — it was not cut by the release runbook. Refusing a same-origin .sha256 fallback on the default production URL (it cannot detect a swapped release asset). Install from a published release tag, or set AGENT_SECRETS_BASE_URL to use a dev/mirror."
   fi
   [ "$got" = "$expect" ] || _die "SHA-256 mismatch — refusing to run the downloaded artifact"
   _say "SHA-256 verified."
@@ -98,6 +112,11 @@ main() {
   # --- unpack the tool ---------------------------------------------------------
   _run mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$STATE_DIR"
   _run tar -xzf "$pkg" -C "$INSTALL_DIR" --strip-components=1
+  # Fail LOUDLY on a mis-cut tarball (wrong/missing top-level prefix flattens the layout and would
+  # dangle every wrapper symlink) instead of a cryptic `set -e` abort on the first source below. The
+  # release runbook pins `git archive --prefix=agent-secrets-${TAG}/` to guarantee the single prefix dir.
+  [ "$DRY_RUN" -eq 1 ] || [ -f "$INSTALL_DIR/lib/common.sh" ] \
+    || _die "unexpected tarball layout (need one top-level prefix dir) — re-cut with: git archive --prefix=agent-secrets-\${TAG}/ \${TAG}"
 
   # From here on the tool's own libs exist — source them to record artifacts.
   # shellcheck source=/dev/null

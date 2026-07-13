@@ -1,10 +1,35 @@
 #!/usr/bin/env bash
-# tests/mocks/curl — stand-in for the github.com/<user>.keys fetch in share.
-# Test-controlled body: AGSEC_MOCK_KEYS_FILE (cat the file) > AGSEC_MOCK_KEYS (print the value).
-# With neither set, behaves like a user with no keys → empty body, exit 0 (share then fails loud).
-# Honors -f: a non-2xx would exit 22; we emulate "not found" only when AGSEC_MOCK_KEYS_FAIL=1.
+# tests/mocks/curl — stand-in for the two curl uses in the tool:
+#   (1) share's github.com/<user>.keys fetch (to STDOUT, no -o).
+#   (2) install.sh's tarball / .sha256 download (to a file, via -o).
+# (1) Test-controlled body: AGSEC_MOCK_KEYS_FILE (cat the file) > AGSEC_MOCK_KEYS (print the value).
+#     With neither set, behaves like a user with no keys → empty body, exit 0 (share then fails loud).
+#     Honors -f: a non-2xx would exit 22; we emulate "not found" only when AGSEC_MOCK_KEYS_FAIL=1.
+# (2) When `-o <file>` is present AND AGSEC_MOCK_DL_DIR is set, serve $AGSEC_MOCK_DL_DIR/<url-basename>
+#     into <file> (exit 22 if that mirror file is absent, matching `-f` on a 404). This lets the
+#     install suite drive a real dev-mirror install without network.
 set -euo pipefail
 if [ -n "${AGSEC_MOCK_KEYS_FAIL:-}" ]; then exit 22; fi
+
+# --- (2) download-to-file mode: only when an -o target is given ---
+_out=""; _url=""
+_prev=""
+for _a in "$@"; do
+  case "$_prev" in -o|--output) _out="$_a" ;; esac
+  case "$_a" in http*://*) _url="$_a" ;; esac
+  _prev="$_a"
+done
+if [ -n "$_out" ]; then
+  if [ -n "${AGSEC_MOCK_DL_DIR:-}" ]; then
+    _src="$AGSEC_MOCK_DL_DIR/$(basename "$_url")"
+    [ -f "$_src" ] || exit 22
+    cp "$_src" "$_out"
+    exit 0
+  fi
+  exit 22   # -o requested but no mock mirror configured → treat as a failed download
+fi
+
+# --- (1) keys-to-STDOUT mode (share) ---
 if [ -n "${AGSEC_MOCK_KEYS_FILE:-}" ] && [ -f "$AGSEC_MOCK_KEYS_FILE" ]; then
   cat "$AGSEC_MOCK_KEYS_FILE"
 elif [ -n "${AGSEC_MOCK_KEYS+x}" ]; then
