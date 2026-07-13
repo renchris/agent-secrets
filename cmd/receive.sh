@@ -152,18 +152,17 @@ if ! age -d -i "$idf" "$armor_tmp" 2>/dev/null >"$pt"; then
 fi
 rm -f "$idf" "$armor_tmp" "$dbody"; idf=""; armor_tmp=""; dbody=""
 
-# Multi-line iff a newline exists beyond a sole trailing newline. A single-line value is stored raw; a
-# PEM/JSON blob is base64-encoded and its manifest row flagged encoding=base64 so the newlines survive
-# dotenv — and `run` base64-DECODES flagged entries on injection, so the child gets the original bytes.
+# v0.1 stores SINGLE-LINE values only — a value is injected as an env var, and multi-line values do not
+# round-trip through run/share (multi-line/file secrets are a v0.2 item). Refuse a multi-line envelope
+# here; the EXIT trap shreds the decrypted 0600 temp on the die, so no plaintext persists.
 nl_count="$(tr -dc '\n' <"$pt" | wc -c | tr -d ' ')"
 trailing=0
 if [ -s "$pt" ] && [ "$(tail -c1 "$pt" | wc -l | tr -d ' ')" -eq 1 ]; then trailing=1; fi
 effective_nl=$(( nl_count - trailing ))
 if [ "$effective_nl" -ge 1 ]; then
-  store_add_multiline "$name" <"$pt"
-else
-  store_add "$name" <"$pt"
+  agsec_die "this envelope carries a MULTI-LINE value (e.g. a PEM/JSON blob); agent-secrets ${AGENT_SECRETS_VERSION} stores single-line secrets only — they inject as env vars and multi-line values don't round-trip through run/share. Ask the sender for a single-line secret, or handle this key outside agent-secrets for now." 2
 fi
+store_add "$name" <"$pt"
 rm -f "$pt"; pt=""
 
 # --- manifest (design §3.8; values-free) ----------------------------------------

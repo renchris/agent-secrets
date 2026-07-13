@@ -96,18 +96,13 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   [[ "$output" != *"MULTI_ADD"* ]]
 }
 
-@test "multi-line value injects DECODED byte-for-byte (trailing newline preserved) via run" {
+@test "store_add_multiline is a fail-closed stub (multi-line unsupported in v0.1)" {
   setup_store
   export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
   # shellcheck source=/dev/null
   . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/keychain.sh"; . "$REPO_ROOT/lib/store.sh"
-  printf -- '-----BEGIN-----\nlineA\nlineB\n-----END-----\n' >"$AGENT_SECRETS_HOME/pem.in"   # note trailing \n
-  store_add_multiline PEM_KEY <"$AGENT_SECRETS_HOME/pem.in"
-  # run injects the DECODED value; child writes it to a file so a trailing newline survives capture
-  bash "$REPO_ROOT/bin/agent-secrets" run -- sh -c 'printf %s "$PEM_KEY" > "$AGENT_SECRETS_HOME/pem.out"'
-  cmp "$AGENT_SECRETS_HOME/pem.in" "$AGENT_SECRETS_HOME/pem.out"     # byte-for-byte, incl. trailing newline
-  # and the child must see decoded text, never the base64 form
-  run bash "$REPO_ROOT/bin/agent-secrets" run -- sh -c 'printf %s "$PEM_KEY"'
-  [[ "$output" == *"BEGIN"* ]]
-  [[ "$output" != *"LS0tLS1CRUdJTi"* ]]   # base64 of "-----BEGIN"; absence proves it was decoded
+  run store_add_multiline PEM_KEY
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"not supported"* ]]
+  ! store_has PEM_KEY
 }

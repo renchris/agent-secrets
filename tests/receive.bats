@@ -142,17 +142,17 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   [[ "$output" == *"canary"* ]]
 }
 
-@test "multi-line value survives byte-for-byte (base64 round-trip)" {
+@test "receive REFUSES a multi-line value (v0.1 stores single-line only)" {
   setup_store
   local pem
   pem="$(printf -- '-----BEGIN PRIVATE KEY-----\nAAAA1111\nBBBB2222\n-----END PRIVATE KEY-----')"
   make_blob MY_PEM "$pem" > "$BATS_TEST_TMPDIR/blob"
   printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
-  [ "$status" -eq 0 ]
-  local decoded
-  decoded="$(store_extract MY_PEM | base64 -D)"   # sourced fn stays in-shell (no bash -c subshell)
-  [ "$decoded" = "$pem" ]
+  [ "$status" -eq 2 ]                         # refused (multi-line unsupported in v0.1)
+  [[ "$output" == *"MULTI-LINE"* || "$output" == *"single-line"* ]]
+  [[ "$output" != *"AAAA1111"* ]]            # the refusal never echoes the value
+  ! store_has MY_PEM                          # nothing stored
 }
 
 @test "value never appears in argv (age shim records \$@)" {
