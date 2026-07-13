@@ -23,16 +23,17 @@ done
 
 agsec_require gh
 agsec_require git
-gh auth status >/dev/null 2>&1 || agsec_die "gh is not authenticated — run: gh auth login"
 
-# If we inherited OUR OWN egress loopback proxy (from a wrapping claude-agent/run — it stamps
-# AGENT_SECRETS_EGRESS_PROXY with the exact URL it set), it must NOT bound backup's gh/git push:
-# backup is a trusted, ciphertext-only push, not agent egress. Drop EXACTLY that proxy so the push
-# reaches GitHub — but KEEP any corporate proxy, INCLUDING a loopback forwarder (Cntlm/px/ZTNA on
-# 127.0.0.1) that we did not set.
+# Drop OUR OWN egress loopback proxy BEFORE the first gh network call (gh auth status hits GitHub —
+# through our allowlist proxy it would be refused unless github.com is allowlisted, killing backup with
+# a misleading "not authenticated"). A wrapping claude-agent/run stamps AGENT_SECRETS_EGRESS_PROXY with
+# the exact URL it set; backup is a trusted ciphertext-only push, not agent egress, so drop EXACTLY that
+# proxy — but KEEP any corporate proxy, INCLUDING a loopback forwarder (Cntlm/px/ZTNA) we did not set.
 if [ -n "${AGENT_SECRETS_EGRESS_PROXY:-}" ] && [ "${HTTPS_PROXY:-}" = "$AGENT_SECRETS_EGRESS_PROXY" ]; then
   unset HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy AGENT_SECRETS_EGRESS_PROXY
 fi
+
+gh auth status >/dev/null 2>&1 || agsec_die "gh is not authenticated — run: gh auth login"
 
 cfg="$(agsec_config_dir)"
 [ -f "$(agsec_store_file)" ] || agsec_die "no store to back up — run: agent-secrets setup"

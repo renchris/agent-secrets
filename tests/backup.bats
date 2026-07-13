@@ -95,6 +95,16 @@ _rm_remote() { [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] && rm -rf "$(dirname "$AGSEC_M
   grep -q 'AGENT_SECRETS_EGRESS_PROXY="' "$REPO_ROOT/lib/egress.sh"   # egress_run stamps the marker
 }
 
+@test "backup drops its egress proxy BEFORE the first gh network call (auth preflight)" {
+  # The unset MUST precede `gh auth status` — otherwise, inside an egress session where github.com
+  # isn't allowlisted, the proxied preflight is refused and backup dies "not authenticated" first.
+  local drop_line auth_line
+  drop_line="$(grep -n '^  unset HTTPS_PROXY' "$REPO_ROOT/cmd/backup.sh" | head -1 | cut -d: -f1)"
+  auth_line="$(grep -n '^gh auth status >/dev/null' "$REPO_ROOT/cmd/backup.sh" | head -1 | cut -d: -f1)"
+  [ -n "$drop_line" ] && [ -n "$auth_line" ]
+  [ "$drop_line" -lt "$auth_line" ]
+}
+
 @test "backup REFUSES an existing PUBLIC repo (the secret-name inventory must stay private)" {
   setup_store
   local dir; dir="$(mktemp -d "${TMPDIR:-/tmp}/agsec-remote.XXXXXX")"

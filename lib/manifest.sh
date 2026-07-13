@@ -182,7 +182,9 @@ _manifest_rb_edit() {
     local tmp orig; tmp="$(mktemp)"
     # The user's PRE-INSTALL value for this key (null if the tool added it fresh, or no backup exists).
     orig="$(jq -c ".\"$marker\" // null" "$backup" 2>/dev/null || echo null)"
-    if [ "$orig" != null ] && jq --argjson v "$orig" ".\"$marker\" = \$v" "$p" >"$tmp" 2>/dev/null; then
+    # RESTORE only for a PRE-EXISTING file (created=false). A tool-created file never has a valid
+    # same-install backup for this key; a stale cross-cycle backup must not resurrect a historical value.
+    if [ "$created" != true ] && [ "$orig" != null ] && jq --argjson v "$orig" ".\"$marker\" = \$v" "$p" >"$tmp" 2>/dev/null; then
       # The user had their OWN apiKeyHelper before install → RESTORE it, don't delete the key.
       mv -f "$tmp" "$p"; agsec_ok "restored pre-install .$marker: $p"; return 0
     fi

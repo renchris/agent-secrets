@@ -146,6 +146,18 @@ load test_helper
   [[ "$output" == *'opus'* ]]                                            # other keys preserved (jq pretty-prints)
 }
 
+@test "rollback does NOT resurrect a stale backup value for a tool-CREATED file (deletes it)" {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+  local sj="$AGENT_SECRETS_HOME/settings.json" bak="$AGENT_SECRETS_HOME/stale.bak"
+  printf '{"apiKeyHelper":"/stale/old.sh"}\n' >"$bak"          # stale cross-cycle backup with an old value
+  printf '{"apiKeyHelper":"/tool/apiKeyHelper"}\n' >"$sj"      # tool CREATED the file this cycle
+  manifest_record_edit "$sj" "$bak" apiKeyHelper created       # created=true
+  manifest_rollback >/dev/null
+  [ ! -f "$sj" ]                                               # deleted — NOT restored to /stale/old.sh
+}
+
 @test "rollback strip KEEPS everything when the end marker is corrupted (no delete-to-EOF)" {
   export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
   # shellcheck source=/dev/null
