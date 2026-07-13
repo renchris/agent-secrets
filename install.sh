@@ -249,6 +249,10 @@ main() {
     _say "       (if the command isn't found yet, use the full path:"
     _say "        ${BIN_DIR}/agent-secrets setup)"
     _say ""
+    _say "Optional: this piped install skipped the opt-in prompt that adds machine-wide"
+    _say "agent discovery to ~/.claude/CLAUDE.md — re-run the installer in that same"
+    _say "terminal if you want it (safe: the install is idempotent)."
+    _say ""
     _say "Then you're done. Undo everything anytime with:  agent-secrets uninstall"
     return 0
   fi

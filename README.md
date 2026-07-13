@@ -15,7 +15,7 @@
 
 **Encrypted at rest · injected just-in-time · never in a config, log, or transcript.**
 
-[Why](#why-this-exists) · [Install](#the-one-command) · [How it works](#how-it-works) · [Commands](#commands) · [Security](#the-honest-ceiling) · [Uninstall](#uninstall)
+[Why](#why-this-exists) · [Install](#install--setup) · [How it works](#how-it-works) · [Commands](#commands) · [Security](#the-honest-ceiling) · [Uninstall](#uninstall)
 
 </div>
 
@@ -48,11 +48,23 @@ hands them to a tool only for the moment it runs, and leaves nothing behind.** M
 (GitHub, cloud CLIs) don't need a stored token at all — they use their own login, and this tool
 leans on that first.
 
-## The one command
+## Install + setup
+
+Two commands, honestly. **Install** puts everything in place and can run from anywhere — even from
+inside a coding-agent session. **Setup** is the human key ceremony — it mints your encryption key
+and takes your first secret, so it runs in a real terminal (Terminal.app / iTerm), never in an
+agent transcript.
 
 ```sh
+# 1 · install — from anywhere (no sudo, no Homebrew; a coding-agent session is fine)
 bash -c "$(curl -fsLS https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.0/install.sh)"
+
+# 2 · setup — in Terminal.app: mint your key, add your first secret, wire your tools
+agent-secrets setup
 ```
+
+In a normal terminal the installer chains straight into setup, so it feels like one command; from
+inside an agent session it installs everything, then defers setup on purpose (see the callout below).
 
 <table>
 <tr>
@@ -87,7 +99,8 @@ The installer is function-guarded and pins a SHA-256–verified release.
 **Exactly what it changes on your Mac:** ensures `age`, `sops`, `gum`, `jq` **without `sudo` and
 without requiring Homebrew** — it reuses any you already have, uses Homebrew only if it's already
 installed, and otherwise downloads pinned, SHA-256-verified static binaries into
-`~/.agent-secrets/vendor/`; the `agent-secrets` command plus the `claude-agent`, `cursor-agent`, and
+`~/.agent-secrets/vendor/` (~70 MB for all four — the price of the no-`sudo` guarantee; removed by
+uninstall); the `agent-secrets` command plus the `claude-agent`, `cursor-agent`, and
 `apiKeyHelper` wrappers in `~/bin`; an encrypted store at `~/.config/secrets/`; your age key in the
 login Keychain (with a `0600` file fallback); one `PATH` line in `~/.zshenv`; a weekly `launchd`
 smoke job; and the `apiKeyHelper` line in `~/.claude/settings.json`. It also *offers* (opt-in) to add
@@ -95,7 +108,7 @@ a short agent-discovery block to `~/.claude/CLAUDE.md`. Every change is recorded
 `install-manifest.json` and reversed by `agent-secrets uninstall` — all removable in one command.
 
 > **Running this from inside a coding agent (Cursor / Claude Code)?** The installer finishes the file
-> setup and then **defers the key ceremony** — minting your key and taking your first secret would land
+> setup (exit 0) and then **defers step 2** — minting your key and taking your first secret would land
 > them in the agent's transcript. It prints one instruction: open **Terminal.app** and run
 > `agent-secrets setup`. Everything else is already done.
 
@@ -205,7 +218,7 @@ Keychain items.
 <!-- Diagram source: assets/diagrams/reversible.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/reversible-dark.svg">
-  <img src="assets/diagrams/reversible-light.svg" alt="Reversible install: one command installs age/sops/gum, the tool and wrappers on PATH, a weekly launchd smoke job, and the settings.json apiKeyHelper — every change recorded in install-manifest.json (path, sha256, mode, edit, launchd); agent-secrets uninstall performs a total rollback — files, PATH block, launchd bootout, settings.json reverted, Keychain agent-* purged — to zero residue, with a keep-or-purge prompt for your store">
+  <img src="assets/diagrams/reversible-light.svg" alt="Reversible install: one command ensures the age/sops/gum/jq toolchain (no sudo, vendored if needed), the tool and wrappers on PATH, a weekly launchd smoke job, and the settings.json apiKeyHelper — every change recorded in install-manifest.json (path, sha256, mode, edit, launchd); agent-secrets uninstall performs a total rollback — files, PATH block, launchd bootout, settings.json reverted, Keychain agent-* purged — to zero residue, with a keep-or-purge prompt for your store">
 </picture>
 
 <details>
@@ -216,7 +229,7 @@ Keychain items.
 flowchart LR
     subgraph install["one command · every change recorded"]
         direction TB
-        I1["brew: age · sops · gum"]
+        I1["toolchain: age · sops · gum · jq<br/><i>no sudo · vendored if needed</i>"]
         I2["tool + wrappers → PATH"]
         I3["weekly launchd smoke job"]
         I4["settings.json apiKeyHelper"]

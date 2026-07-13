@@ -81,6 +81,11 @@ agent-secrets run -- printenv ANTHROPIC_API_KEY | wc -c      # >1 means present
 # Health-gate before doing work; branch on exit code
 if agent-secrets doctor >/dev/null 2>&1; then echo healthy; else agent-secrets doctor; fi
 
+# Unattended setup (tests/CI ONLY — fake/placeholder values): PIPE the seed value in.
+# Without piped stdin (or AGENT_SECRETS_SEED_VALUE) the wizard falls back to a placeholder
+# after a bounded 5s stdin read — pipe the value to make it deterministic and instant.
+printf '%s' "$SEED_VALUE" | AGENT_SECRETS_UNATTENDED=1 agent-secrets setup
+
 # Machine-readable health for decisions — the payload is an OBJECT:
 #   {"checks":[{category,status,check,detail}],"exit":0|1}   (status ∈ ok|attn|bad; exit=1 iff any "bad")
 # List the failing checks (iterate .checks, match "bad" — NOT .[] / "fail"):
