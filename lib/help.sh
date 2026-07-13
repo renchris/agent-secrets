@@ -30,13 +30,15 @@ agsec_help_spec() {
 	exit	2	usage error / unknown command / reserved verb
 	seealso	https://github.com/renchris/agent-secrets/blob/v0.1.0/AGENTS.md	agent-facing usage guide (read this first if you are an agent)
 	seealso	https://github.com/renchris/agent-secrets/blob/v0.1.0/SECURITY.md	threat model + the honest ceiling
-setup	synopsis	agent-secrets setup [--restore]
+setup	synopsis	agent-secrets setup [--restore|--keychain]
 setup	summary	One-time onboarding wizard: generate your key, add your first secret, wire your tools.
-setup	desc	Idempotent — safe to re-run; detects an existing install and never mints a second key. Screens: preflight → key ceremony (Keychain + file fallback + recovery leg) → first secret → wire wrappers/apiKeyHelper → health check → done. --restore recovers on a new machine: paste your saved age key to re-establish custody over a restored store copy (verifies decryption; never mints a new key). Refuses to run its key ceremony inside an agent session (transcripts are secret-bearing) unless AGENT_SECRETS_UNATTENDED=1.
+setup	desc	Idempotent — safe to re-run; detects an existing install and never mints a second key. Screens: preflight → key ceremony (Keychain + file fallback + recovery leg) → first secret → wire wrappers/apiKeyHelper → health check → done. --restore recovers on a new machine: paste your saved age key to re-establish custody over a restored store copy (verifies decryption; never mints a new key). --keychain re-runs ONLY the Keychain populate step: macOS Sequoia's security(1) takes the key via an interactive /dev/tty paste, so a non-interactive first run leaves custody on the 0600-file fallback (doctor: "degraded (file custody)") — run this once in a real terminal to restore prompt-free Keychain custody. Refuses to run inside an agent session (transcripts are secret-bearing) unless AGENT_SECRETS_UNATTENDED=1.
 setup	flag	--restore	recover on a new machine — paste your saved age key to re-establish custody over a restored store copy (never mints a new key)
+setup	flag	--keychain	restore prompt-free Keychain custody in a real terminal — re-runs just the paste-once Keychain step (use when doctor reports "degraded (file custody)")
 setup	env	AGENT_SECRETS_UNATTENDED	1 = non-interactive with FAKE placeholder values (tests/CI); reads the first secret value from STDIN if piped
 setup	example	agent-secrets setup	run the interactive wizard (in a normal terminal, not an agent session)
 setup	example	agent-secrets setup --restore	recover on a new machine (copy your store copy into place first, then paste your saved key)
+setup	example	agent-secrets setup --keychain	re-run only the Keychain populate step after a non-interactive install (doctor: degraded custody)
 setup	writes	~/.config/secrets/{age.key,age.pub,recovery.pub,age-key-cmd.sh,secrets.env,.sops.yaml,manifest.toml}, ~/bin wrappers, ~/.claude/settings.json (apiKeyHelper)
 setup	exit	0	wizard completed (or returned early on an existing install)
 setup	exit	1	a step failed (see message)

@@ -81,3 +81,11 @@ load test_helper
   [ "$status" -eq 0 ]
   [[ "$output" == *"agent-secrets uninstall"* ]]
 }
+
+@test "setup help documents the --keychain re-run path (human + json)" {
+  run agsec help setup
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--keychain"* ]]
+  run bash -c "bash '$REPO_ROOT/bin/agent-secrets' help --json | jq -e '.commands[] | select(.name==\"setup\") | .flags | map(.flag) | index(\"--keychain\") != null'"
+  [ "$status" -eq 0 ]
+}

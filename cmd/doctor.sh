@@ -63,7 +63,7 @@ check_custody() {
   if _try st kc_status; then
     case "$st" in
       primary)   _row custody ok   "keychain custody" "primary" ;;
-      degraded*) _row custody attn "keychain custody" "degraded (file custody)" ;;
+      degraded*) _row custody attn "keychain custody" "degraded (file custody) — restore prompt-free Keychain reads: agent-secrets setup --keychain" ;;
       missing)   _row custody bad  "keychain custody" "missing" ;;
       *)         _row custody attn "keychain custody" "unknown state" ;;
     esac

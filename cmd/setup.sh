@@ -147,7 +147,58 @@ _done_screen() {
   ui_say "  agent-secrets run -- <cmd>  — run a command with secrets injected"
   ui_say "  agent-secrets doctor        — health check"
   ui_say "Off-machine backup: run  agent-secrets backup  (doctor tracks whether you have one)."
+  # Custody hint lands HERE because this is the moment the user can act on it: on macOS Sequoia the
+  # wizard's Keychain paste is skipped in any non-interactive pass, leaving file custody in effect.
+  case "$(kc_status 2>/dev/null || true)" in
+    degraded*)
+      ui_say ""
+      ui_say "Your key runs on the 0600-file fallback (fully supported). Restore prompt-free"
+      ui_say "Keychain custody anytime, in a real terminal:  agent-secrets setup --keychain" ;;
+  esac
+  # Cursor has no file-based global-rules path, so this is the one manual step left; hand the user
+  # the exact text at the exact moment instead of pointing at the README.
+  ui_say ""
+  ui_say "Cursor users — paste these once into Cursor Settings → Rules → User Rules"
+  ui_say "(Claude Code is covered by the installer's opt-in ~/.claude/CLAUDE.md block):"
+  ui_say "  - NEVER write a secret to a .env, export it in plaintext, or print a secret VALUE."
+  ui_say "  - Run tools WITH secrets injected, process-scoped: agent-secrets run -- <cmd>"
+  # shellcheck disable=SC2016  # literal $VALUE is the point — this is a paste-ready template
+  ui_say '  - Add/update a secret via STDIN (never argv): printf %s "$VALUE" | agent-secrets add NAME'
+  ui_say "  - Names/health/manifest: agent-secrets list · doctor · help --json"
+  ui_say ""
   ui_say "Docs: https://github.com/renchris/agent-secrets"
+}
+
+# Re-run ONLY the Keychain populate step (v2 feedback R2). On macOS Sequoia
+# `security add-generic-password -w` (no argv) does not read STDIN — it prompts /dev/tty with a
+# double-confirm — so any non-interactive first run leaves custody on the 0600-file fallback and
+# doctor reports "degraded (file custody)". This path restores PRIMARY (prompt-free Keychain)
+# custody in a real terminal without re-running the whole wizard. The key value transits the
+# clipboard and the hidden /dev/tty prompt only — never argv, stdout, or a transcript.
+_keychain_screen() {
+  ui_title "agent-secrets setup --keychain"
+  local kf; kf="$(agsec_age_key_file)"
+  [ -s "$kf" ] || agsec_die "no key on this machine yet — run: agent-secrets setup"
+  if [ "$(kc_status)" = primary ]; then
+    ui_ok "Keychain custody is already primary — prompt-free reads work; nothing to do"
+    return 0
+  fi
+  if [ -z "$UNATTENDED" ]; then
+    if agsec_have pbcopy; then pbcopy <"$kf"; ui_say "Your key is on the clipboard — paste it at the hidden prompt (macOS asks twice)."
+    else ui_say "Paste your age PRIVATE key (from your password manager) at the hidden prompt (macOS asks twice)."; fi
+  fi
+  if security add-generic-password -U -a "${USER:-agent}" -s "$AGENT_SECRETS_KC_SERVICE" -w 2>/dev/null; then
+    manifest_record_keychain "$AGENT_SECRETS_KC_SERVICE" >/dev/null 2>&1 || true   # reversible: uninstall removes it
+    [ -z "$UNATTENDED" ] && agsec_have pbcopy && printf '' | pbcopy
+    if [ "$(kc_status)" = primary ]; then
+      ui_ok "Keychain custody restored — primary (prompt-free reads)"
+    else
+      ui_warn "the Keychain write succeeded but the read-back still falls to the file — file custody remains (fully supported); re-run in Terminal.app to retry"
+    fi
+    return 0
+  fi
+  [ -z "$UNATTENDED" ] && agsec_have pbcopy && printf '' | pbcopy
+  agsec_die "Keychain populate did not complete — file custody remains in effect (fully supported); retry in Terminal.app with: agent-secrets setup --keychain"
 }
 
 # Disaster recovery on a new machine: re-establish key custody from the saved age key + a restored
@@ -164,12 +215,16 @@ _restore_screen() {
 }
 
 main() {
-  local do_restore=0
-  [ "${1:-}" = "--restore" ] && do_restore=1
+  local do_restore=0 do_keychain=0
+  case "${1:-}" in
+    --restore)  do_restore=1 ;;
+    --keychain) do_keychain=1 ;;
+  esac
   if [ -z "$UNATTENDED" ] && agsec_in_agent_session; then
     agsec_die "refusing the key ceremony inside an agent session (transcripts are secret-bearing) — run in a normal terminal (or AGENT_SECRETS_UNATTENDED=1 for a fake-value test)"
   fi
   agsec_secure_umask
+  if [ "$do_keychain" -eq 1 ]; then _keychain_screen; return 0; fi
   if [ "$do_restore" -eq 1 ]; then _restore_screen; _state 'done'; return 0; fi
   ui_title "agent-secrets setup"
   case "$(restore_returning_user_check)" in

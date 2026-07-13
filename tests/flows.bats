@@ -114,3 +114,11 @@ load test_helper
   [ "$status" -ne 0 ]
   [[ "$output" == *"--restore"* ]]              # directed to the restore path, not a silent strand
 }
+
+@test "done screen hands over the Cursor User Rules template and the degraded-custody fix (v2 feedback R2+R3)" {
+  run bash -c "printf '%s' seedval | AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Cursor Settings"* ]]                 # R3: paste-ready User Rules template
+  [[ "$output" == *"agent-secrets run -- <cmd>"* ]]
+  [[ "$output" == *"setup --keychain"* ]]                # R2: unattended run leaves file custody → hint printed
+}
