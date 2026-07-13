@@ -265,9 +265,12 @@ The store encrypts to a single `age` key. **This is all-or-nothing:** anything t
 reads the key can read the whole store — the same ceiling a password-manager vault has. What this
 design adds is *keeping secrets out of the places they usually leak* and *bounding + detecting*
 misuse: an in-store **canary** — which you arm with a tripwire token (`setup` offers to; `doctor`
-reminds you until you do) — trips an alert on any whole-store sweep, and a process-scoped **egress
-allowlist** bounds where a compromised agent can send data. It does **not** claim a per-secret audit
-trail on the free tier. Full threat model → **[SECURITY.md](SECURITY.md)**.
+reminds you until you do) — trips an alert on any whole-store sweep, and an opt-in, process-scoped
+**egress allowlist** — a loopback CONNECT proxy `run` starts from `~/.config/secrets/egress.allow` —
+bounds where a compromised agent can send data. That bound is **honest about its ceiling**: it
+constrains proxy-honoring clients (curl/git/most SDKs via `HTTPS_PROXY`), not a process that opens a
+raw socket — which is exactly why it is *paired* with the canary. It does **not** claim a per-secret
+audit trail on the free tier. Full threat model → **[SECURITY.md](SECURITY.md)**.
 
 ## For AI agents
 

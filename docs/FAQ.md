@@ -59,8 +59,9 @@ AGENT_SECRETS_BASE_URL=https://git.internal.example/mirror/agent-secrets sh inst
 
 Get IT/security approval first; keep your store + manifest on the **internal** git host (names-only
 is still internal-sensitive); and note that corporate endpoint detection and response (EDR) or an
-egress proxy may already provide the network bound this design asks for — integrate with it rather
-than double-building.
+egress proxy may already provide a network bound — if so, integrate with it rather than double-building.
+agent-secrets also ships its own opt-in, process-scoped bound: add hosts to `~/.config/secrets/egress.allow`
+and `run` routes the child's HTTP(S) through a loopback allowlist proxy (core Perl, no extra installs).
 
 ### Does Touch ID work?
 

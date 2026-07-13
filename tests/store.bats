@@ -73,7 +73,8 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   setup_store
   run bash "$REPO_ROOT/bin/agent-secrets" run --
   [ "$status" -eq 2 ]
-  [[ "$output" == *"run -- <cmd>"* ]]
+  [[ "$output" == *"agent-secrets run"* ]]   # run's user-facing usage…
+  [[ "$output" == *"-- <cmd>"* ]]            # …not the internal store_exec helper string
 }
 
 @test "static: no secret value passed to a logging/status helper (transcript-leak guard)" {

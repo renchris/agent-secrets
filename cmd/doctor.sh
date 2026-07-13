@@ -9,6 +9,7 @@ set -euo pipefail
 case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render doctor; exit 0 ;; esac
 . "$AGENT_SECRETS_LIB/store.sh"       # every call below is guarded against an unset/absent store
 . "$AGENT_SECRETS_LIB/keychain.sh"    # guarded against an unset/absent store
+. "$AGENT_SECRETS_LIB/egress.sh"      # egress allowlist status for gate (e)
 
 FORMAT=text ; REDACT=0 ; FIX=0 ; GATES=0
 for arg in "$@"; do
@@ -187,9 +188,19 @@ check_gates() {  # execution gates (c)/(d)/(e) — (c) degradation is a note, ne
   else _row gate attn "(c) keychain read" "degraded (file custody)"; fi
   if _guard store_exec -- true; then _row gate ok "(d) sops exec-env" "works"
   else _row gate attn "(d) sops exec-env" "unavailable (fallback: apiKeyHelper-only)"; fi
-  if [ -d "/Applications/LuLu.app" ]; then _row gate ok "(e) egress profile" "LuLu present (ruleset unverified)"
-  elif ls -d "/Applications/Little Snitch"*.app >/dev/null 2>&1; then _row gate ok "(e) egress profile" "Little Snitch present (ruleset unverified)"
-  else _row gate attn "(e) egress profile" "no LuLu/Little Snitch app found"; fi
+  # (e) egress: OUR process-scoped allowlist (the bound `run` applies) is primary; a system-wide
+  # firewall app is reported as defense-in-depth. perl + the proxy script present ⇒ the bound can start.
+  local ef; ef="$(egress_allow_file)"
+  if egress_enabled && [ -x /usr/bin/perl ] && [ -f "$(egress_proxy_script)" ]; then
+    _row gate ok "(e) egress allowlist" "active — $(egress_rule_count) rule(s); run bounds child HTTP(S) to them"
+  elif [ -f "$ef" ]; then
+    _row gate attn "(e) egress allowlist" "present but no rules — add hosts to $ef to bound run"
+  else
+    _row gate attn "(e) egress allowlist" "not configured — create $ef to bound where run can send data"
+  fi
+  if [ -d "/Applications/LuLu.app" ] || ls -d "/Applications/Little Snitch"*.app >/dev/null 2>&1; then
+    _row gate ok "(e) egress firewall" "system-wide firewall app present (ruleset unverified) — extra layer"
+  fi
 }
 
 run_checks() {

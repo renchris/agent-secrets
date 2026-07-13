@@ -187,6 +187,17 @@ store_exec() {
   exec sops exec-env "$(agsec_store_file)" "$cmd"
 }
 
+# Like store_exec but does NOT replace the process — runs the child in a subshell and RETURNS its exit
+# code. Used by egress_run, which must outlive the child to tear down the loopback proxy (an exec would
+# strand it). Same JIT injection + shell-quoting; the value still enters the child env only, never argv.
+store_exec_managed() {
+  [ "${1:-}" = "--" ] && shift
+  [ "$#" -ge 1 ] || agsec_die "store_exec_managed: usage: store_exec_managed -- <cmd> [args...]"
+  _store_export_key
+  local cmd; printf -v cmd '%q ' "$@"
+  sops exec-env "$(agsec_store_file)" "$cmd"
+}
+
 # Seed the in-store canary: a plausibly-named honeytoken entry a whole-store sweep grabs.
 store_canary_insert() {
   store_has "$AGENT_SECRETS_CANARY_NAME" && return 0

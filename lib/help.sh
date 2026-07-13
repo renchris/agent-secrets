@@ -61,21 +61,24 @@ list	example	agent-secrets list --format=json	[{"name":"ANTHROPIC_API_KEY","rota
 list	reads	~/.config/secrets/secrets.env (names only), manifest.toml
 list	exit	0	ok (prints a friendly note if the store is empty/absent)
 list	namesonly	prints names + metadata only; never a value
-run	synopsis	agent-secrets run -- <cmd> [args...]
+run	synopsis	agent-secrets run [--no-egress] -- <cmd> [args...]
 run	summary	Run a command with secrets injected just-in-time, process-scoped.
-run	desc	Decrypts the store and injects every entry into the child process's environment via `sops exec-env`, then execs <cmd>. The values live only in that process and die with it — never in a config, log, or your shell. The `--` separator is REQUIRED.
+run	desc	Decrypts the store and injects every entry into the child process's environment via `sops exec-env`, then runs <cmd>. The values live only in that process and die with it — never in a config, log, or your shell. The `--` separator is REQUIRED. If you have configured an egress allowlist (~/.config/secrets/egress.allow), run also starts a loopback CONNECT proxy and sets the child's HTTPS_PROXY so proxy-honoring tools can only reach allowlisted hosts (honest ceiling: a bound, not a jail — see SECURITY.md). Use --no-egress to opt a proxy-incompatible tool out.
+run	flag	--no-egress	skip the egress-allowlist proxy for this run (for a tool that breaks behind a proxy); also via AGENT_SECRETS_NO_EGRESS=1
 run	arg	-- <cmd> [args...]	the command to run with secrets in its environment (everything after -- is the command)
+run	env	AGENT_SECRETS_NO_EGRESS	1 = skip the egress allowlist for this run (same as --no-egress)
 run	example	agent-secrets run -- printenv ANTHROPIC_API_KEY | wc -c	prove injection without displaying the value (counts bytes)
 run	example	agent-secrets run -- node server.js	run any tool with the secrets injected for that process only
-run	exit	0	the child command's exit code (exec)
-run	exit	1	missing `--`, or no store (run setup)
+run	exit	0	the child command's exit code
+run	exit	1	no store (run setup)
+run	exit	2	usage error (missing `--` or no command)
 run	namesonly	values enter the child env only; the tool never prints them
 doctor	synopsis	agent-secrets doctor [--format=json] [--redact] [--gates] [--fix]
 doctor	summary	Health check across custody, store, injection, hygiene, maintenance, supply-chain.
 doctor	desc	Each check reports ✓/⚠/✗ with NAMES and status only. Exit is 0 when there is no ✗, else 1 — so an agent can gate on it. Non-destructive by default; --fix applies only safe fixes.
 doctor	flag	--format=json	machine-readable results (array of {category, status, detail}); no values
 doctor	flag	--redact	replace any sensitive-looking token with a sha256: digest in output
-doctor	flag	--gates	also run the execution gates (c: Keychain read, d: sops exec-env, e: egress profile)
+doctor	flag	--gates	also run the execution gates (c: Keychain read, d: sops exec-env, e: egress allowlist + firewall)
 doctor	flag	--fix	apply SAFE fixes only (never runs without this flag)
 doctor	example	agent-secrets doctor	human health report
 doctor	example	agent-secrets doctor --format=json	parse status programmatically

@@ -13,5 +13,7 @@ AGENT_SECRETS_ROOT="${AGENT_SECRETS_ROOT:-$(cd -P "$(dirname "$_self")/.." && pw
 . "$AGENT_SECRETS_ROOT/lib/keychain.sh"
 # shellcheck source=lib/store.sh
 . "$AGENT_SECRETS_ROOT/lib/store.sh"
+# shellcheck source=lib/egress.sh
+. "$AGENT_SECRETS_ROOT/lib/egress.sh"
 [ -f "$(agsec_store_file)" ] || agsec_die "no store found — run: agent-secrets setup"
-store_exec -- claude "$@"
+egress_run -- claude "$@"   # inject secrets + (if an allowlist is configured) bound egress

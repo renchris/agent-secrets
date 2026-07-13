@@ -15,8 +15,10 @@ CURSOR_BIN="${CURSOR_BIN:-/Applications/Cursor.app/Contents/MacOS/Cursor}"
 . "$AGENT_SECRETS_ROOT/lib/keychain.sh"
 # shellcheck source=lib/store.sh
 . "$AGENT_SECRETS_ROOT/lib/store.sh"
+# shellcheck source=lib/egress.sh
+. "$AGENT_SECRETS_ROOT/lib/egress.sh"
 if pgrep -x Cursor >/dev/null 2>&1; then
   agsec_die "Cursor is already running — quit it first (Cmd-Q), then re-run cursor-agent so secrets inject into a clean process"
 fi
 [ -f "$(agsec_store_file)" ] || agsec_die "no store found — run: agent-secrets setup"
-store_exec -- "$CURSOR_BIN" "$@"
+egress_run -- "$CURSOR_BIN" "$@"   # inject secrets + (if an allowlist is configured) bound egress

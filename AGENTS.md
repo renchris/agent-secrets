@@ -51,7 +51,7 @@ writes, names_only }`. **Everything you need to construct a valid invocation is 
 | `setup` | onboard a machine (once) | interactive; refuses key-ceremony in an agent session |
 | `add <NAME>` | store/update one secret | value via **STDIN**; `NAME` = `^[A-Za-z_][A-Za-z0-9_]*$` |
 | `list [--format=json]` | see what exists | **names + rotate dates only**, never values |
-| `run -- <cmd>` | run a tool with secrets | JIT-injected into that process; `--` is required |
+| `run [--no-egress] -- <cmd>` | run a tool with secrets | JIT-injected into that process; `--` required; bounds egress to `~/.config/secrets/egress.allow` when set (`--no-egress` opts out) |
 | `doctor [--format=json] [--gates]` | check health / gate | exit `0` healthy, `1` if any ✗ |
 | `pubkey [--copy]` | print your recipient key | **safe in an agent session** — public key only, never a secret |
 | `share <NAME>` | encrypt a secret to a colleague | **refuses in an agent session** (extracts a plaintext value) |

@@ -32,8 +32,9 @@ and returned to Claude Code's `apiKeyHelper` on demand — and never to a termin
 - **No free-tier audit trail.** The $0 design has no per-access log. Detection rests on the in-store
   canary, firewall egress logs, and short key-rotation windows. A real audit trail requires the
   paid upgrade path (1Password Business Events API).
-- **Exfiltration via an allowed host.** Network-egress limits bound where a compromised agent can
-  send data, but cannot stop exfiltration through a host the agent legitimately needs. This is why
+- **Exfiltration via an allowed host.** The egress allowlist (below) and any system-wide firewall
+  bound where a compromised agent can send data, but cannot stop exfiltration through a host the agent
+  legitimately needs — nor a client that ignores `HTTPS_PROXY` and opens a raw socket. This is why
   detection (the canary) is paired with the bound.
 
 ## Detection: the in-store canary
@@ -45,6 +46,23 @@ detection only once you **arm** it by replacing the placeholder value with a rea
 Once armed, any process that decrypts the whole store and *uses* what it found trips your out-of-band
 alert. It is listed in the manifest among the real entries on purpose, so a manifest-guided
 exfiltration loop grabs it first. `doctor` reports `attn` while it is still the unarmed placeholder.
+
+## Bounding: the egress allowlist
+
+`run` (and the `claude-agent` / `cursor-agent` wrappers) can bound where the child sends data. Add
+hosts to `~/.config/secrets/egress.allow` (one `host`, `host:port`, or `*.suffix` per line); `run`
+then starts a small **CONNECT proxy in core Perl** (`/usr/bin/perl` — always present on macOS, no CPAN,
+corporate-safe) on a random loopback port and sets the child's `HTTPS_PROXY`/`HTTP_PROXY` so
+proxy-honoring clients can reach **only** allowlisted hosts — everything else gets `403`. It is
+**opt-in**: with no allowlist, `run` behaves exactly as before (no bound is invented behind your back),
+and `--no-egress` (or `AGENT_SECRETS_NO_EGRESS=1`) skips it for a tool that breaks behind a proxy.
+
+**Honest ceiling.** This is a bound, **not a kernel jail.** It constrains clients that honor
+`HTTPS_PROXY` (curl, git, most SDKs); a process that ignores the proxy environment or opens a raw
+socket bypasses it entirely. That residual case is *why* the bound is paired with the canary — the
+allowlist shrinks the easy egress paths, and the canary detects a sweep that takes another route.
+`doctor --gates` reports gate `(e)`: the allowlist (active / rules) plus any system-wide firewall app
+(LuLu / Little Snitch) as a defense-in-depth layer.
 
 ## Sharing (`share` / `receive` / `pubkey`)
 

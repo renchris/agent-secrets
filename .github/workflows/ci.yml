@@ -20,7 +20,7 @@ jobs:
 
       - name: ShellCheck (all shell sources)
         run: |
-          find bin cmd lib scripts install.sh -type f ! -name '*.mjs' -print0 | xargs -0 shellcheck
+          find bin cmd lib scripts install.sh -type f ! -name '*.mjs' ! -name '*.pl' -print0 | xargs -0 shellcheck
 
       - name: Zero-telemetry / no-exfil gate
         run: scripts/telemetry-gate.sh
