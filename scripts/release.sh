@@ -60,18 +60,23 @@ else
   _say "    skipped tag move — do it yourself before publishing, or the baked install.sh won't be at ${TAG}"
 fi
 
-# 4) Write assets + publish (transport .sha256 is convenience; the baked digest is the real anchor).
+# 4) Write assets + publish. The baked digest (in install.sh, via the git-ref channel) is the real
+# integrity anchor; the sibling .sha256 is transport convenience. A RE-CUT replaces the prior release
+# (dropping its old assets) but keeps the freshly force-pushed tag; enable "immutable releases" in the
+# repo settings to stop assets being swapped AFTER publish (gh has no create-time flag for it).
 cp "$WORK/$PKG" "./$PKG"
 shasum -a 256 "$PKG" >"$PKG.sha256"
 _say "==> wrote ./$PKG and ./$PKG.sha256"
 _say ""
-_say "Publish (immutable so assets cannot be swapped):"
+_say "Publish:"
 _say "  git push -f origin ${TAG} && git push origin HEAD"
+_say "  gh release delete ${TAG} --yes   # re-cut only: drop the old release's assets (keeps the tag)"
 _say "  gh release create ${TAG} ${PKG} ${PKG}.sha256 --title ${TAG} --generate-notes"
 if _confirm "Run the gh release now?"; then
   git push -f origin "$TAG" && git push origin HEAD
+  gh release delete "$TAG" --yes >/dev/null 2>&1 || true   # re-cut: remove the old release, keep our new tag
   gh release create "$TAG" "$PKG" "$PKG.sha256" --title "$TAG" --generate-notes
-  _say "==> released ${TAG}"
+  _say "==> released ${TAG} — now enable 'immutable releases' in repo settings if you have not."
 else
-  _say "    skipped — run the two commands above when ready."
+  _say "    skipped — run the commands above when ready."
 fi
