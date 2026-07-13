@@ -30,6 +30,10 @@ if [ "$want_up" = "--upstream" ]; then
   up_pid=$!
   up_port="$(_wait_port "$upf")"; rm -f "$upf"
   target="${target/UPPORT/$up_port}"
+  # If the allowfile references UPPORT (host:port rule tests), materialize it with the real upstream port.
+  if grep -q UPPORT "$allow" 2>/dev/null; then
+    a2="$(mktemp)"; sed "s/UPPORT/$up_port/g" "$allow" >"$a2"; allow="$a2"
+  fi
 fi
 
 pf="$(mktemp)"

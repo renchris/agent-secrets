@@ -43,18 +43,23 @@ sub load_rules {
   return @rules;
 }
 
-# A host is allowed if it equals a rule's host part, or matches a `*.suffix` wildcard rule.
+# A (host, port) is allowed if the host equals a rule's host part (or matches a `*.suffix` wildcard)
+# AND the port matches: a rule WITH a `:port` constrains to that port; a rule without one allows any port.
 sub host_allowed {
-  my ($host) = @_;
+  my ($host, $port) = @_;
   $host = lc $host;
   for my $r (load_rules()) {
-    (my $rh = $r) =~ s/:\d+$//;                     # a :port in the rule does not constrain the host match
+    my ($rh, $rp);
+    if ($r =~ /^(.+):(\d+)$/) { ($rh, $rp) = ($1, $2); } else { ($rh, $rp) = ($r, undef); }
+    my $host_ok;
     if ($rh =~ /^\*\.(.+)$/) {
       my $suf = $1;
-      return 1 if $host eq $suf || $host =~ /\.\Q$suf\E$/;
-    } elsif ($host eq $rh) {
-      return 1;
+      $host_ok = ($host eq $suf || $host =~ /\.\Q$suf\E$/);
+    } else {
+      $host_ok = ($host eq $rh);
     }
+    next unless $host_ok;
+    return 1 if !defined($rp) || !defined($port) || $rp == $port;
   }
   return 0;
 }
@@ -90,7 +95,7 @@ sub handle {
   if ($line =~ m{^CONNECT\s+([^:\s]+):(\d+)\s+HTTP/}i) {
     my ($host, $rport) = ($1, $2);
     while (my $h = <$client>) { last if $h =~ /^\r?\n$/; }      # drain request headers
-    return refuse($client, 403, 'Forbidden') unless host_allowed($host);
+    return refuse($client, 403, 'Forbidden') unless host_allowed($host, $rport);
     my $remote = IO::Socket::INET->new(PeerAddr => $host, PeerPort => $rport, Proto => 'tcp')
       or return refuse($client, 502, 'Bad Gateway');
     print $client "HTTP/1.1 200 Connection established\r\n\r\n";
@@ -100,7 +105,7 @@ sub handle {
   # Plain HTTP proxy: METHOD http://host[:port]/path HTTP/x  (rewritten to origin-form upstream)
   if ($line =~ m{^(\S+)\s+http://([^/:\s]+)(?::(\d+))?(\S*)\s+HTTP/(\S+)}i) {
     my ($method, $host, $hport, $path, $ver) = ($1, $2, ($3 || 80), ($4 || '/'), $5);
-    return refuse($client, 403, 'Forbidden') unless host_allowed($host);
+    return refuse($client, 403, 'Forbidden') unless host_allowed($host, $hport);
     my $remote = IO::Socket::INET->new(PeerAddr => $host, PeerPort => $hport, Proto => 'tcp')
       or return refuse($client, 502, 'Bad Gateway');
     $remote->autoflush(1);

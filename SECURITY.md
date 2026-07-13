@@ -50,7 +50,7 @@ exfiltration loop grabs it first. `doctor` reports `attn` while it is still the 
 ## Bounding: the egress allowlist
 
 `run` (and the `claude-agent` / `cursor-agent` wrappers) can bound where the child sends data. Add
-hosts to `~/.config/secrets/egress.allow` (one `host`, `host:port`, or `*.suffix` per line); `run`
+hosts to `~/.config/secrets/egress.allow` (one `host`, `host:port` — scoped to that port — or `*.suffix` per line); `run`
 then starts a small **CONNECT proxy in core Perl** (`/usr/bin/perl` — always present on macOS, no CPAN,
 corporate-safe) on a random loopback port and sets the child's `HTTPS_PROXY`/`HTTP_PROXY` so
 proxy-honoring clients can reach **only** allowlisted hosts — everything else gets `403`. It is
