@@ -51,7 +51,7 @@ leans on that first.
 ## The one command
 
 ```sh
-sh -c "$(curl -fsLS https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.0/install.sh)"
+bash -c "$(curl -fsLS https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.0/install.sh)"
 ```
 
 <table>
@@ -75,7 +75,7 @@ touching your store.
 ```sh
 curl -fsLSO …/v0.1.0/install.sh
 less install.sh     # read every line
-sh install.sh
+bash install.sh
 ```
 
 The installer is function-guarded and pins a SHA-256–verified release.
@@ -84,16 +84,25 @@ The installer is function-guarded and pins a SHA-256–verified release.
 </tr>
 </table>
 
-**Exactly what it changes on your Mac:** installs `age`, `sops`, `gum`, `jq` (Homebrew); the
-`agent-secrets` command plus the `claude-agent`, `cursor-agent`, and `apiKeyHelper` wrappers in
-`~/bin`; an encrypted store at `~/.config/secrets/`; your age key in the login Keychain (with a
-`0600` file fallback); one `PATH` line in `~/.zshenv`; a weekly `launchd` smoke job; and the
-`apiKeyHelper` line in `~/.claude/settings.json`. It also *offers* (opt-in) to add a short
-agent-discovery block to `~/.claude/CLAUDE.md`. Every change is recorded in `install-manifest.json`
-and reversed by `agent-secrets uninstall` — all removable in one command.
+**Exactly what it changes on your Mac:** ensures `age`, `sops`, `gum`, `jq` **without `sudo` and
+without requiring Homebrew** — it reuses any you already have, uses Homebrew only if it's already
+installed, and otherwise downloads pinned, SHA-256-verified static binaries into
+`~/.agent-secrets/vendor/`; the `agent-secrets` command plus the `claude-agent`, `cursor-agent`, and
+`apiKeyHelper` wrappers in `~/bin`; an encrypted store at `~/.config/secrets/`; your age key in the
+login Keychain (with a `0600` file fallback); one `PATH` line in `~/.zshenv`; a weekly `launchd`
+smoke job; and the `apiKeyHelper` line in `~/.claude/settings.json`. It also *offers* (opt-in) to add
+a short agent-discovery block to `~/.claude/CLAUDE.md`. Every change is recorded in
+`install-manifest.json` and reversed by `agent-secrets uninstall` — all removable in one command.
 
-> **Behind a corporate firewall or air-gapped?** If `raw.githubusercontent.com` is blocked, install
-> from an internal mirror: `AGENT_SECRETS_BASE_URL=<mirror> sh install.sh` (see [FAQ](docs/FAQ.md) → corporate install).
+> **Running this from inside a coding agent (Cursor / Claude Code)?** The installer finishes the file
+> setup and then **defers the key ceremony** — minting your key and taking your first secret would land
+> them in the agent's transcript. It prints one instruction: open **Terminal.app** and run
+> `agent-secrets setup`. Everything else is already done.
+
+> **Behind a corporate firewall or air-gapped?** No Homebrew and no `sudo` are needed — the toolchain
+> comes from pinned GitHub-release binaries. If `raw.githubusercontent.com` is blocked, install from an
+> internal mirror: `AGENT_SECRETS_BASE_URL=<mirror> bash install.sh`, and mirror the dependency binaries
+> too with `AGENT_SECRETS_DEPS_BASE_URL=<mirror>` (see [FAQ](docs/FAQ.md) → corporate install).
 
 ## How it works
 

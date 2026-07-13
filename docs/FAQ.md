@@ -40,9 +40,15 @@ If your network filters egress (Cisco Umbrella, Zscaler, a TLS-inspecting proxy)
 | Host | Why |
 |---|---|
 | `raw.githubusercontent.com` | fetches `install.sh` |
-| `github.com`, `objects.githubusercontent.com` | the pinned release tarball + `.sha256` |
-| `github.com/Homebrew`, `formulae.brew.sh`, `ghcr.io` | Homebrew + bottles for `age`, `sops`, `gum` (skipped if already installed) |
+| `github.com`, `objects.githubusercontent.com` | the pinned release tarball **and** the pinned `age` / `sops` / `gum` / `jq` static binaries (all GitHub Releases 302-redirect to `objects.githubusercontent.com` — allow it, not just `github.com`) |
+| `github.com/Homebrew`, `formulae.brew.sh`, `ghcr.io` | **only if Homebrew is already installed** — an accelerator. The installer needs no Homebrew and no `sudo`; without brew it uses the pinned downloads above. |
 | `canarytokens.org` | runtime only, and only if you arm the in-store canary with a token you mint there |
+
+**No Homebrew, no `sudo`.** The toolchain (`age`, `sops`, `gum`, `jq`) is resolved without admin: any
+copy already on your `PATH` is reused, Homebrew is used only if it's already present, and otherwise the
+installer downloads **pinned, SHA-256-verified** static binaries into `~/.agent-secrets/vendor/`. If a
+strict binary-allowlisting agent (Santa / EDR in lockdown) blocks un-notarized binaries, it blocks
+Homebrew bottles too — ask IT to allowlist the tools, or place them on `PATH` yourself and re-run.
 
 **Proxy + TLS inspection work with no changes:** `install.sh` uses `curl`, which honors
 `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`; and as long as your corporate root CA is trusted (Jamf/MDM
@@ -51,11 +57,20 @@ installs it into the System keychain) system `curl` validates the inspected TLS 
 
 **Internal mirror / air-gapped (no public egress):** mirror the release assets (`install.sh` +
 `agent-secrets-v0.1.0.tar.gz` + `.sha256`, under a `releases/download/v0.1.0/` path) onto your
-internal Git / Artifactory / Nexus, fetch `install.sh` from there, and point it back at the mirror:
+internal Git / Artifactory / Nexus, fetch `install.sh` from there, and point it back at the mirror.
+To also mirror the toolchain, host the `age` / `sops` / `gum` / `jq` release assets under the same
+`<org>/<repo>/releases/download/<tag>/` layout and set `AGENT_SECRETS_DEPS_BASE_URL`:
 
 ```sh
-AGENT_SECRETS_BASE_URL=https://git.internal.example/mirror/agent-secrets sh install.sh
+AGENT_SECRETS_BASE_URL=https://git.internal.example/mirror/agent-secrets \
+AGENT_SECRETS_DEPS_BASE_URL=https://git.internal.example/mirror \
+  bash install.sh
 ```
+
+The installer verifies each downloaded binary against a **pinned SHA-256** regardless of source, so a
+mirror can't substitute a different binary. (`AGENT_SECRETS_INSTALL_URL` overrides where a re-exec
+under `bash` re-fetches `install.sh` itself; `AGENT_SECRETS_DEPS_NO_BREW=1` forces the pinned downloads
+even when Homebrew is present.)
 
 Get IT/security approval first; keep your store + manifest on the **internal** git host (names-only
 is still internal-sensitive); and note that corporate endpoint detection and response (EDR) or an

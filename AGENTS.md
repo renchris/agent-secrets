@@ -93,7 +93,7 @@ agent-secrets doctor --format=json | jq '[.checks[] | select(.status=="bad")]'
 |---|---|
 | `AGENT_SECRETS_HOME` | base dir for all state (default `$HOME`). **Set to an isolated temp dir to test/CI without touching the real machine.** |
 | `AGENT_SECRETS_PLAIN` / `NO_COLOR` | plain output (no color/box-drawing) — use when capturing output |
-| `AGENT_SECRETS_UNATTENDED` | `setup` runs non-interactively with **fake placeholder** values (tests only); reads the first value from STDIN |
+| `AGENT_SECRETS_UNATTENDED` | `setup` runs non-interactively with **fake placeholder** values (tests/CI only). The seed value comes from `AGENT_SECRETS_SEED_VALUE` if set, else a single piped STDIN line (read with a bounded timeout so it **never hangs** on an open agent stdin), else a placeholder; the name from `AGENT_SECRETS_SEED_NAME` (default `ANTHROPIC_API_KEY`). |
 
 ⚠️ The macOS login Keychain is **not** scoped by `AGENT_SECRETS_HOME`. When testing, put a mock
 `security` on `PATH` (see `tests/mocks/`) so you never touch the real Keychain.

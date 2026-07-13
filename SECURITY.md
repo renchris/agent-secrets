@@ -29,6 +29,16 @@ and returned to Claude Code's `apiKeyHelper` on demand — and never to a termin
   inside the trust boundary. The design mandates `ignore-scripts` and sandboxed installs to bound
   this, and the canary to detect a whole-store sweep — but a package that survives to runtime still
   executes with the injected environment. This is bounded and detected, not eliminated.
+- **Toolchain provenance (no-Homebrew install).** When neither Homebrew nor an existing copy is
+  present, the installer downloads `age`, `sops`, `gum`, and `jq` as static binaries and verifies each
+  against a **SHA-256 digest pinned in `lib/deps.sh`** (fail-closed — a mismatch aborts, and a custom
+  `AGENT_SECRETS_DEPS_BASE_URL` mirror cannot substitute a different binary because the pin, not the
+  mirror's own checksum file, is the check). Honest ceiling: those pins are the maintainer's assertion
+  of the correct bytes. `sops`/`gum`/`jq` publish upstream checksums (and cosign/attestation) the pins
+  were cross-checked against; **`age` publishes no signed checksums**, so its pin is trust-on-first-pin.
+  A downloaded unsigned Go binary runs because `curl` sets no `com.apple.quarantine` xattr (Gatekeeper
+  is never consulted); a binary-allowlisting agent (Santa/EDR lockdown) will block it — as it would a
+  Homebrew bottle — and the installer fails loud rather than working around it.
 - **No free-tier audit trail.** The $0 design has no per-access log. Detection rests on the in-store
   canary, firewall egress logs, and short key-rotation windows. A real audit trail requires the
   paid upgrade path (1Password Business Events API).
