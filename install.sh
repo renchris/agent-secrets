@@ -55,6 +55,20 @@ main() {
   local BIN_DIR="$HOME_DIR/bin"
   local STATE_DIR="$HOME_DIR/.local/state/agent-secrets"
   local RC_FILE="$HOME_DIR/.zshenv"        # sourced by every zsh invocation incl. Cursor subshells
+  # zsh is the macOS default, but a bash-login user never reads ~/.zshenv, so the PATH block would be
+  # inert and `agent-secrets` unfound by name in every bash terminal (incl. agent subshells). When the
+  # login shell is bash, ALSO write a block to the FIRST EXISTING of .bash_profile/.bash_login/.profile
+  # (bash reads only the first of those) — creating .bash_profile when none exist would SHADOW an
+  # existing ~/.profile, so pick the existing one.
+  local BASH_RC_FILE=""
+  case "${SHELL:-}" in
+    */bash)
+      BASH_RC_FILE="$HOME_DIR/.bash_profile"
+      local _rc
+      for _rc in .bash_profile .bash_login .profile; do
+        if [ -f "$HOME_DIR/$_rc" ]; then BASH_RC_FILE="$HOME_DIR/$_rc"; break; fi
+      done ;;
+  esac
   local PATH_MARKER="agent-secrets"
   local DISCOVERY_MARKER="agent-secrets"   # marker for the opt-in ~/.claude/CLAUDE.md discovery block (doctor greps it; uninstall strips it)
   local SMOKE_LABEL="com.agent-secrets.smoke"
@@ -75,12 +89,12 @@ main() {
     _say "  • ensure age, sops, gum, jq (reuse yours · Homebrew if present · else pinned, SHA-256-verified downloads — no sudo)"
     _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG, SHA-256 verified)"
     _say "  • symlink the command + wrappers into $BIN_DIR   (agent-secrets, claude-agent, cursor-agent, apiKeyHelper)"
-    _say "  • add a marker-delimited PATH block to $RC_FILE"
+    _say "  • add a marker-delimited PATH block to $RC_FILE${BASH_RC_FILE:+ (and $BASH_RC_FILE — your login shell is bash)}"
     _say "  • install a weekly launchd smoke job ($SMOKE_LABEL)"
-    _say "  • back up an existing ~/.claude/settings.json (revert point for setup's apiKeyHelper edit)"
-    _say "  • OFFER (opt-in) to add agent-secrets rules to ~/.claude/CLAUDE.md so agents in EVERY repo know to use it"
+    _say "  • (via 'agent-secrets setup') back up an existing ~/.claude/settings.json as the revert point for its apiKeyHelper edit"
+    _say "  • OFFER (opt-in, interactive terminal only) to add agent-secrets rules to ~/.claude/CLAUDE.md so agents in EVERY repo know to use it"
     _say "  • record every change to $STATE_DIR/install-manifest.json (one-command uninstall)"
-    _say "  • run 'agent-secrets setup' at the end (in a coding-agent session: install now, then finish setup in a real terminal)"
+    _say "  • run 'agent-secrets setup' at the end (in a coding-agent session OR a non-interactive install: install now, then finish setup in a real terminal)"
     _say ""
   }
 
@@ -108,6 +122,19 @@ main() {
   else
     _say "(non-interactive stdin — proceeding with the plan above; run in a terminal to review step by step)"
   fi
+
+  # --- preflight: a regular file (or dangling symlink) where we need a directory --------------------
+  # `mkdir -p` below would die "File exists" under set -e AFTER partially creating siblings, leaving
+  # residue with no manifest to roll back. Catch it here — pre-network, pre-mutation — and name the
+  # conflict. The `if`-form is load-bearing: a `[ … ] && [ … ] && _die` chain returns nonzero on the
+  # healthy (dir-absent) path and would abort the install under set -e. A symlink TO a directory passes
+  # (`[ ! -d ]` follows links), so a legitimately symlinked ~/bin is unaffected.
+  local _d
+  for _d in "$INSTALL_DIR" "$BIN_DIR" "$STATE_DIR"; do
+    if { [ -e "$_d" ] || [ -L "$_d" ]; } && [ ! -d "$_d" ]; then
+      _die "$_d already exists and is not a directory — move it aside, then re-run the installer"
+    fi
+  done
 
   # --- toolchain: resolved AFTER unpack, from the tool's own lib/deps.sh -----------------------------
   # (This USED to `brew install age sops gum jq` behind a sudo-gated Homebrew bootstrap — the #1
@@ -139,27 +166,36 @@ main() {
   _say "SHA-256 verified."
 
   # --- unpack the tool ---------------------------------------------------------
+  # Was $INSTALL_DIR created by THIS run? A re-run over an existing (live) install must never have its
+  # tool dir deleted by the pre-manifest abort trap below (RT6), so only arm that trap when fresh.
+  local FRESH_INSTALL=0; [ -d "$INSTALL_DIR" ] || FRESH_INSTALL=1
   _run mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$STATE_DIR"
   _run tar -xzf "$pkg" -C "$INSTALL_DIR" --strip-components=1
   # Fail LOUDLY on a mis-cut tarball (wrong/missing top-level prefix flattens the layout and would
   # dangle every wrapper symlink) instead of a cryptic `set -e` abort on the first source below. The
   # release runbook pins `git archive --prefix=agent-secrets-${TAG}/` to guarantee the single prefix dir.
-  [ "$DRY_RUN" -eq 1 ] || [ -f "$INSTALL_DIR/lib/common.sh" ] \
-    || _die "unexpected tarball layout (need one top-level prefix dir) — re-cut with: git archive --prefix=agent-secrets-\${TAG}/ \${TAG}"
+  # Check BOTH a lib and the dispatcher: a tarball missing bin/agent-secrets would otherwise dangle the
+  # dispatcher symlink, and manifest_record_file (which follows the link) returns 1 → set -e abort AFTER
+  # the cleanup trap is disarmed → half-wired install with no rollback.
+  [ "$DRY_RUN" -eq 1 ] || { [ -f "$INSTALL_DIR/lib/common.sh" ] && [ -f "$INSTALL_DIR/bin/agent-secrets" ]; } \
+    || _die "unexpected tarball layout (need one top-level prefix dir with bin/ + lib/) — re-cut with: git archive --prefix=agent-secrets-\${TAG}/ \${TAG}"
 
   # Cleanup trap for the pre-manifest window: from here until $INSTALL_DIR is recorded, an abort — e.g. a
   # REQUIRED dependency that can't be fetched on a locked-down network (deps_ensure below) — would strand
   # the unpacked tool with NO manifest to roll back (the residue regression the reorder introduced).
-  # Remove ONLY what we just created: $INSTALL_DIR (always ours) plus the two tool dirs if still empty
-  # (rmdir is a no-op on a pre-existing ~/bin holding the user's files). Disarmed the instant the manifest
+  # Remove ONLY what we just created: $INSTALL_DIR (removed only when created fresh THIS run — a re-run
+  # over a live install must never be deleted by an abort) plus the two tool dirs if still empty (rmdir
+  # is a no-op on a pre-existing ~/bin holding the user's files). Disarmed the instant the manifest
   # records $INSTALL_DIR, so the success path + uninstall are unaffected.
   # The paths MUST be baked in NOW (%q-quoted so any shell metacharacter in an exotic AGENT_SECRETS_HOME
   # stays safe): a named handler is NOT an option — main()'s locals are already out of scope by the time
   # the EXIT trap fires while the shell unwinds through an `exit` on an abort (verified under bash 3.2).
-  local _cleanup_cmd
-  printf -v _cleanup_cmd 'rm -rf -- %q; rmdir -- %q %q 2>/dev/null || true' "$INSTALL_DIR" "$STATE_DIR" "$BIN_DIR"
-  # shellcheck disable=SC2064  # expand-now via the pre-built %q string is DELIBERATE (see above)
-  trap "$_cleanup_cmd" EXIT
+  if [ "$FRESH_INSTALL" -eq 1 ]; then
+    local _cleanup_cmd
+    printf -v _cleanup_cmd 'rm -rf -- %q; rmdir -- %q %q 2>/dev/null || true' "$INSTALL_DIR" "$STATE_DIR" "$BIN_DIR"
+    # shellcheck disable=SC2064  # expand-now via the pre-built %q string is DELIBERATE (see above)
+    trap "$_cleanup_cmd" EXIT
+  fi
 
   # From here on the tool's own libs exist — source them to record artifacts.
   # shellcheck source=/dev/null
@@ -183,17 +219,35 @@ main() {
   # for rollback, and record $INSTALL_DIR itself so uninstall removes the unpacked tool (no residue).
   manifest_record_file "$INSTALL_DIR" >/dev/null 2>&1 || true
   trap - EXIT   # $INSTALL_DIR is now recorded → uninstall can roll it back; disarm the pre-manifest cleanup
+  # A pre-existing NON-symlink at a target on PATH is the USER'S own file — `ln -sf` clobbers it and
+  # uninstall's `rm -f` of the `file` record would finish the loss. Write-once backup + an `edit` record
+  # (appended BEFORE the file record: LIFO rollback removes the symlink first, then restores the file).
+  _bak_user_target() {
+    local t="$1" b
+    if [ -f "$t" ] && [ ! -L "$t" ]; then
+      b="$STATE_DIR/$(basename "$t").preinstall.bak"
+      [ -f "$b" ] || cp -p "$t" "$b"
+      manifest_record_edit "$t" "$b" >/dev/null 2>&1 || true
+    fi
+  }
   local f
+  _bak_user_target "$BIN_DIR/agent-secrets"
   _run ln -sf "$INSTALL_DIR/bin/agent-secrets" "$BIN_DIR/agent-secrets"
   manifest_record_file "$BIN_DIR/agent-secrets"
   for f in claude-agent cursor-agent apiKeyHelper; do
     [ -f "$INSTALL_DIR/bin/$f" ] || continue
+    _bak_user_target "$BIN_DIR/$f"
     _run ln -sf "$INSTALL_DIR/bin/$f" "$BIN_DIR/$f"
     manifest_record_file "$BIN_DIR/$f"
   done
 
   # Idempotent, marker-delimited PATH block → shell rc (recorded for total rollback).
   manifest_pathblock_install "$RC_FILE" "$PATH_MARKER" "export PATH=\"$BIN_DIR:\$PATH\""
+  # Bash-login users also get the block in their login rc (see BASH_RC_FILE above); recorded → uninstall
+  # strips it via the same _manifest_rb_pathblock.
+  if [ -n "$BASH_RC_FILE" ]; then
+    manifest_pathblock_install "$BASH_RC_FILE" "$PATH_MARKER" "export PATH=\"$BIN_DIR:\$PATH\""
+  fi
 
   # Weekly launchd smoke job. Written from the tool's own template.
   _run mkdir -p "$HOME_DIR/Library/LaunchAgents"
@@ -236,12 +290,16 @@ main() {
   # TOOL install above is complete and exit-0 regardless; we simply route the human to a real terminal
   # for the ceremony instead of running (and failing) it here. UNATTENDED (tests/CI) runs it with fakes.
   _say ""
-  if agsec_in_agent_session && [ -z "${AGENT_SECRETS_UNATTENDED:-}" ]; then
+  # Defer the ceremony when there is no interactive terminal to run it in — an agent session (secret-
+  # bearing transcript) OR any non-tty stdin (`curl … | bash`, ssh, cron). Chaining setup there would
+  # read EOF at the hidden prompts and silently store an EMPTY first secret. UNATTENDED (tests/CI) still
+  # runs it with fake values.
+  if { agsec_in_agent_session || [ ! -t 0 ]; } && [ -z "${AGENT_SECRETS_UNATTENDED:-}" ]; then
     _say "${C_GREEN}✓${C_RESET} agent-secrets is installed — one step left."
     _say ""
-    _say "You're in a coding-agent session, so the key ceremony was ${C_BOLD}not${C_RESET} run here on"
-    _say "purpose: it mints your encryption key and takes your first secret, and an agent"
-    _say "transcript is secret-bearing. Finish it in a ${C_BOLD}real terminal${C_RESET}:"
+    _say "The key ceremony was ${C_BOLD}not${C_RESET} run here (a coding-agent session, or a non-interactive"
+    _say "install with no terminal) on purpose: it mints your encryption key and takes your first"
+    _say "secret, which must not land in a transcript or be read from a dead pipe. Finish it in a ${C_BOLD}real terminal${C_RESET}:"
     _say ""
     _say "    ${C_BOLD}1.${C_RESET} open Terminal.app (or iTerm) — a new window picks up your PATH"
     _say "    ${C_BOLD}2.${C_RESET} run:  ${C_BOLD}agent-secrets setup${C_RESET}"
@@ -288,6 +346,11 @@ _install_smoke_plist() {
     <string>${install_dir}/bin/agent-secrets</string>
     <string>smoke</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>${install_dir}/vendor/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
   <key>StartCalendarInterval</key>
   <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>9</integer></dict>
 </dict>
