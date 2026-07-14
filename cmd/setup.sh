@@ -30,6 +30,11 @@ _key_ceremony() {
   # fell through to `age-keygen -o`, which REFUSES to overwrite the existing key (exit 1); the
   # `2>/dev/null` hid the error and `set -e` aborted the wizard silently → permanent onboarding lockout.
   if [ -s "$kf" ]; then
+    # Sweep a recovery.key stranded by a hard-killed prior ceremony (SIGKILL/power-loss the EXIT trap
+    # below can't catch). The private recovery key belongs in the user's password manager, never on the
+    # same disk as the primary key — its on-disk copy is transient by design, so removing a stale one is
+    # correct. (A user who declined the "saved it?" confirm was told to delete it themselves.)
+    rm -f "$cfg/recovery.key"
     [ -s "$pf" ] || age-keygen -y "$kf" >"$pf"      # re-derive the public recipient when it's absent
     ui_ok "key already exists — not minting a second one"; kc_write_selector; store_init; return 0
   fi
@@ -44,7 +49,13 @@ _key_ceremony() {
   # Same O_EXCL hardening as the primary key above: clear a stale/partial recovery.key so age-keygen -o
   # (which REFUSES to overwrite) can recreate it, and drop 2>/dev/null so a real keygen failure surfaces
   # instead of silently aborting the wizard under set -e (the exact wedge the primary key mint had).
-  local rec="$cfg/recovery.key"; [ -f "$rec" ] && rm -f "$rec"
+  local rec="$cfg/recovery.key" rec_keep=0; [ -f "$rec" ] && rm -f "$rec"
+  # Strand + clipboard guard: an interrupt anywhere in the ceremony below — ^C at the macOS Keychain
+  # double-prompt, SIGTERM, or a set -e/agsec_die death — must never leave the recovery PRIVATE key on
+  # disk OR the primary key on the clipboard. A single EXIT trap covers all three on bash 3.2 (verified);
+  # %q-bake the path since the local is out of scope when the trap fires during unwind (project memory).
+  # shellcheck disable=SC2064  # expand-NOW via the pre-built %q string is DELIBERATE (see above)
+  trap "rm -f $(printf '%q' "$rec") 2>/dev/null; command -v pbcopy >/dev/null 2>&1 && printf '' | pbcopy 2>/dev/null || true" EXIT
   age-keygen -o "$rec"; age-keygen -y "$rec" >"$cfg/recovery.pub"
   kc_write_selector
   ui_ok "generated your key + a recovery key (the store encrypts to both)"
@@ -62,10 +73,17 @@ _key_ceremony() {
         ui_warn "Keychain populate skipped — running on file custody (fully supported)"
       fi
     fi
-    agsec_have pbcopy && printf '' | pbcopy
-    ui_say "Move $cfg/recovery.key to offline/printed storage now; it's being removed from disk."
+    # Deliver the RECOVERY key (the store encrypts to recovery.pub, so the user MUST hold its private
+    # half — without this the second recipient is permanently unusable). Mirror the primary-key handoff:
+    # clipboard → password manager, then a confirm. This MUST come AFTER the Keychain block so the
+    # primary key stays on the clipboard for its "paste it once" prompt; here it overwrites it.
+    if agsec_have pbcopy; then pbcopy <"$rec"; ui_say "Your RECOVERY key is now on the clipboard — save it offline (password manager or a printed sheet)."
+    else ui_say "Copy $rec to offline/printed storage now — it is removed once you confirm."; fi
+    _confirm "Saved your RECOVERY key offline?" y || { rec_keep=1; ui_warn "recovery.key left at $rec — save it offline, then delete the file yourself"; }
+    agsec_have pbcopy && printf '' | pbcopy    # scrub the recovery key off the clipboard
   fi
-  rm -f "$rec"
+  [ "$rec_keep" -eq 1 ] || rm -f "$rec"        # remove the on-disk recovery key unless the user explicitly asked to keep it
+  trap - EXIT                                  # deliberate cleanup done — disarm the strand/clipboard guard
   store_init
 }
 
@@ -116,6 +134,15 @@ _wire_tools() {
   local w
   for w in claude-agent cursor-agent apiKeyHelper; do
     [ -f "$AGENT_SECRETS_ROOT/bin/$w" ] || continue
+    # A pre-existing NON-symlink at the target is the USER'S own file — `ln -sf` would clobber it and
+    # uninstall's `rm -f` on the `file` record would then finish the loss. Write-once backup + an `edit`
+    # record so uninstall RESTORES it. The edit record is appended BEFORE the file record: rollback is
+    # LIFO, so the symlink is removed first, then the user's file restored.
+    if [ -f "$bindir/$w" ] && [ ! -L "$bindir/$w" ]; then
+      local wbak; wbak="$(agsec_state_dir)/wrapper-$w.bak"; mkdir -p "$(dirname "$wbak")"
+      [ -f "$wbak" ] || cp -p "$bindir/$w" "$wbak"      # WRITE-ONCE: a re-run must not overwrite the pristine backup
+      manifest_record_edit "$bindir/$w" "$wbak" >/dev/null 2>&1 || true
+    fi
     # Symlink (not copy) so the wrapper follows the link back to its sibling lib/ under the install root.
     ln -sf "$AGENT_SECRETS_ROOT/bin/$w" "$bindir/$w"
     manifest_record_file "$bindir/$w" >/dev/null 2>&1 || true
@@ -134,8 +161,18 @@ _wire_tools() {
       # We created settings.json → rollback DELETES it (restoring an empty {} would leave residue).
       manifest_record_edit "$sj" "$bak" apiKeyHelper created >/dev/null 2>&1 || true
     fi
-    jq --arg h "$bindir/apiKeyHelper" '.apiKeyHelper=$h' "$sj" >"$sj.new" && mv "$sj.new" "$sj"
-    ui_ok "wired apiKeyHelper into settings.json (reversible)"
+    # Capture jq's exit: an INVALID pre-existing settings.json makes jq fail, mv is skipped, and — because
+    # an &&-list is errexit-exempt — the old unconditional ui_ok printed a FALSE "wired" success and left
+    # a settings.json.new residue. Only claim success when the write actually happened.
+    if jq --arg h "$bindir/apiKeyHelper" '.apiKeyHelper=$h' "$sj" >"$sj.new" 2>/dev/null; then
+      mv "$sj.new" "$sj"
+      ui_ok "wired apiKeyHelper into settings.json (reversible)"
+    else
+      rm -f "$sj.new"
+      ui_warn "could not wire apiKeyHelper — $sj is not valid JSON (fix it, then re-run: agent-secrets setup)"
+    fi
+  else
+    ui_warn "jq missing — skipped wiring apiKeyHelper into settings.json; install jq (the installer vendors it), then re-run: agent-secrets setup"
   fi
   ui_say "The Dock Cursor stays secret-free on purpose — use 'cursor-agent' for agent work."
 }
@@ -184,12 +221,16 @@ _keychain_screen() {
     return 0
   fi
   if [ -z "$UNATTENDED" ]; then
-    if agsec_have pbcopy; then pbcopy <"$kf"; ui_say "Your key is on the clipboard — paste it at the hidden prompt (macOS asks twice)."
+    if agsec_have pbcopy; then
+      # Scrub the private key off the clipboard on ANY exit — a ^C at the macOS double-prompt would
+      # otherwise leave it there for the next paste/clipboard-history reader.
+      trap 'printf "" | pbcopy 2>/dev/null || true' EXIT
+      pbcopy <"$kf"; ui_say "Your key is on the clipboard — paste it at the hidden prompt (macOS asks twice)."
     else ui_say "Paste your age PRIVATE key (from your password manager) at the hidden prompt (macOS asks twice)."; fi
   fi
   if security add-generic-password -U -a "${USER:-agent}" -s "$AGENT_SECRETS_KC_SERVICE" -w 2>/dev/null; then
     manifest_record_keychain "$AGENT_SECRETS_KC_SERVICE" >/dev/null 2>&1 || true   # reversible: uninstall removes it
-    [ -z "$UNATTENDED" ] && agsec_have pbcopy && printf '' | pbcopy
+    [ -z "$UNATTENDED" ] && agsec_have pbcopy && printf '' | pbcopy; trap - EXIT
     if [ "$(kc_status)" = primary ]; then
       ui_ok "Keychain custody restored — primary (prompt-free reads)"
     else
@@ -197,7 +238,7 @@ _keychain_screen() {
     fi
     return 0
   fi
-  [ -z "$UNATTENDED" ] && agsec_have pbcopy && printf '' | pbcopy
+  [ -z "$UNATTENDED" ] && agsec_have pbcopy && printf '' | pbcopy; trap - EXIT
   agsec_die "Keychain populate did not complete — file custody remains in effect (fully supported); retry in Terminal.app with: agent-secrets setup --keychain"
 }
 
@@ -224,12 +265,22 @@ main() {
     agsec_die "refusing the key ceremony inside an agent session (transcripts are secret-bearing) — run in a normal terminal (or AGENT_SECRETS_UNATTENDED=1 for a fake-value test)"
   fi
   agsec_secure_umask
+  # --keychain and --restore legitimately read piped stdin (the key), so they run BEFORE this guard.
   if [ "$do_keychain" -eq 1 ]; then _keychain_screen; return 0; fi
   if [ "$do_restore" -eq 1 ]; then _restore_screen; _state 'done'; return 0; fi
+  # The wizard reads secrets from hidden prompts on STDIN; with no terminal it would silently read EOF
+  # and store an empty first secret (the `curl … | bash` failure). Hard-refuse instead — the installer
+  # defers the ceremony to a real terminal, and UNATTENDED tests use fake values.
+  if [ -z "$UNATTENDED" ] && [ ! -t 0 ]; then
+    agsec_die "setup is an interactive ceremony but stdin is not a terminal — run 'agent-secrets setup' in a real terminal (or AGENT_SECRETS_UNATTENDED=1 for a fake-value test run)"
+  fi
   ui_title "agent-secrets setup"
   case "$(restore_returning_user_check)" in
     installed) ui_say "agent-secrets is already set up."
-      _confirm "Run a health check instead of re-onboarding?" y && exec bash "$AGENT_SECRETS_CMD/doctor.sh" ;;
+      # Re-wire before the health check: after an uninstall(keep)→reinstall the wrappers are re-symlinked
+      # but settings.json is NOT (that edit is owned by _wire_tools), so the fast path must re-wire or
+      # Claude Code is left unwired while doctor reads healthy. _wire_tools is idempotent.
+      if _confirm "Run a health check instead of re-onboarding?" y; then _wire_tools; exec bash "$AGENT_SECRETS_CMD/doctor.sh"; fi ;;
     partial) ui_say "A previous setup was interrupted — continuing (idempotent; your key is kept)." ;;
   esac
   ui_step 2 7 "Preflight";        _preflight;      _state preflight
