@@ -212,6 +212,16 @@ check_backup() {  # is an off-machine second copy configured? (makes disaster re
   fi
 }
 
+check_onboarding() {  # service-readiness triage: the external CLIs the user configures next (gh/az).
+  # ALL rows are `optional` tier → hidden by --summary (they are next-steps, never failures) but shown
+  # in the full report, so `doctor` doubles as a "what's left to set up" view alongside `help onboarding`
+  # (which carries the brew-less install recipes). az in particular is checked nowhere else.
+  if agsec_have gh; then _row onboarding ok "gh (GitHub CLI)" "installed — run 'gh auth login' to enable backup" optional
+  else _row onboarding attn "gh (GitHub CLI)" "not installed (optional; enables agent-secrets backup) — recipe: agent-secrets help onboarding" optional; fi
+  if agsec_have az; then _row onboarding ok "az (Azure CLI)" "installed — run 'az login' to authenticate" optional
+  else _row onboarding attn "az (Azure CLI)" "not installed (optional) — brew-less recipe: agent-secrets help onboarding" optional; fi
+}
+
 check_discovery() {  # is the opt-in machine-wide agent-discovery block present in the GLOBAL Claude memory?
   local cm marker; cm="$(agsec_home)/.claude/CLAUDE.md"
   marker="# >>> ${AGENT_SECRETS_DISCOVERY_MARKER} >>>"
@@ -301,6 +311,7 @@ run_checks() {
   check_hygiene
   check_maintenance
   check_supply
+  check_onboarding
   if [ "$GATES" = 1 ]; then check_gates; fi
 }
 

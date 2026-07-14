@@ -163,6 +163,17 @@ load test_helper
   [[ "$output" == *"gh auth login"* ]] || return 1
 }
 
+@test "doctor onboarding category triages external-CLI readiness (full), hidden by --summary (optional tier)" {
+  setup_store
+  run bash "$REPO_ROOT/bin/agent-secrets" doctor
+  [[ "$output" == *"[onboarding]"* ]] || return 1
+  [[ "$output" == *"gh (GitHub CLI) — installed"* ]] || return 1   # gh mock is on PATH → present
+  [[ "$output" == *"az (Azure CLI)"* ]] || return 1                # az triaged (checked nowhere else)
+  # optional tier → the whole triage is hidden in the quiet post-setup view (no new ⚠ noise)
+  run bash "$REPO_ROOT/bin/agent-secrets" doctor --summary
+  [[ "$output" != *"[onboarding]"* ]] || return 1
+}
+
 @test "backup with gh absent points at the install recipe (help onboarding), not a bare doctor" {
   # A PATH without the gh mock (and no real gh in /usr/bin:/bin) → agsec_have gh is false.
   run env -i PATH=/usr/bin:/bin HOME="$HOME" AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" \

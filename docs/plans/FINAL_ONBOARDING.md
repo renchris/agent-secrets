@@ -29,7 +29,7 @@ gh/az (P2 says document-not-bundle).
 | Item | Decision | Rationale |
 |------|----------|-----------|
 | P0-1 `docs/POST_INSTALL.md` gh/az/anthropic recipes | **DO** | Pure docs; solves real brew-less pain |
-| P0-1 doctor `onboarding` category | **DECLINE** | Permanent gh/az "absent" attn = the exact noise P1-2 fixes; gh/az are optional |
+| P0-1 doctor `onboarding` category | **DO** (reversed 2026-07-14) | Initially declined as noise — but the `--summary` tiering I built dissolves that objection: tier it `optional` → hidden in summary, shown in full doctor. Gives a real gh/az readiness triage (az is checked nowhere else) at zero summary cost. It IS P0-1's literal primary suggestion. |
 | P0-1 `help onboarding` topic | **DO** | In-terminal pointer; no dispatcher edit (help.sh branch) |
 | P0-1 Next-steps pointer (done screen + install deferral) | **DO** | Cheap, surfaces POST_INSTALL at the right moment |
 | P0-2 pbcopy Cursor rules at setup end | **DO** | Real convenience; pbcopy mocked; guarded |
