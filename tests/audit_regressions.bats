@@ -135,3 +135,42 @@ PERL
   [ "$status" -eq 0 ]
   [[ "$output" == *"BODY_OK"* ]]
 }
+
+# --- HIGH re-audit: dedup × S4 wrapper-edit × RT5a rewire must NOT invert LIFO ------
+# A file record re-recorded on a rewire is identical to the original; a naive drop-if-exists left it in
+# its OLD position (before the later edit record), so rollback restored the user's file then rm'd it.
+# Move-to-tail keeps correct LIFO: remove symlink first, THEN restore the user's file.
+@test "dedup preserves LIFO when a wrapper file record is re-recorded after a user-file edit (no data loss)" {
+  _load_manifest
+  local bd="$AGENT_SECRETS_HOME/bin"; mkdir -p "$bd"
+  # 1) original install records the wrapper symlink
+  ln -sf "$REPO_ROOT/bin/apiKeyHelper" "$bd/apiKeyHelper"
+  manifest_record_file "$bd/apiKeyHelper" >/dev/null
+  # 2) user replaces it with their OWN file
+  rm -f "$bd/apiKeyHelper"; printf '#!/bin/sh\necho USERS_OWN\n' > "$bd/apiKeyHelper"; chmod +x "$bd/apiKeyHelper"
+  # 3) rewire (RT5a): back up the user file (edit record), re-symlink, re-record the (identical) file record
+  local wbak="$AGENT_SECRETS_HOME/.local/state/agent-secrets/wrapper-apiKeyHelper.bak"
+  mkdir -p "$(dirname "$wbak")"; cp -p "$bd/apiKeyHelper" "$wbak"
+  manifest_record_edit "$bd/apiKeyHelper" "$wbak" >/dev/null
+  ln -sf "$REPO_ROOT/bin/apiKeyHelper" "$bd/apiKeyHelper"
+  manifest_record_file "$bd/apiKeyHelper" >/dev/null           # identical to step 1 → move-to-tail
+  # 4) rollback must remove the symlink THEN restore the user's file
+  manifest_rollback >/dev/null 2>&1
+  [ ! -L "$bd/apiKeyHelper" ]
+  grep -q USERS_OWN "$bd/apiKeyHelper"                          # user file survives (was lost pre-fix)
+}
+
+# --- HIGH re-audit: the AGSEC_TEST_CONFIRM seam cannot be flipped against the REAL store ------
+@test "agsec_src_is_tty: the test seam requires a SYNTHETIC home — it never accepts a file for the real store" {
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"
+  local f; f="$AGENT_SECRETS_HOME/y"; printf 'y\n' > "$f"
+  # Seam active only when AGENT_SECRETS_HOME (a sandbox) differs from real $HOME → file accepted.
+  AGSEC_TEST_CONFIRM=1 agsec_src_is_tty "$f"
+  # Attacker mimic: TEST_CONFIRM set but HOME points at the REAL store (== $HOME) → file REFUSED.
+  run env AGSEC_TEST_CONFIRM=1 AGENT_SECRETS_HOME="$HOME" bash -c ". '$REPO_ROOT/lib/common.sh'; agsec_src_is_tty '$f'"
+  [ "$status" -ne 0 ]
+  # And with no HOME override at all (real store) → refused.
+  run env AGSEC_TEST_CONFIRM=1 -u AGENT_SECRETS_HOME bash -c ". '$REPO_ROOT/lib/common.sh'; agsec_src_is_tty '$f'"
+  [ "$status" -ne 0 ]
+}

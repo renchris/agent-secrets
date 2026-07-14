@@ -29,10 +29,14 @@ _manifest_append() {
   mf="$(agsec_install_manifest)"
   manifest_init
   tmp="$(mktemp "${mf}.XXXXXX")"
-  # Append only if an IDENTICAL record is not already present — a re-install / install+setup both
-  # record the same symlinks, PATH block, launchd job, so a blind append grew the manifest unbounded.
-  # First-occurrence order is preserved (never `unique`, which sorts and would break LIFO rollback).
-  jq --argjson r "$rec" 'if any(.[]; . == $r) then . else . + [$r] end' "$mf" >"$tmp" && mv "$tmp" "$mf"
+  # MOVE-TO-TAIL dedup: drop any identical earlier record and append this one at the END. A re-install /
+  # rewire records the same symlink/PATH-block/launchd rows, so a blind append grew the manifest
+  # unbounded — but merely DROPPING a re-record was worse: it left the record in its ORIGINAL position,
+  # inverting LIFO. (S4 case: an `edit{restore user file}` recorded on a rewire must be undone AFTER the
+  # `file{symlink}` is removed; if the file record kept its old position BEFORE the edit, rollback
+  # restored the user's file then rm'd it — data loss.) Repositioning the identical record to the tail
+  # keeps exactly one copy AND the invariant "most-recently recorded is rolled back first". Never sorts.
+  jq --argjson r "$rec" 'map(select(. != $r)) + [$r]' "$mf" >"$tmp" && mv "$tmp" "$mf"
 }
 
 manifest_init() {
@@ -146,8 +150,8 @@ manifest_rollback() {
   # A CORRUPTED manifest makes `jq reverse[]` emit nothing → the loop rolls back ZERO records, yet the
   # tail still clears the manifest + prints "every artifact removed" while everything stays on disk and
   # the evidence is gone. Validate it parses first; on failure fail LOUD and preserve the file.
-  jq -e . "$mf" >/dev/null 2>&1 \
-    || agsec_die "install manifest is not valid JSON — refusing to clear it or claim zero residue; inspect $mf (each recorded artifact is still on disk)"
+  jq -e 'type=="array"' "$mf" >/dev/null 2>&1 \
+    || agsec_die "install manifest is not a valid JSON array — refusing to clear it or claim zero residue; inspect $mf (each recorded artifact is still on disk)"
 
   local rec type
   # Reverse order so later artifacts undo before earlier ones (LIFO).

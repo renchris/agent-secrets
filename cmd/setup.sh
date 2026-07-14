@@ -30,11 +30,9 @@ _key_ceremony() {
   # fell through to `age-keygen -o`, which REFUSES to overwrite the existing key (exit 1); the
   # `2>/dev/null` hid the error and `set -e` aborted the wizard silently → permanent onboarding lockout.
   if [ -s "$kf" ]; then
-    # Sweep a recovery.key stranded by a hard-killed prior ceremony (SIGKILL/power-loss the EXIT trap
-    # below can't catch). The private recovery key belongs in the user's password manager, never on the
-    # same disk as the primary key — its on-disk copy is transient by design, so removing a stale one is
-    # correct. (A user who declined the "saved it?" confirm was told to delete it themselves.)
-    rm -f "$cfg/recovery.key"
+    # NOTE: do NOT sweep a lingering recovery.key here. The go-forward strand case is covered by the
+    # EXIT trap below; sweeping on every re-onboard would delete a recovery key a user DELIBERATELY kept
+    # (declined the "saved it offline?" confirm, which leaves it with a "delete it yourself" warning).
     [ -s "$pf" ] || age-keygen -y "$kf" >"$pf"      # re-derive the public recipient when it's absent
     ui_ok "key already exists — not minting a second one"; kc_write_selector; store_init; return 0
   fi
@@ -98,14 +96,15 @@ _first_secret() {
     #   2. a single piped line, read with a BOUNDED timeout (works with or without a trailing newline;
     #      a 5s ceiling turns the old infinite hang into a fast fall-through)
     #   3. a fake placeholder (the test/CI default)
-    if [ -n "${AGENT_SECRETS_SEED_VALUE+x}" ]; then
-      val="$AGENT_SECRETS_SEED_VALUE"
+    if [ -n "${AGENT_SECRETS_SEED_VALUE:-}" ]; then
+      val="$AGENT_SECRETS_SEED_VALUE"                 # set AND non-empty (an empty SEED_VALUE falls through)
     elif [ ! -t 0 ]; then
       IFS= read -r -t 5 val 2>/dev/null || true      # val is set even on EOF-without-newline; timeout ⇒ empty
       [ -n "$val" ] || val="unattended-placeholder-value"
     else
       val="unattended-placeholder-value"
     fi
+    [ -n "$val" ] || val="unattended-placeholder-value"   # never feed store_add an empty value (it fail-closes)
     printf '%s' "$val" | store_add "$name"; unset val; ui_ok "stored $name"; return 0
   fi
   name="$(ui_menu 'Which secret first?' ANTHROPIC_API_KEY OPENAI_API_KEY 'custom')"

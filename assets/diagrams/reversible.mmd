@@ -11,7 +11,7 @@ flowchart LR
     I2 --> M
     I3 --> M
     I4 --> M
-    M ==>|"agent-secrets uninstall"| U["↩ total rollback<br/>files · PATH block · launchd bootout<br/>settings.json reverted · Keychain agent-* purged"]
+    M ==>|"agent-secrets uninstall"| U["↩ total rollback<br/>files · PATH block · launchd bootout<br/>settings.json reverted · Keychain item purged (exact service)"]
     U --> Z["✓ zero residue<br/><i>keep-or-purge prompt for your store</i>"]
 
     classDef step fill:@blue-bg,stroke:@blue-fg,color:@text

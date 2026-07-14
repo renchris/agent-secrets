@@ -122,3 +122,12 @@ load test_helper
   [[ "$output" == *"agent-secrets run -- <cmd>"* ]]
   [[ "$output" == *"setup --keychain"* ]]                # R2: unattended run leaves file custody → hint printed
 }
+
+@test "unattended wizard with an EMPTY SEED_VALUE falls through to a placeholder (no abort)" {
+  run env AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" AGENT_SECRETS_UNATTENDED=1 \
+      AGENT_SECRETS_SEED_NAME=OPENAI_API_KEY AGENT_SECRETS_SEED_VALUE= \
+      bash "$REPO_ROOT/bin/agent-secrets" setup </dev/null
+  [ "$status" -eq 0 ]
+  run agsec list
+  [[ "$output" == *"OPENAI_API_KEY"* ]]     # seeded with the placeholder, not aborted
+}

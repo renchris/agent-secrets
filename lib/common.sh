@@ -99,11 +99,21 @@ agsec_require() { agsec_have "$1" || agsec_die "required command not found: $1 �
 # file )` openability is NOT enough: it passes for ANY readable regular file (and /dev/null), so an
 # `env -u CLAUDECODE …` agent could point AGSEC_CONFIRM_SRC at a "y" file and slip past. `[ -t ]` on the
 # opened fd is the real test; the subshell isolates a failed open (an exec redirection error would
-# otherwise exit the caller). Under AGSEC_TEST_CONFIRM=1 (the bats harness ONLY, never production) fall
-# back to openability so the file-based confirm seam works in tests.
+# otherwise exit the caller).
+#
+# The file-based confirm seam for bats is honored ONLY under AGSEC_TEST_CONFIRM=1 AND when operating on
+# a SYNTHETIC store (AGENT_SECRETS_HOME set to a sandbox that is NOT the real $HOME). That second clause
+# is the load-bearing hardening: an env-controlling attacker cannot set AGSEC_TEST_CONFIRM=1 to defeat
+# the gate against the REAL store, because enabling the seam requires pointing AGENT_SECRETS_HOME at a
+# throwaway dir — which holds no real secret to exfiltrate. Production (real store, HOME default) ALWAYS
+# requires a genuine controlling terminal. (An attacker who already runs as you can read the store
+# directly via the age key regardless — that is the documented honest ceiling, not this gate's job.)
 agsec_src_is_tty() {
-  if [ -n "${AGSEC_TEST_CONFIRM:-}" ]; then ( : < "$1" ) 2>/dev/null
-  else ( exec 3<"$1"; [ -t 3 ] ) 2>/dev/null; fi
+  if [ -n "${AGSEC_TEST_CONFIRM:-}" ] && [ -n "${AGENT_SECRETS_HOME:-}" ] && [ "${AGENT_SECRETS_HOME:-}" != "${HOME:-}" ]; then
+    ( : < "$1" ) 2>/dev/null
+  else
+    ( exec 3<"$1"; [ -t 3 ] ) 2>/dev/null
+  fi
 }
 
 # Refuse secret-bearing key ceremonies inside an agent session

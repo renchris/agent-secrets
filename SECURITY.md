@@ -110,11 +110,14 @@ does **not** buy you:
   can't be defeated or defused through the sharing path.
 - **Both verbs require a real controlling terminal.** `share` (which extracts a plaintext value) and
   `receive` (which confirms an import) each demand a genuine tty for their confirm — the gate tests
-  `[ -t ]` on the opened fd, not mere file-openability, so an agent that strips its session markers and
-  points the confirm at a "y" file cannot slip the boundary. `AGSEC_CONFIRM_SRC` is a **test-only** seam
-  honored solely under `AGSEC_TEST_CONFIRM=1` (never set in production). The honest ceiling still holds:
-  an attacker who already runs as you with a real terminal can read the store directly — this gate stops
-  the *unattended-agent* exfil path, the one the sharing design is built to defend.
+  `[ -t ]` on the opened fd, not mere file-openability, so a *compliant* agent or an unattended pipe
+  with no terminal cannot slip the boundary and print ciphertext into a transcript. The file-based
+  `AGSEC_CONFIRM_SRC` seam is honored **only** under `AGSEC_TEST_CONFIRM=1` **and** a synthetic
+  (non-default) `AGENT_SECRETS_HOME` — so it can never be flipped against your *real* store, only a
+  throwaway test one. **The honest ceiling still governs:** an attacker who already runs as you can read
+  the whole store directly from the age key — no gate in a "runs-as-you" tool changes that, and this one
+  does not claim to. What it buys is stopping the *accidental / no-tty / compliant-agent* exfil path,
+  which is the vector the sharing design is actually built to defend.
 
 ## Custody and recovery
 

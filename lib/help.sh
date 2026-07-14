@@ -93,7 +93,7 @@ doctor	exit	2	usage error (unknown flag)
 doctor	namesonly	reports names/status only; verifies values are non-empty via length, never prints them
 uninstall	synopsis	agent-secrets uninstall [--dry-run]
 uninstall	summary	Remove everything this tool installed (manifest-driven, total). Prompts before touching your secrets.
-uninstall	desc	Reverses every recorded change: files, wrappers, the PATH block, the launchd job, the settings.json edit, and Keychain agent-* items. Then ASKS whether to keep or delete your encrypted store + keys (a real STOP-ASK, no --force bypass). --dry-run prints the full plan and changes nothing.
+uninstall	desc	Reverses every recorded change: files, wrappers, the PATH block, the launchd job, the settings.json edit, and the Keychain item (the exact agent-age-key service). Then ASKS whether to keep or delete your encrypted store + keys (a real STOP-ASK, no --force bypass). --dry-run prints the full plan and changes nothing.
 uninstall	flag	--dry-run	print the rollback plan; mutate nothing
 uninstall	example	agent-secrets uninstall --dry-run	preview exactly what would be removed
 uninstall	example	agent-secrets uninstall	perform the removal (interactive keep-or-purge prompt for your store)

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # cmd/uninstall.sh — total removal via the install-manifest: tool files, PATH block, launchd
-# bootout, settings.json apiKeyHelper revert, Keychain agent-* purge. A keep-vs-purge PROMPT
+# bootout, settings.json apiKeyHelper revert, Keychain exact-service purge. A keep-vs-purge PROMPT
 # governs the user's DATA (the sops store + age keys under the config dir) — that is NOT in the
 # install-manifest. Zero residue is the goal.
 set -euo pipefail
@@ -54,7 +54,7 @@ main() {
   fi
 
   # Total tool-artifact rollback: files, edits (settings.json), launchd bootout, PATH block, and
-  # Keychain items (by record AND by agent-* prefix scan) — the age-key custody copy included.
+  # Keychain item (by record AND by an exact-service scan of agent-age-key) — the age-key custody copy.
   if [ "$dry" -eq 1 ]; then manifest_rollback --dry-run; else manifest_rollback; fi
 
   # User DATA: honored by the prompt. KEEP leaves the 0600 age.key fallback so the store stays

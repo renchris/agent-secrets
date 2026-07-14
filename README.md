@@ -218,7 +218,7 @@ Keychain items.
 <!-- Diagram source: assets/diagrams/reversible.mmd — edit it, run `npm run diagrams`, commit the regenerated SVGs. -->
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/diagrams/reversible-dark.svg">
-  <img src="assets/diagrams/reversible-light.svg" alt="Reversible install: one command ensures the age/sops/gum/jq toolchain (no sudo, vendored if needed), the tool and wrappers on PATH, a weekly launchd smoke job, and the settings.json apiKeyHelper — every change recorded in install-manifest.json (path, sha256, mode, edit, launchd); agent-secrets uninstall performs a total rollback — files, PATH block, launchd bootout, settings.json reverted, Keychain agent-* purged — to zero residue, with a keep-or-purge prompt for your store">
+  <img src="assets/diagrams/reversible-light.svg" alt="Reversible install: one command ensures the age/sops/gum/jq toolchain (no sudo, vendored if needed), the tool and wrappers on PATH, a weekly launchd smoke job, and the settings.json apiKeyHelper — every change recorded in install-manifest.json (path, sha256, mode, edit, launchd); agent-secrets uninstall performs a total rollback — files, PATH block, launchd bootout, settings.json reverted, Keychain item purged (exact service) — to zero residue, with a keep-or-purge prompt for your store">
 </picture>
 
 <details>
@@ -239,7 +239,7 @@ flowchart LR
     I2 --> M
     I3 --> M
     I4 --> M
-    M ==>|"agent-secrets uninstall"| U["↩ total rollback<br/>files · PATH block · launchd bootout<br/>settings.json reverted · Keychain agent-* purged"]
+    M ==>|"agent-secrets uninstall"| U["↩ total rollback<br/>files · PATH block · launchd bootout<br/>settings.json reverted · Keychain item purged (exact service)"]
     U --> Z["✓ zero residue<br/><i>keep-or-purge prompt for your store</i>"]
 
     classDef step fill:#161b22,stroke:#58a6ff,color:#e6edf3
