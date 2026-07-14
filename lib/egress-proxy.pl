@@ -90,20 +90,49 @@ sub relay {
   close $a; close $b;
 }
 
+# Write ALL of $data to $sock (syswrite may short-write), matching relay()'s write loop.
+sub _write_all {
+  my ($sock, $data) = @_;
+  my ($off, $len) = (0, length $data);
+  while ($off < $len) {
+    my $w = syswrite($sock, $data, $len - $off, $off);
+    return if !defined $w;
+    $off += $w;
+  }
+}
+
+# Read the FULL request head (request line + headers up to the blank-line terminator) via sysread
+# ONLY, returning (head, leftover-bytes). Mixing buffered `<$client>` readline with relay()'s sysread
+# strands any body bytes that arrived coalesced with the head in the PerlIO buffer — relay() reads the
+# raw fd and never sees them, so a plain-HTTP POST/PUT body is silently dropped and the upstream hangs
+# awaiting Content-Length bytes. Returns () on EOF before a complete head, or on a runaway (>64KB) head.
+sub read_head {
+  my ($client) = @_;
+  my $buf = '';
+  while ($buf !~ /\r?\n\r?\n/) {
+    my $n = sysread($client, $buf, 8192, length $buf);
+    return () if !defined $n || $n == 0;
+    return () if length($buf) > 65536;
+  }
+  $buf =~ /^(.*?\r?\n\r?\n)(.*)\z/s;
+  return ($1, $2);
+}
+
 sub handle {
   my ($client) = @_;
   $client->autoflush(1);
-  my $line = <$client>;
-  return unless defined $line;
+  my ($head, $rest) = read_head($client);
+  return unless defined $head;
+  my ($line) = split /\r?\n/, $head, 2;      # the request line
 
   # HTTPS tunnel: CONNECT host:port HTTP/x
   if ($line =~ m{^CONNECT\s+([^:\s]+):(\d+)\s+HTTP/}i) {
     my ($host, $rport) = ($1, $2);
-    while (my $h = <$client>) { last if $h =~ /^\r?\n$/; }      # drain request headers
     return refuse($client, 403, 'Forbidden') unless host_allowed($host, $rport);
     my $remote = IO::Socket::INET->new(PeerAddr => $host, PeerPort => $rport, Proto => 'tcp')
       or return refuse($client, 502, 'Bad Gateway');
     print $client "HTTP/1.1 200 Connection established\r\n\r\n";
+    _write_all($remote, $rest) if length $rest;   # forward any early client data (compliant clients wait for the 200)
     return relay($client, $remote);
   }
 
@@ -114,8 +143,12 @@ sub handle {
     my $remote = IO::Socket::INET->new(PeerAddr => $host, PeerPort => $hport, Proto => 'tcp')
       or return refuse($client, 502, 'Bad Gateway');
     $remote->autoflush(1);
-    print $remote "$method $path HTTP/$ver\r\n";
-    while (my $h = <$client>) { print $remote $h; last if $h =~ /^\r?\n$/; }
+    # Origin-form request line + the ORIGINAL headers (everything after the request line in $head),
+    # then the coalesced body prefix ($rest), then relay the remaining body/response.
+    my $headers = $head; $headers =~ s/^.*?\r?\n//s;   # drop the request line; keep headers + blank line
+    _write_all($remote, "$method $path HTTP/$ver\r\n");
+    _write_all($remote, $headers);
+    _write_all($remote, $rest) if length $rest;
     return relay($client, $remote);
   }
 
