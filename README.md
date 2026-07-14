@@ -314,15 +314,27 @@ the golden rules (no plaintext `.env`; `agent-secrets run -- <cmd>`; `printf %s 
 add NAME`; `agent-secrets help --json`). `agent-secrets doctor` reports whether that block is present.
 Nothing is written to your global memory unless you say yes.
 
-- **Claude Code:** automatic once you opt in (the `~/.claude/CLAUDE.md` block above).
-- **Cursor:** there is no stable file-based global-rules path, so add it once by hand — **Cursor
-  Settings → Rules → User Rules** — pasting the same four golden rules. Cursor also reads a repo's
-  `AGENTS.md`, so per-project guidance already carries over.
+#### Who reads what
+
+Different agents discover the golden rules through different surfaces — there is **no single global
+config every IDE honors**. Here's the honest picture:
+
+| Surface | How it learns the rules | Automated? |
+|---|---|---|
+| **Claude Code** (global) | The opt-in block in `~/.claude/CLAUDE.md`, loaded into every session in every repo | ✅ installer opt-in; `doctor` verifies it |
+| **Cursor** (global) | **Settings → Rules → User Rules** — paste the four golden rules once | ⚠️ semi-automated: `setup` prints them **and copies them to your clipboard** (Cursor has no stable file-based path to write) |
+| **VS Code Copilot** | `.github/copilot-instructions.md`, **per repo** — there is no stable machine-wide path | 📄 add per repo |
+| **Any repo** (`AGENTS.md`) | A repo's own `AGENTS.md`, which Claude Code, Cursor, and others read | 📄 add per repo (this project ships one you can copy as a template) |
+
+Cursor also reads a repo's `AGENTS.md`, so per-project guidance carries over even without the global
+User Rules. For the brew-less `gh` / `az` setup recipes and the token ladder, see
+**[docs/POST_INSTALL.md](docs/POST_INSTALL.md)** or run `agent-secrets help onboarding`.
 
 ## More
 
 - **[AGENTS.md](AGENTS.md)** · **[llms.txt](llms.txt)** — agent-facing usage guide + large language model (LLM) link index
 - **[SECURITY.md](SECURITY.md)** — threat model, the honest ceiling, reporting a vulnerability
+- **[docs/POST_INSTALL.md](docs/POST_INSTALL.md)** — brew-less `gh` / `az` setup + the token ladder (also `agent-secrets help onboarding`)
 - **[docs/FAQ.md](docs/FAQ.md)** — "I don't code", store backup, the Dock-Cursor rule, corporate installs, Touch ID
 - Regenerate the demo: `scripts/record-demo.sh` (Charm [VHS](https://github.com/charmbracelet/vhs))
 

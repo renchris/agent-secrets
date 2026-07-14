@@ -65,8 +65,10 @@ are reserved for v0.2 and exit `2` if called.
 ## Recipes (copy these)
 
 ```sh
-# Add a secret you already hold in a variable — value never hits argv or the screen
-printf '%s' "$THE_VALUE" | agent-secrets add ANTHROPIC_API_KEY
+# Add a secret you already hold in an EXPORTED shell variable — value never hits argv or the screen.
+# The variable must actually be set: an unset/placeholder var sends an empty value, which `add` refuses.
+# (A human at a terminal instead runs `agent-secrets add ANTHROPIC_API_KEY` for a hidden prompt.)
+printf '%s' "$ANTHROPIC_API_KEY" | agent-secrets add ANTHROPIC_API_KEY
 
 # Check whether a secret exists (names only; safe)
 agent-secrets list --format=json | jq -e '.[] | select(.name=="ANTHROPIC_API_KEY")' >/dev/null \
