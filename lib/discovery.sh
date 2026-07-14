@@ -42,10 +42,12 @@ _disc_vscode_present() {
 }
 
 # --- registry ----------------------------------------------------------------------------------------
-# Harness keys in install/report order. W3 wires "claude" (which also covers VS Code Copilot); the
-# broader block rows (codex/gemini/zed/cline) are registry-ready and enabled in W4a. Cursor is handled
-# out-of-band (clipboard, in setup's done-screen) — it has no writable global file.
-AGSEC_DISCOVERY_KEYS="${AGSEC_DISCOVERY_KEYS:-claude}"
+# Harness keys in install/report order. "claude" covers Claude Code AND VS Code Copilot (one dedicated
+# file); the broader rows append a marker block to each tool's own shared instruction file, and only
+# fire when that tool is actually present on this Mac (their gate = config dir exists). Cursor is handled
+# out-of-band (clipboard, in setup's done-screen + an MCP server) — it has no writable global file.
+# Override the list to scope a run (tests do this per row).
+AGSEC_DISCOVERY_KEYS="${AGSEC_DISCOVERY_KEYS:-claude codex gemini zed cline}"
 
 # _disc_row <key> → TAB-separated: kind \t path \t format \t style \t label \t max_bytes
 #   kind: file  = a dedicated whole file the tool solely reads (we own it → clean delete on uninstall)
@@ -104,6 +106,18 @@ agsec_discovery_write_key() {
       ;;
     block)
       [ -d "$(dirname "$path")" ] || mkdir -p "$(dirname "$path")"
+      # Respect a per-surface byte cap (e.g. Codex AGENTS.md 32 KiB): appending past it silently truncates
+      # the tail — possibly OUR block, possibly the user's own rules. Refuse + report rather than corrupt.
+      local max cur add
+      max="$(_disc_field "$key" 6)"
+      if [ "${max:-0}" -gt 0 ] && [ -f "$path" ]; then
+        cur="$(wc -c <"$path" 2>/dev/null || printf 0)"
+        add="$(agsec_render_rules "$fmt" | wc -c)"
+        if [ "$((cur + add + 8))" -gt "$max" ]; then
+          agsec_warn "discovery: $path is near its ${max}-byte cap — skipped to avoid truncating it" 2>/dev/null || true
+          return 0
+        fi
+      fi
       manifest_pathblock_install "$path" "$AGENT_SECRETS_DISCOVERY_MARKER" "$(agsec_render_rules "$fmt")" "$style"
       ;;
     *) return 1 ;;

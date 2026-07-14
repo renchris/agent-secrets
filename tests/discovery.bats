@@ -68,3 +68,30 @@ _load_disc() {
   [[ "$output" == *"agent rules"* ]] || return 1
   [[ "$output" == *"not installed (opt-in"* ]] || return 1     # opt-in reminder shows regardless
 }
+
+@test "broader rows append a marker block to each PRESENT tool's shared file (md markers); rollback strips" {
+  _load_disc
+  # codex + gemini present; zed/cline absent → only codex+gemini get a surface, others not fabricated.
+  mkdir -p "$AGENT_SECRETS_HOME/.codex" "$AGENT_SECRETS_HOME/.gemini"
+  printf '# my codex rules\n' >"$AGENT_SECRETS_HOME/.codex/AGENTS.md"
+  agsec_discovery_install_all >/dev/null
+  local ca="$AGENT_SECRETS_HOME/.codex/AGENTS.md" gm="$AGENT_SECRETS_HOME/.gemini/GEMINI.md"
+  grep -qF '<!-- >>> agent-secrets >>> -->' "$ca"            # codex: md block appended to the existing file
+  grep -qF 'my codex rules' "$ca"                            # user content preserved
+  grep -qF '<!-- >>> agent-secrets >>> -->' "$gm"            # gemini: block into a file we created
+  [ ! -e "$AGENT_SECRETS_HOME/.config/zed" ]                 # zed absent → dir NOT fabricated
+  [ ! -e "$AGENT_SECRETS_HOME/.agents" ]                     # cline absent → dir NOT fabricated
+  manifest_rollback >/dev/null 2>&1
+  run grep -c agent-secrets "$ca"; [ "$output" -eq 0 ]       # codex block stripped, pre-existing file kept
+  grep -qF 'my codex rules' "$ca"
+  [ ! -f "$gm" ]                                              # gemini file was tool-created → deleted on uninstall
+}
+
+@test "broader row respects the Codex 32 KiB cap (refuse rather than silently truncate)" {
+  _load_disc
+  mkdir -p "$AGENT_SECRETS_HOME/.codex"
+  head -c 32760 /dev/zero | tr '\0' x >"$AGENT_SECRETS_HOME/.codex/AGENTS.md"   # near the 32768 cap
+  AGSEC_DISCOVERY_KEYS="codex" agsec_discovery_install_all >/dev/null 2>&1
+  run grep -c agent-secrets "$AGENT_SECRETS_HOME/.codex/AGENTS.md"
+  [ "$output" -eq 0 ]                                         # skipped — never pushed past the cap
+}
