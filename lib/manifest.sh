@@ -8,11 +8,18 @@
 #   edit      {type,path,backup,marker}   — revert a third-party config edit (e.g. settings.json)
 #   keychain  {type,service}
 #   launchd   {type,label,plist}
-#   pathblock {type,file,marker}
+#   pathblock {type,file,marker,created,style}   — style: sh ('#' markers) | md (HTML-comment markers)
 
 # --- marker format (single owner: write + strip MUST agree) ---------------------
-_manifest_block_begin() { printf '# >>> %s >>>' "$1"; }
-_manifest_block_end()   { printf '# <<< %s <<<' "$1"; }
+# Two styles: 'sh' (# comment — shell rc) and 'md' (HTML comment — markdown surfaces like CLAUDE.md /
+# AGENTS.md / GEMINI.md, where a bare '# >>>' line renders as an H1 heading). The writer picks the style
+# and it is recorded; _manifest_strip_block matches BOTH styles unconditionally, so uninstall stays
+# correct across a style migration AND for legacy '#' blocks written by earlier versions (dual-marker
+# strip is permanent, not a transition window). Claude Code strips block HTML comments before injecting
+# CLAUDE.md, so the md markers are disk-level grep targets, invisible to the agent — the rule body
+# between them is plain markdown and stays agent-visible.
+_manifest_block_begin() { case "${2:-sh}" in md) printf '<!-- >>> %s >>> -->' "$1";; *) printf '# >>> %s >>>' "$1";; esac; }
+_manifest_block_end()   { case "${2:-sh}" in md) printf '<!-- <<< %s <<< -->' "$1";; *) printf '# <<< %s <<<' "$1";; esac; }
 
 # Replace FILE with FILE.new. A `mv` over a SYMLINK (a stow/chezmoi-managed ~/.zshenv or
 # ~/.claude/CLAUDE.md) would replace the LINK with a regular file, silently diverging the dotfiles
@@ -75,23 +82,35 @@ manifest_record_launchd() {
 }
 
 manifest_record_pathblock() {
-  _manifest_append "$(jq -cn --arg file "$1" --arg marker "$2" --arg created "${3:-0}" \
-    '{type:"pathblock",file:$file,marker:$marker,created:($created=="1")}')"
+  # style is STABLE per file (a given surface always uses the same marker style), so it does not break
+  # the move-to-tail dedup on re-install. No content hash is recorded: doctor detects a STALE block by
+  # comparing the installed block's body to the current agsec_render_rules output, which avoids a
+  # per-version hash churning the dedup (a changed hash would leave two pathblock records for one file).
+  _manifest_append "$(jq -cn --arg file "$1" --arg marker "$2" --arg created "${3:-0}" --arg style "${4:-sh}" \
+    '{type:"pathblock",file:$file,marker:$marker,created:($created=="1"),style:$style}')"
 }
 
 # --- write a marker-delimited PATH block idempotently + record it ---------------
 # install.sh delegates here so the WRITE format matches the rollback STRIP format.
+# manifest_pathblock_install <file> <marker> <line> [style=sh]
+#   style 'sh' → '# >>>' markers (shell rc); 'md' → HTML-comment markers (markdown surfaces).
 manifest_pathblock_install() {
-  local file="$1" marker="$2" line="$3" body created=0
-  [ -f "$file" ] || { created=1; : >"$file"; }          # note when WE create the rc / CLAUDE.md file
-  body="$(_manifest_strip_block "$file" "$marker")"      # drop any prior block first
+  local file="$1" marker="$2" line="$3" style="${4:-sh}" body created=0 mode=''
+  if [ -f "$file" ]; then
+    mode="$(stat -f '%Lp' "$file" 2>/dev/null || true)"   # preserve the user's file mode: mv would reset it to the .new default (0644/umask)
+  else
+    created=1; : >"$file"                                  # note when WE create the rc / CLAUDE.md file
+  fi
+  body="$(_manifest_strip_block "$file" "$marker")"        # drop any prior block first (either style)
   {
     printf '%s\n' "$body"
-    _manifest_block_begin "$marker"; printf '\n'
+    _manifest_block_begin "$marker" "$style"; printf '\n'
     printf '%s\n' "$line"
-    _manifest_block_end "$marker"; printf '\n'
-  } >"${file}.new" && _manifest_replace "$file"
-  manifest_record_pathblock "$file" "$marker" "$created"
+    _manifest_block_end "$marker" "$style"; printf '\n'
+  } >"${file}.new"
+  [ -n "$mode" ] && chmod "$mode" "${file}.new" 2>/dev/null || true
+  _manifest_replace "$file"
+  manifest_record_pathblock "$file" "$marker" "$created" "$style"
 }
 
 # --- list -----------------------------------------------------------------------
@@ -110,17 +129,20 @@ manifest_list() {
 # marker has NO matching end before EOF (a user corrupted/trimmed the end line), keep EVERYTHING —
 # never delete begin→EOF, which would eat unrelated content below a hand-edited ~/.claude/CLAUDE.md.
 _manifest_strip_block() {
-  local file="$1" marker="$2" b e
-  b="$(_manifest_block_begin "$marker")"
-  e="$(_manifest_block_end "$marker")"
+  local file="$1" marker="$2" bsh esh bmd emd
+  bsh="$(_manifest_block_begin "$marker" sh)"; esh="$(_manifest_block_end "$marker" sh)"
+  bmd="$(_manifest_block_begin "$marker" md)"; emd="$(_manifest_block_end "$marker" md)"
   [ -f "$file" ] || return 0
+  # Match EITHER marker style (sh '#' or md HTML-comment) so a legacy '#' block and a new md block are
+  # both stripped — dual-marker strip is permanent. A block is always written with matching begin/end
+  # styles, so accepting either end after either begin is safe (we never nest/mix within one block).
   # Compare on a CR-stripped copy of the line (line) but PRINT the original ($0): a CRLF-saved rc /
   # CLAUDE.md (cross-platform editor, synced dotfile) would otherwise never match the CR-free marker
   # and leave the whole block as residue. Preserving $0 keeps the user's own CRLF lines byte-for-byte.
-  awk -v b="$b" -v e="$e" '
+  awk -v bsh="$bsh" -v esh="$esh" -v bmd="$bmd" -v emd="$emd" '
     { line=$0; sub(/\r$/,"",line) }
-    line==b { if(bufn){ for(i=1;i<=bufn;i++) print buf[i] }; buffering=1; bufn=0; buf[++bufn]=$0; next }
-    buffering && line==e { buffering=0; bufn=0; next }      # complete block → drop it
+    (line==bsh || line==bmd) { if(bufn){ for(i=1;i<=bufn;i++) print buf[i] }; buffering=1; bufn=0; buf[++bufn]=$0; next }
+    buffering && (line==esh || line==emd) { buffering=0; bufn=0; next }   # complete block → drop it
     buffering { buf[++bufn]=$0; next }
     { print }
     END { if(buffering){ for(i=1;i<=bufn;i++) print buf[i] } }   # unterminated block → keep it all

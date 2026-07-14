@@ -196,3 +196,47 @@ PERL
   [ ! -f "$sj" ] || return 1                                             # the edit record WAS processed (not stranded before the dir)
   [ ! -d "$id" ] || return 1                                            # install dir removed (last)
 }
+
+# --- W2-MD: markdown surfaces get HTML-comment markers, not a '# >>>' H1 heading -----
+@test "W2-MD: style=md writes HTML-comment markers (no '# >>>' H1) and rollback strips them" {
+  _load_manifest
+  local cm="$AGENT_SECRETS_HOME/AGENTS.md"
+  printf '# My rules\nBe terse.\n' >"$cm"
+  manifest_pathblock_install "$cm" "agent-secrets" 'use agent-secrets' md
+  grep -qF '<!-- >>> agent-secrets >>> -->' "$cm"        # md markers present
+  grep -qF '<!-- <<< agent-secrets <<< -->' "$cm"
+  run grep -c '^# >>> agent-secrets' "$cm"; [ "$output" -eq 0 ]   # NO shell-comment H1 marker
+  grep -qF 'use agent-secrets' "$cm"                     # body landed
+  manifest_rollback >/dev/null 2>&1
+  run grep -c 'agent-secrets' "$cm"; [ "$output" -eq 0 ] # md block fully stripped
+  grep -qF 'Be terse.' "$cm"                             # user content preserved
+}
+
+# --- W2-DUAL: dual-marker strip removes BOTH a legacy '#' block and a new md block ----
+@test "W2-DUAL: _manifest_strip_block removes a legacy sh-style block AND an md-style block" {
+  _load_manifest
+  local f="$AGENT_SECRETS_HOME/mixed.md"
+  # Hand-write a legacy '# >>>' block (as v0.1.0 shipped) around user content.
+  {
+    printf 'top\n'
+    printf '# >>> agent-secrets >>>\nlegacy rule\n# <<< agent-secrets <<<\n'
+    printf 'mid\n'
+    printf '<!-- >>> agent-secrets >>> -->\nnew rule\n<!-- <<< agent-secrets <<< -->\n'
+    printf 'bottom\n'
+  } >"$f"
+  run bash -c '. "'"$REPO_ROOT"'/lib/common.sh"; . "'"$REPO_ROOT"'/lib/manifest.sh"; _manifest_strip_block "'"$f"'" agent-secrets'
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"agent-secrets"* ]]      # both blocks gone
+  [[ "$output" != *"legacy rule"* ]]
+  [[ "$output" != *"new rule"* ]]
+  [[ "$output" == *"top"* && "$output" == *"mid"* && "$output" == *"bottom"* ]]   # user lines survive
+}
+
+# --- W2-MODE: a pathblock rewrite PRESERVES the user's file mode (mv would reset it) --
+@test "W2-MODE: pathblock install preserves a 0600 file's mode across the rewrite" {
+  _load_manifest
+  local f="$AGENT_SECRETS_HOME/.secrets-rc"
+  printf 'user line\n' >"$f"; chmod 0600 "$f"
+  manifest_pathblock_install "$f" "agent-secrets" 'export X=1'
+  [ "$(stat -f '%Lp' "$f")" = "600" ]       # NOT widened to 0644 by the mv
+}
