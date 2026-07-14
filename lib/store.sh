@@ -82,7 +82,10 @@ store_add() {
   # placeholder + receive both pipe non-empty values, so this rejects only the accidental-empty case.
   if [ -z "$value" ]; then
     unset value
-    agsec_die "add takes a NON-EMPTY single-line value on STDIN (got end of input) — is stdin a live terminal or a real pipe carrying the value?" 2
+    # The feedback failure: a user pasted `printf '%s' "$YOUR_REAL_ANTHROPIC_KEY" | agent-secrets add …`
+    # verbatim; the unset placeholder made stdin empty. Name the docs-literal cause AND the hidden-prompt
+    # escape hatch (no pipe) — never just "got end of input", which reads as a plumbing bug.
+    agsec_die "add takes a NON-EMPTY single-line value on STDIN (got end of input). If you copied a command from the docs, replace the placeholder (e.g. \$YOUR_REAL_KEY) with your real value first — or run 'agent-secrets add $name' with NO pipe for a hidden prompt." 2
   fi
   local recips; recips="$(_store_recipients)" || agsec_die "store_add: no age recipients (run setup)"
   local store plain; store="$(agsec_store_file)"; plain="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"

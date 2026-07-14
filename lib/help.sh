@@ -47,8 +47,8 @@ add	synopsis	agent-secrets add <NAME>
 add	summary	Add or update ONE secret by name. The value is read hidden and never echoed.
 add	desc	NAME must match ^[A-Za-z_][A-Za-z0-9_]*$. The value is read from STDIN when piped (scriptable/agent-friendly), otherwise from a hidden prompt. Upserts the encrypted store entry and its manifest.toml row (rotate_by defaults to +180d).
 add	arg	NAME	the secret's name (e.g. ANTHROPIC_API_KEY); letters, digits, underscore; starts with a letter or _
-add	example	printf '%s' "$SECRET" | agent-secrets add ANTHROPIC_API_KEY	pipe the value in (never on argv); nothing is echoed
-add	example	agent-secrets add OPENAI_API_KEY	interactive hidden prompt for the value
+add	example	printf '%s' "$ANTHROPIC_API_KEY" | agent-secrets add ANTHROPIC_API_KEY	pipe a value ALREADY set in your shell ($ANTHROPIC_API_KEY must be exported first); never on argv, nothing echoed
+add	example	agent-secrets add ANTHROPIC_API_KEY	interactive: hidden prompt for the value — the simplest way, no shell variable to set
 add	reads	STDIN (the value, if piped)
 add	writes	~/.config/secrets/secrets.env, ~/.config/secrets/manifest.toml
 add	exit	0	stored
@@ -77,12 +77,13 @@ run	exit	0	the child command's exit code
 run	exit	1	no store (run setup)
 run	exit	2	usage error (missing `--` or no command)
 run	namesonly	values enter the child env only; the tool never prints them
-doctor	synopsis	agent-secrets doctor [--format=json] [--redact] [--gates] [--fix]
+doctor	synopsis	agent-secrets doctor [--format=json] [--redact] [--gates] [--summary] [--fix]
 doctor	summary	Health check across custody, toolchain, store, backup, injection, discovery, hygiene, maintenance, supply-chain.
 doctor	desc	Each check reports ✓/⚠/✗ with NAMES and status only. Exit is 0 when there is no ✗, else 1 — so an agent can gate on it. Non-destructive by default; --fix applies only safe fixes.
 doctor	flag	--format=json	machine-readable object {"checks":[{category,status,check,detail}],"exit":0|1}; exit=1 iff any status is "bad"; parse with jq '.checks[]|select(.status=="bad")' (status ∈ ok|attn|bad); no values
 doctor	flag	--redact	replace any sensitive-looking token with a sha256: digest in output
 doctor	flag	--gates	also run the execution gates (c: Keychain read, d: sops exec-env, e: egress allowlist + firewall)
+doctor	flag	--summary	show only ✗ plus core custody/toolchain/store/injection status; hide optional hardening ⚠ (the quiet post-setup view — bare 'doctor' shows everything)
 doctor	flag	--fix	apply SAFE fixes only (never runs without this flag)
 doctor	example	agent-secrets doctor	human health report
 doctor	example	agent-secrets doctor --format=json	parse status programmatically
@@ -160,8 +161,49 @@ backup	namesonly	only ciphertext + public keys leave the Mac; the age private ke
 SPEC
 }
 
+# --- onboarding topic (self-contained: docs/ is NOT shipped in the release tarball, so this IS the
+# in-product source of truth for post-install service setup; docs/POST_INSTALL.md is the web copy). -----
+# gh/az are deliberately NOT vendored by the installer (P2: too heavy, different lifecycle, gh auth is
+# interactive) — this documents the brew-less fetch instead. Names-only: no value is handled here.
+agsec_help_onboarding() {
+  cat <<'ONB'
+agent-secrets — post-install onboarding (brew-less macOS)
+
+Prefer a CLI login over a raw token in the store, in this order:
+  1. gh auth login     — GitHub  (also enables: agent-secrets backup)
+  2. az login          — Azure
+  3. agent-secrets add — only for keys that must live in env (e.g. ANTHROPIC_API_KEY)
+
+── GitHub CLI (gh) — no Homebrew needed ────────────────────────────
+Download the pinned macOS release into ~/bin (mirrors how agent-secrets vendors its own deps):
+  V=2.62.0                                   # latest: github.com/cli/cli/releases
+  A=$(uname -m); [ "$A" = x86_64 ] && A=amd64
+  curl -fsSL "https://github.com/cli/cli/releases/download/v$V/gh_${V}_macOS_${A}.zip" -o /tmp/gh.zip
+  unzip -oq /tmp/gh.zip -d /tmp             # extracts /tmp/gh_${V}_macOS_${A}/
+  mkdir -p ~/bin && cp "/tmp/gh_${V}_macOS_${A}/bin/gh" ~/bin/gh
+  gh --version && gh auth login             # browser or token; ~/bin is already on PATH
+Then `agent-secrets backup` can push your ENCRYPTED store to a private GitHub repo.
+
+── Azure CLI (az) — needs Python 3.9+ (the non-obvious part) ────────
+az is Python-based. The cleanest brew-less, no-sudo path is an isolated virtualenv:
+  python3 --version                          # need 3.9+ (python.org or pyenv if absent)
+  python3 -m venv ~/.azure-cli-venv
+  ~/.azure-cli-venv/bin/pip install --upgrade pip azure-cli   # a few minutes; downloads wheels
+  mkdir -p ~/bin && ln -sf ~/.azure-cli-venv/bin/az ~/bin/az
+  az version && az login                     # opens a browser
+Prefer `az login` (your own identity) over storing AZURE_* secrets in the store.
+
+── Anthropic (optional — for Claude Code / cursor-agent) ───────────
+They authenticate through the wired apiKeyHelper. Add a key only when you have one,
+value via a HIDDEN prompt (never on argv, never a doc placeholder pasted verbatim):
+  agent-secrets add ANTHROPIC_API_KEY
+
+Web version of this guide: https://github.com/renchris/agent-secrets  (docs/POST_INSTALL.md)
+ONB
+}
+
 # --- human renderer -------------------------------------------------------------
-# agsec_help_render [VERB]   (no arg or "top" → top-level; else the verb's detail)
+# agsec_help_render [VERB]   (no arg or "top" → top-level; else the verb's detail; "onboarding" → topic)
 agsec_help_render() {
   local want="${1:-top}"; [ "$want" = "top" ] && want=""
   local spec; spec="$(agsec_help_spec)"
@@ -183,6 +225,7 @@ agsec_help_render() {
       printf '  %-10s %s\n' "$v" "$s"
     done
     printf '  %-10s %s\n' "help" "show help; 'help <cmd>' or '<cmd> --help' for one command; 'help --json' for the manifest"
+    printf '  %-10s %s\n' "help onboarding" "post-install service setup: gh/az install + login (brew-less), the token ladder"
     printf '\n%sGlobal flags:%s\n' "$C_BOLD" "$C_RESET"
     _kv flag | while IFS=$'\t' read -r k d; do printf '  %-14s %s\n' "$k" "$d"; done
     printf '\n%sEnvironment:%s\n' "$C_BOLD" "$C_RESET"
@@ -193,6 +236,10 @@ agsec_help_render() {
     _kv seealso | while IFS=$'\t' read -r k d; do printf 'See: %-12s %s\n' "$k" "$d"; done
     return 0
   fi
+
+  # Topic (not a verb): post-install service setup. Handled before the verb check so it renders instead
+  # of dying as "no such command".
+  if [ "$want" = onboarding ]; then agsec_help_onboarding; return 0; fi
 
   # per-verb detail
   [ "$want" = ls ] && want=list      # `help ls` / `ls --help` → the list verb (documented alias)
