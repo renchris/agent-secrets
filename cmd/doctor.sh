@@ -11,6 +11,8 @@ case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render do
 . "$AGENT_SECRETS_LIB/keychain.sh"    # guarded against an unset/absent store
 . "$AGENT_SECRETS_LIB/egress.sh"      # egress allowlist status for gate (e)
 . "$AGENT_SECRETS_LIB/deps.sh"        # toolchain adequacy (sops SOPS_AGE_KEY_CMD version gate) — fn defs only
+. "$AGENT_SECRETS_LIB/manifest.sh"    # marker helpers (discovery block extraction)
+. "$AGENT_SECRETS_LIB/discovery.sh"   # machine-wide agent-discovery registry (per-surface status)
 
 FORMAT=text ; REDACT=0 ; FIX=0 ; GATES=0 ; SUMMARY=0
 for arg in "$@"; do
@@ -222,14 +224,23 @@ check_onboarding() {  # service-readiness triage: the external CLIs the user con
   else _row onboarding attn "az (Azure CLI)" "not installed (optional) — brew-less recipe: agent-secrets help onboarding" optional; fi
 }
 
-check_discovery() {  # is the opt-in machine-wide agent-discovery block present in the GLOBAL Claude memory?
-  local cm marker; cm="$(agsec_home)/.claude/CLAUDE.md"
-  marker="# >>> ${AGENT_SECRETS_DISCOVERY_MARKER} >>>"
-  if [ -f "$cm" ] && grep -qF "$marker" "$cm" 2>/dev/null; then
-    _row discovery ok "global agent rules" "present in ~/.claude/CLAUDE.md" optional
-  else
-    _row discovery attn "global agent rules" "not installed (opt-in — agents outside this repo won't know agent-secrets exists; re-run the installer to add)" optional
-  fi
+check_discovery() {  # machine-wide agent-discovery surfaces (ADVISORY — makes agents AWARE, not enforced)
+  # Iterate the surface registry (lib/discovery.sh). The flagship "claude" surface (Claude Code + VS
+  # Code Copilot, ~/.claude/rules/agent-secrets.md) is ALWAYS surfaced as an opt-in reminder even when
+  # its dir is absent; other harnesses are reported only when actually present on this Mac.
+  local key line status label
+  for key in $AGSEC_DISCOVERY_KEYS; do
+    line="$(agsec_discovery_status_key "$key" 2>/dev/null)" || continue
+    status="$(printf '%s' "$line" | cut -f2)"; label="$(printf '%s' "$line" | cut -f4)"
+    if [ "$status" = not-applicable ]; then
+      if [ "$key" = claude ]; then status=absent; else continue; fi
+    fi
+    case "$status" in
+      present-in-sync) _row discovery ok   "agent rules ($label)" "present — advisory, not enforced" optional ;;
+      present-stale)   _row discovery attn "agent rules ($label)" "STALE — re-run the installer to refresh the rules" optional ;;
+      *)               _row discovery attn "agent rules ($label)" "not installed (opt-in — agents won't know agent-secrets exists; re-run the installer to add)" optional ;;
+    esac
+  done
 }
 
 check_hygiene() {

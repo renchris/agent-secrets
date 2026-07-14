@@ -70,7 +70,8 @@ main() {
       done ;;
   esac
   local PATH_MARKER="agent-secrets"
-  local DISCOVERY_MARKER="agent-secrets"   # marker for the opt-in ~/.claude/CLAUDE.md discovery block (doctor greps it; uninstall strips it)
+  # (No install-local DISCOVERY_MARKER: the discovery marker has a SINGLE source — the
+  # AGENT_SECRETS_DISCOVERY_MARKER constant in lib/common.sh — used by the registry in lib/discovery.sh.)
   local SMOKE_LABEL="com.agent-secrets.smoke"
   local SMOKE_PLIST="$HOME_DIR/Library/LaunchAgents/${SMOKE_LABEL}.plist"
 
@@ -211,6 +212,8 @@ main() {
   deps_ensure
   # shellcheck source=/dev/null
   . "$INSTALL_DIR/lib/manifest.sh"
+  # shellcheck source=/dev/null
+  . "$INSTALL_DIR/lib/discovery.sh"   # data-driven machine-wide agent-discovery registry (opt-in below)
   agsec_secure_umask
   manifest_init
 
@@ -264,21 +267,28 @@ main() {
   # here too would double the revert record, so the installer intentionally does not.
 
   # --- OPT-IN: machine-wide agent discovery ------------------------------------
-  # Claude Code loads ~/.claude/CLAUDE.md into EVERY session in EVERY repo, so a marker-delimited
-  # block there teaches agents everywhere that this Mac has agent-secrets (the repo AGENTS.md is
-  # repo-scoped; apiKeyHelper only auths Claude Code's own key). OPT-IN, recorded as a pathblock so
-  # uninstall strips it. Interactive stdin only — piped/CI installs skip it (safe default: no edit).
-  local claude_md="$HOME_DIR/.claude/CLAUDE.md"
+  # A single dedicated file — ${CLAUDE_CONFIG_DIR:-~/.claude}/rules/agent-secrets.md — teaches agents
+  # everywhere this Mac has agent-secrets. Claude Code auto-loads ~/.claude/rules/*.md in EVERY repo,
+  # AND VS Code Copilot reads ~/.claude/rules by default, so ONE file covers both readers. A dedicated
+  # file (vs a marker block inside the user's own CLAUDE.md) means uninstall = delete, with no
+  # read-modify-write of a file Claude Code itself also writes. The registry (lib/discovery.sh) also
+  # covers any OTHER agent CLI present on this Mac (Codex/Gemini/… once enabled). OPT-IN, every write
+  # recorded for total rollback. Interactive stdin only — a piped/CI install NEVER silently edits a
+  # global agent-instruction file (safe default: no edit; re-run interactively to add it).
   if [ -t 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     printf '\nMake every coding agent on this Mac aware of agent-secrets?\n' >&2
-    printf 'Appends a short, reversible block to ~/.claude/CLAUDE.md (Claude Code reads it in every repo).\n' >&2
-    printf '[y = yes, recommended · Enter = skip]: ' >&2
+    printf 'Writes a short, reversible rules file read by Claude Code + VS Code Copilot (and any other\n' >&2
+    printf 'detected agent CLI). Uninstall removes it. [y = yes, recommended · Enter = skip]: ' >&2
     local dreply=''; read -r dreply || dreply=''
     case "$dreply" in
       [yY]*)
-        mkdir -p "$(dirname "$claude_md")"
-        manifest_pathblock_install "$claude_md" "$DISCOVERY_MARKER" "$(agsec_render_rules claude-md)"
-        _say "  → added agent-secrets rules to ~/.claude/CLAUDE.md (uninstall strips them)" ;;
+        local _wrote; _wrote="$(agsec_discovery_install_all)"
+        if [ -n "$_wrote" ]; then
+          printf '%s\n' "$_wrote" | while IFS= read -r _l; do _say "  → aware: $_l"; done
+          _say "  (uninstall removes them)"
+        else
+          _say "  → no supported agent surfaces detected on this Mac — nothing written"
+        fi ;;
       *)
         _say "  → skipped machine-wide discovery (add later by re-running the installer)" ;;
     esac
