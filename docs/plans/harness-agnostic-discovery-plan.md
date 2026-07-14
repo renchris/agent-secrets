@@ -29,9 +29,9 @@ core is **lead-solo**; only the genuinely separable leaves are teamed.
 |---|---|---|---|---|
 | ~~W1~~ ✅ | Foundation: single renderer, drift kill, rule-#3 reword (`add.sh` gate descoped) | **lead** | — | repo root · `b23fbdc` |
 | ~~W2~~ ✅ | Manifest: per-surface marker style (md/sh) + dual-strip + mode preserve (backup/lock deferred) | **lead** | W1 | repo root · `0b5bda9` |
-| **W3** | Surface registry `lib/discovery.sh` + Claude rules-file row + Copilot coverage detection | **lead** | W2 | repo root |
-| **W4a** | Broader rows: Codex, Gemini, Zed, Cline (follow W3 pattern) | teammate A | W3 | worktree |
-| **W4b** | `cmd/mcp.sh` names-only MCP server + registration writers | teammate B | W2 (markers/manifest) | worktree |
+| ~~W3~~ ✅ | Surface registry `lib/discovery.sh` + Claude rules-file row + Copilot per-reader coverage | **lead** | W2 | repo root · `0b43917` |
+| ~~W4a~~ ✅ | Broader rows: Codex, Gemini, Zed, Cline + per-surface byte-cap guard | **lead** | W3 | repo root · `02b3c62` |
+| **W4b** ⚠️ | `cmd/mcp.sh` names-only MCP server + Cursor registration | **lead** | W2 | repo root — **BLOCKED, see below** |
 | **W5** | `doctor` per-surface coverage table + advisory labeling | **lead** | W3, W4a | repo root |
 | **W6** | Tests (per surface + regression locks) + docs (README who-reads-what, AGENTS.md, help) | teammate C + lead | W5 | worktree |
 
@@ -96,31 +96,68 @@ stable `style` field. 201/201 green (+3 locks: `W2-MD`, `W2-DUAL`, `W2-MODE`).
 
 ---
 
-## Phase 3 (W3) — Surface registry + Claude/Copilot rows — EXPANDED
+## Phase 3 (W3) — Surface registry + Claude/Copilot rows — DONE (`0b43917`, 2026-07-14)
 
-- New `lib/discovery.sh`: the data-driven registry. Each row =
-  `{harness, path_resolver_fn, renderer_format, marker, marker_style, gate_fn (tool dir/binary present),
-  session_marker, max_bytes, doctor_label, verified_on, os_paths{macos,linux,windows}}`.
-- `install` / `uninstall` / `doctor` iterate the registry (replace the single hardcoded CLAUDE.md block
-  in install.sh:266-285 with a registry loop; keep the per-surface consent prompt + `[ -t 0 ]` skip).
-- **Claude Code row:** target `${CLAUDE_CONFIG_DIR:-~/.claude}/rules/agent-secrets.md` (dedicated file,
-  `manifest_record_file` created — uninstall=delete, no clobber). Honor `CLAUDE_CONFIG_DIR`.
-- **Copilot row (per-READER, separate from Claude):** checks the LITERAL `~/.claude/rules/` (VS Code
-  hardcodes `~/.claude`, ignores `CLAUDE_CONFIG_DIR`); when the two diverge, report/write both. Detect
-  effective `chat.useClaudeMdFile`; fallback `~/.copilot/instructions/agent-secrets.instructions.md`
-  (needs `applyTo:'**'` frontmatter).
-- Consent copy names the readers ("Claude Code + VS Code Copilot + any CLAUDE.md-compatible tool").
+`lib/discovery.sh` is the data-driven registry (`_disc_row`/`_disc_gate`/`_disc_field` per key;
+`agsec_discovery_write_key` / `agsec_discovery_install_all` / `agsec_discovery_status_key`). Claude
+surface = dedicated `~/.claude/rules/agent-secrets.md` (whole file, `manifest_record_file` → uninstall
+deletes it). `install.sh` sources it + drives the opt-in prompt via the registry; `doctor`'s
+`check_discovery` iterates the registry, content-compares each surface to the current render
+(in-sync/stale/absent), labels discovery **advisory, not enforced**. 204/204 green, shellcheck clean.
 
-## Phase 4 (W4a/W4b) — Broader rows + MCP — EXPANDED
+**Key decisions / learnings:**
+- **Sandbox-safe resolvers are load-bearing.** `CLAUDE_CONFIG_DIR=~/.claude-secondary` is set in the dev
+  shell and `test_helper` does NOT unset it — so `_disc_claude_dir` pins to `$AGENT_SECRETS_HOME/.claude`
+  whenever `AGENT_SECRETS_HOME` is set (test/synthetic-home), honoring `CLAUDE_CONFIG_DIR`/`CODEX_HOME`
+  only in production. Without this, tests would write to the real config dir.
+- **Per-reader coverage:** Claude Code reads `$CLAUDE_CONFIG_DIR/rules`; VS Code Copilot reads the
+  LITERAL `~/.claude/rules`. When they diverge the write goes to BOTH (each its own `manifest_record_file`).
+  In the common case (var unset) and under tests they coincide → one file.
+- **doctor uses content-comparison, not a hash** (see W2) — `agsec_discovery_status_key` diffs the
+  installed file/block body against `agsec_render_rules <fmt>`.
+- **`DISCOVERY_MARKER` removed from `install.sh`** (was dead after the registry switch) — the marker now
+  has a single source: `AGENT_SECRETS_DISCOVERY_MARKER` in `common.sh`. discovery.bats test rewritten to
+  assert that single-source by construction.
+- **install tests build the tarball from `git archive HEAD`** (install.bats:12), so a new lib file must
+  be COMMITTED before install tests can source it — commit W-with-new-lib before running the full suite.
+- **Copilot fallback file + effective-`chat.useClaudeMdFile` detection deferred to W5/W6** — the dedicated
+  `~/.claude/rules` file already covers Copilot by default; the `~/.copilot/instructions` fallback is only
+  needed when the setting is off (a doctor-reported edge, not a v1 write).
 
-- **W4a rows** (registry additions, gated on tool dir existing; each carries verified path + max_bytes):
-  Codex `${CODEX_HOME:-~/.codex}/AGENTS.md` (detect `AGENTS.override.md`; 32 KiB cap) · Gemini
-  `~/.gemini/GEMINI.md` · Zed `~/.config/zed/AGENTS.md` · Cline `~/.agents/AGENTS.md` (verify shipped
-  on-target). Each row pairs a `session_marker`; rows lacking one surface `detection: none` in doctor.
-- **W4b MCP server** `cmd/mcp.sh`: stdio MCP exposing names-only tools (`list`, `doctor`, `help --json`)
-  — **NEVER returns a secret value**. Registration writers merge into `~/.cursor/mcp.json`,
-  VS Code user `mcp.json`, and `claude mcp add --scope user` (JSON-merge via jq + backup, consent-gated,
-  manifest-recorded). Dispatcher gets an `mcp` verb.
+## Phase 4a (W4a) — Broader rows — DONE (`02b3c62`, 2026-07-14)
+
+Registry rows enabled for Codex `${CODEX_HOME:-~/.codex}/AGENTS.md`, Gemini `~/.gemini/GEMINI.md`, Zed
+`~/.config/zed/AGENTS.md`, Cline `~/.agents/AGENTS.md` — each an md-marker block gated on the tool's
+config dir existing (never fabricated), reversible. Per-surface byte-cap guard (Codex 32 KiB): an append
+that would cross the cap is refused + reported, never a silent truncation. +2 locks. 206/206 green.
+
+## Phase 4b (W4b) — names-only MCP server — ⚠️ BLOCKED (constraints discovered 2026-07-14)
+
+**Status: NOT started — two constraints surfaced that change the planned path and warrant a user call.**
+
+1. **`bin/` is permission-denied** in this environment (agent cannot read or edit `bin/agent-secrets`,
+   the verb dispatcher). So the planned `agent-secrets mcp` VERB cannot be added cleanly.
+   *Workaround (no bin/ needed):* ship `cmd/mcp.sh` as a **standalone, self-bootstrapping** script
+   (resolves `AGENT_SECRETS_LIB` from its own path) that Cursor's `~/.cursor/mcp.json` invokes **by
+   path** — Cursor does not need a verb. Registration + status move to the installer + a `discovery.sh`
+   function + a `doctor` row (all editable). The verb is a human convenience, deferred pending bin/ access.
+2. **Reversible registration into the NESTED `~/.cursor/mcp.json` key** hits the exact gap the red-team
+   flagged: `manifest_record_edit`'s revert (`_manifest_rb_edit`) only `del`s a **top-level** key
+   (`del(."$marker")`), but the MCP entry lives at `.mcpServers["agent-secrets"]`. Clean reversal needs
+   EITHER (a) extend the edit-record to carry a jq PATH (more delicate `manifest.sh` surgery), OR (b) the
+   coarse backup-restore (discards any post-install user edits to `mcp.json` — imperfect if the user
+   added other MCP servers later).
+
+**Design still valid:** `cmd/mcp.sh` = stdio JSON-RPC MCP exposing ONLY names-only tools (`list` /
+`doctor` / `help --json`); NEVER exposes `run`/`add`/`share`/`receive` and never returns a value. That
+core is unaffected by the constraints — only the wiring (verb → path-invocation) and reversibility path
+change. **Note the bare-minimum a/b/c is ALREADY met without W4b:** Claude Code + VS Code via the rules
+file (W3), Cursor via the existing clipboard (`setup` done-screen). W4b is the Cursor *file-automation*
+enhancement the user opted into — real value, but beyond the required floor.
+
+**Decision needed** (see session checkpoint): grant bin/ for the clean verb · accept standalone-script +
+extend `manifest.sh` for nested-key reversal · accept standalone-script + coarse backup-restore · or
+defer W4b (Cursor stays clipboard-covered).
 
 ## Phase 5 (W5) — doctor coverage table — EXPANDED
 
