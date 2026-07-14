@@ -140,16 +140,39 @@ agsec_in_agent_session() {
 # umask for secret-bearing writes: owner-only (0600 files, 0700 dirs).
 agsec_secure_umask() { umask 077; }
 
-# The canonical four golden rules an agent (in any IDE) must follow — the SINGLE source consumed by
-# setup's done-screen (printed + copied to the clipboard for Cursor's User Rules) so the terminal
-# text and the clipboard payload can never drift. Plain lines to STDOUT; names-only (the `$VALUE`
-# literal is a paste-ready template, never a real value). install.sh keeps its own markdown-wrapped
-# variant for ~/.claude/CLAUDE.md (a distinct surface); the rule wording is intentionally identical.
-# shellcheck disable=SC2016  # the literal $VALUE is the point — a copy-paste template, not expansion
-agsec_agent_rules() {
+# The four golden rules an agent (in any IDE) must follow — the SINGLE source of rule DATA, rendered
+# per surface by agsec_render_rules so the wording can never drift. Consumed by setup's done-screen +
+# Cursor clipboard (plain) AND install.sh's ~/.claude/CLAUDE.md discovery block (claude-md) — one
+# source, zero drift. (Regression this closes: install.sh's hand-maintained _discovery_block had
+# textually diverged from this rule text despite a comment asserting the two were identical.)
+# Names-only: `<NAME>` is a paste template, never a real value. Rule 3 deliberately DROPS the old
+# inline `printf … "$VALUE" | add` example — an AGENT lacking $VALUE as a shell variable would
+# substitute the LITERAL secret into its command, leaking it into the transcript (the exact failure
+# this tool exists to prevent). `add` reads the value from STDIN only (never argv), so the safe
+# programmatic path is still available; the rule just stops advertising the leak-prone form.
+_agsec_rule_lines() {
   printf '%s\n' \
-    '- NEVER write a secret to a .env, export it in plaintext, or print a secret VALUE.' \
-    '- Run tools WITH secrets injected, process-scoped: agent-secrets run -- <cmd>' \
-    '- Add/update a secret via STDIN (never argv): printf %s "$VALUE" | agent-secrets add NAME' \
-    '- Names/health/manifest: agent-secrets list · doctor · help --json'
+    'NEVER write a secret to a .env, export it in plaintext, or print a secret VALUE.' \
+    'Run tools WITH secrets injected, process-scoped: agent-secrets run -- <cmd>' \
+    'To add a secret, run agent-secrets add <NAME> in a terminal, or pipe it from a variable — never place a value literally in a command.' \
+    'Names/health/manifest: agent-secrets list · doctor · help --json'
 }
+
+# Render the golden rules for a target surface:
+#   plain      → "- <rule>" bullet lines (Cursor User Rules paste / clipboard / terminal display)
+#   claude-md  → a markdown section for ~/.claude/CLAUDE.md, ~/.claude/rules/*, AGENTS.md, GEMINI.md, …
+# shellcheck disable=SC2016  # the backticks in the markdown header are literal, not command substitution
+agsec_render_rules() {
+  case "${1:-plain}" in
+    plain)
+      _agsec_rule_lines | while IFS= read -r _r; do printf -- '- %s\n' "$_r"; done ;;
+    claude-md|agents-md)
+      printf '## Secrets: use `agent-secrets` (never plaintext)\n'
+      printf 'This machine has `agent-secrets` — encrypted (sops+age), names-only secret management for coding agents.\n'
+      _agsec_rule_lines | while IFS= read -r _r; do printf -- '- %s\n' "$_r"; done ;;
+    *) agsec_die "agsec_render_rules: unknown format '${1:-}'" ;;
+  esac
+}
+
+# Back-compat name — the plain four rules. setup's done-screen + Cursor clipboard call THIS.
+agsec_agent_rules() { agsec_render_rules plain; }

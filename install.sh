@@ -277,7 +277,7 @@ main() {
     case "$dreply" in
       [yY]*)
         mkdir -p "$(dirname "$claude_md")"
-        manifest_pathblock_install "$claude_md" "$DISCOVERY_MARKER" "$(_discovery_block)"
+        manifest_pathblock_install "$claude_md" "$DISCOVERY_MARKER" "$(agsec_render_rules claude-md)"
         _say "  → added agent-secrets rules to ~/.claude/CLAUDE.md (uninstall strips them)" ;;
       *)
         _say "  → skipped machine-wide discovery (add later by re-running the installer)" ;;
@@ -321,18 +321,11 @@ main() {
   _run "$BIN_DIR/agent-secrets" setup
 }
 
-# The concise golden-rules block appended (opt-in) to ~/.claude/CLAUDE.md. Names-only guidance so an
-# agent in ANY repo knows to route secrets through agent-secrets rather than plaintext .env files.
-_discovery_block() {
-  cat <<'BLOCK'
-## Secrets: use `agent-secrets` (never plaintext)
-This machine has `agent-secrets` — encrypted (sops+age), names-only secret management for coding agents.
-- NEVER write a secret to a `.env`, export it in plaintext, or print a secret VALUE into the transcript.
-- Run any tool WITH secrets injected, process-scoped: `agent-secrets run -- <cmd>` (values die with the process).
-- Add/update a secret, value via STDIN (never argv): `printf %s "$VALUE" | agent-secrets add NAME`.
-- Names · health · full machine-readable manifest: `agent-secrets list` · `agent-secrets doctor` · `agent-secrets help --json`.
-BLOCK
-}
+# The ~/.claude/CLAUDE.md discovery block is rendered by agsec_render_rules claude-md (lib/common.sh),
+# the SINGLE source shared with setup's done-screen + Cursor clipboard — see the call at the opt-in
+# block above. install.sh sources lib/common.sh at the top of the install flow, so the renderer is in
+# scope here. (The former hand-maintained _discovery_block was deleted: it had silently drifted from
+# the canonical rule text, and doctor could not detect the drift.)
 
 # Weekly smoke launchd plist (runs the tool's own smoke command; no value ever printed).
 _install_smoke_plist() {
