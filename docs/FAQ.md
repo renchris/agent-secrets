@@ -110,8 +110,8 @@ they installed from inside a coding-agent session the installer defers setup and
 that instruction), then `agent-secrets receive` and paste your blob. **Do not** talk them through `age -d` into a plaintext
 file — that dumps the decrypted secret straight to disk, exactly the leak this tool exists to
 prevent. `receive` decrypts only into a private `0600` temp inside the encrypted-config dir that is
-shredded (FileVault-backed erasure) the instant the value lands in their sops store — no durable
-plaintext file to forget, and nothing in their scrollback, stdout, or argv.
+removed the instant the value lands in their sops store (on a FileVault volume `rm` gives cryptographic
+erasure) — no durable plaintext file to forget, and nothing in their scrollback, stdout, or argv.
 
 ### How do I remove everything?
 

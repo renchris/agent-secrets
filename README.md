@@ -264,7 +264,7 @@ flowchart LR
 | `agent-secrets run -- <cmd>` | run a command with secrets injected just for that process |
 | `agent-secrets doctor` | health check — `--gates`, `--format=json`, `--redact`, `--fix` |
 | `agent-secrets pubkey` | print your `age` recipient string + fingerprint — hand it to a sender (`--copy`) |
-| `agent-secrets share <NAME>` | encrypt one secret to a colleague's key as a paste-able blob (last-rung — prefer the ladder) |
+| `agent-secrets share <NAME> --to <recipient>` | encrypt one secret to a colleague's key as a paste-able blob (last-rung — prefer the ladder) |
 | `agent-secrets receive` | decrypt a colleague's pasted blob into your store (confirms on the terminal) |
 | `agent-secrets backup` | push your **encrypted** store (ciphertext only, never the age key) to a private GitHub repo |
 | `agent-secrets uninstall` | remove everything it installed (prompts about your secrets) |

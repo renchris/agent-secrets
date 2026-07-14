@@ -74,6 +74,13 @@ allowlist shrinks the easy egress paths, and the canary detects a sweep that tak
 `doctor --gates` reports gate `(e)`: the allowlist (active / rules) plus any system-wide firewall app
 (LuLu / Little Snitch) as a defense-in-depth layer.
 
+**Degradation is fail-open at start, fail-closed after.** If the proxy cannot *start* (`/usr/bin/perl`
+missing, a loopback bind failure), `run` prints a `WARN` to stderr and runs the child **without** the
+bound rather than refusing to run — deliberate: the allowlist is a bound, not an availability gate, and
+an agent mid-task should not be bricked by a degraded environment. Once started, a proxy that dies
+mid-run leaves proxy-honoring clients pointed at a dead loopback port — they get connection-refused,
+not open egress. If you need start-failure to be fatal, gate the run yourself on `doctor --gates`.
+
 ## Sharing (`share` / `receive` / `pubkey`)
 
 Sending a secret to a colleague inherits the same honest-ceiling discipline — here is exactly what it
@@ -101,6 +108,13 @@ does **not** buy you:
 - **The canary is hard-refused in both verbs.** You cannot `share` the decoy honeytoken and a `receive`
   cannot overwrite or import it — a hard error, never a confirm-through — so the detection guarantee
   can't be defeated or defused through the sharing path.
+- **Both verbs require a real controlling terminal.** `share` (which extracts a plaintext value) and
+  `receive` (which confirms an import) each demand a genuine tty for their confirm — the gate tests
+  `[ -t ]` on the opened fd, not mere file-openability, so an agent that strips its session markers and
+  points the confirm at a "y" file cannot slip the boundary. `AGSEC_CONFIRM_SRC` is a **test-only** seam
+  honored solely under `AGSEC_TEST_CONFIRM=1` (never set in production). The honest ceiling still holds:
+  an attacker who already runs as you with a real terminal can read the store directly — this gate stops
+  the *unattended-agent* exfil path, the one the sharing design is built to defend.
 
 ## Custody and recovery
 
