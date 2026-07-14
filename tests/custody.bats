@@ -64,3 +64,14 @@ load test_helper
   [ "$status" -eq 1 ]
   [[ "$output" == *"agent-secrets setup"* ]] || return 1
 }
+
+@test "setup --keychain: write lands but read-back still files → honest note, exit 0 (three-way _kc_populate)" {
+  setup_store
+  # The Keychain WRITE succeeds (mock add stores) but every READ fails → custody never flips to primary.
+  # _kc_populate must distinguish this (return 1) from an outright write failure (return 2): a soft note,
+  # exit 0 — not the hard die. Locks the shared core the ceremony's _kc_offer also relies on.
+  export AGENT_SECRETS_MOCK_KC_FAIL=1
+  run bash -c "cat '$AGENT_SECRETS_HOME/.config/secrets/age.key' | AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup --keychain"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"read-back still falls to the file"* ]] || return 1
+}
