@@ -67,10 +67,11 @@ gh/az (P2 says document-not-bundle).
 
 ## Status: DONE (2026-07-14)
 
-Shipped in 5 atomic commits: `95dcefc` (doctor tiers/placeholder/rules) · `d6dc6c0`
+Shipped in atomic commits: `95dcefc` (doctor tiers/placeholder/rules) · `d6dc6c0`
 (setup keychain/ladder/cleanupPeriodDays/clipboard) · `59918eb` (help onboarding/gh
 chain/deferral/POST_INSTALL) · `3ed1f4c` (README who-reads-what/AGENTS/plan) · `f9c7708`
-(tests). **Gate: 197 bats pass / 0 fail · shellcheck exit 0 · telemetry-gate PASS.**
+(tests) · `c65a553` (doctor onboarding category — the reversed decline).
+**Gate: 198 bats pass / 0 fail · shellcheck exit 0 · telemetry-gate PASS.**
 
 Integrated smoke confirmed: `doctor --summary` after setup shows **1 ⚠** (custody, which
 `_kc_offer` flips to primary in a real interactive Sequoia run) vs 6 in full — under the
