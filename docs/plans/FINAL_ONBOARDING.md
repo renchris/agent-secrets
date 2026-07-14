@@ -65,4 +65,30 @@ gh/az (P2 says document-not-bundle).
 10. `install.sh` — POST_INSTALL pointer in deferral
 11. Tests — `tests/onboarding.bats` + doctor/flows/help updates
 
-## Gate: `bats tests/` green + `shellcheck bin/* cmd/*.sh lib/*.sh install.sh` clean.
+## Status: DONE (2026-07-14)
+
+Shipped in 5 atomic commits: `95dcefc` (doctor tiers/placeholder/rules) · `d6dc6c0`
+(setup keychain/ladder/cleanupPeriodDays/clipboard) · `59918eb` (help onboarding/gh
+chain/deferral/POST_INSTALL) · `3ed1f4c` (README who-reads-what/AGENTS/plan) · `f9c7708`
+(tests). **Gate: 197 bats pass / 0 fail · shellcheck exit 0 · telemetry-gate PASS.**
+
+Integrated smoke confirmed: `doctor --summary` after setup shows **1 ⚠** (custody, which
+`_kc_offer` flips to primary in a real interactive Sequoia run) vs 6 in full — under the
+≤3 acceptance; all core rows green.
+
+**Key learning / footgun closed:** `_kc_populate` returns non-zero (1/2) on a non-primary
+outcome; a bare `_kc_populate; rc=$?` let `set -e` abort setup on that return BEFORE `rc`
+was read (silent exit 1, blank screen). Fixed with `local rc=0; _kc_populate || rc=$?`.
+A regression test (custody.bats: "write lands but read-back still files") locks it.
+
+### Considered and DECLINED (beyond net-positive, or cascades out of scope)
+- **`skip` option in `_first_secret`** — the preflight ladder advises "prefer CLI login;
+  `add` last," yet `_first_secret` still requires a first secret. A skip felt coherent BUT:
+  (a) the feedback author scoped P1-1 to *preflight text only* (which we shipped), not a
+  skip; (b) it cascades — a skipped ANTHROPIC key makes `apiKeyHelper` return empty, which
+  `check_injection` flags `✗` (a "bad", not "attn"), so doing skip *properly* would also
+  require softening apiKeyHelper-empty semantics — real scope creep on a security tool. The
+  ladder is advisory; a user with any env-only key adds it, and the flow stays coherent.
+  Net: not worth the cascade/risk. Revisit only if the user asks for a keyless setup path.
+
+## Gate: `bats tests/` green + `shellcheck bin/* cmd/*.sh lib/*.sh install.sh` clean. ✓ met.
