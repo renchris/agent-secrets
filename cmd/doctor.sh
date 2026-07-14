@@ -241,6 +241,11 @@ check_discovery() {  # machine-wide agent-discovery surfaces (ADVISORY — makes
       *)               _row discovery attn "agent rules ($label)" "not installed (opt-in — agents won't know agent-secrets exists; re-run the installer to add)" optional ;;
     esac
   done
+  # Cursor has NO global rules FILE (User Rules live in an opaque, cloud-synced settings DB), so the tool
+  # can NEVER verify or auto-write it — clipboard-paste is the honest ceiling. Surface a PERMANENT
+  # reminder so the Cursor gap stays visible (not just once in setup's scrollback); setup copies the
+  # rules to the clipboard for a one-time paste into Settings > Rules > User Rules.
+  _row discovery attn "agent rules (Cursor)" "manual, unverifiable — paste once into Settings > Rules > User Rules (setup copies them to your clipboard)" optional
 }
 
 check_hygiene() {
