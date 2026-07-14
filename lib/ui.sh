@@ -20,7 +20,11 @@ ui_confirm() {
   if _ui_gum; then gum confirm "$prompt" && return 0 || return 1; fi
   local hint="[Y/n]"; [ "$def" = "n" ] && hint="[y/N]"
   printf '%s %s ' "$prompt" "$hint" >&2
-  read -r ans || true
+  # Distinguish EOF (closed stdin, no human) from a bare Enter (human accepting the default): on EOF
+  # `read` returns non-zero AND leaves ans empty, so we must NOT apply the default — fail closed to NO.
+  # A bare Enter returns zero with an empty ans → the default applies. (gum's branch already returns NO
+  # non-interactively, so this keeps the two paths consistent.)
+  if ! read -r ans; then return 1; fi
   ans="${ans:-$def}"
   case "$ans" in [yY]*) return 0 ;; *) return 1 ;; esac
 }

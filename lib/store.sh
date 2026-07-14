@@ -76,6 +76,14 @@ store_add() {
     unset value _rest
     agsec_die "add takes a SINGLE-LINE value (received more than one line). Multi-line secrets travel via share/receive; a single-line value is what 'run' can inject as an env var." 2
   fi
+  # Fail CLOSED on an EMPTY value: a `curl … | bash` (EOF'd pipe) or a mis-piped caller would otherwise
+  # store ANTHROPIC_API_KEY= silently and report "✓ stored", and apiKeyHelper would then feed Claude an
+  # empty credential (auth breaks with no diagnostic). A real secret is never empty; the canary
+  # placeholder + receive both pipe non-empty values, so this rejects only the accidental-empty case.
+  if [ -z "$value" ]; then
+    unset value
+    agsec_die "add takes a NON-EMPTY single-line value on STDIN (got end of input) — is stdin a live terminal or a real pipe carrying the value?" 2
+  fi
   local recips; recips="$(_store_recipients)" || agsec_die "store_add: no age recipients (run setup)"
   local store plain; store="$(agsec_store_file)"; plain="$(mktemp "$(agsec_config_dir)/.agsec.XXXXXX")"
   # Shred the whole-store plaintext (+ transient copies) on an interrupt: without this, a SIGINT
