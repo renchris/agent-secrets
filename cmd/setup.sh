@@ -19,6 +19,15 @@ _preflight() {
   else ui_warn "FileVault off — enable it for at-rest protection (guided, not silent)"; fi
   if agsec_have age && agsec_have sops; then ui_ok "age + sops present"; else ui_warn "age/sops missing — the installer bootstraps them"; fi
   if agsec_have gh; then ui_ok "gh present (enables: agent-secrets backup)"; else ui_say "  gh not present (optional — install it to use: agent-secrets backup)"; fi
+  # The don't-store-raw-tokens ladder (lib/ladder.sh's stance), surfaced in the UX: most services
+  # authenticate with their own per-user login, which is safer than a long-lived token in the store.
+  # Show it up front so the user configures GitHub/Azure the right way and reaches for `add` last.
+  ui_say ""
+  ui_say "Recommended order (prefer a CLI login over a raw token in the store):"
+  ui_say "  1. gh auth login     — GitHub (also enables: agent-secrets backup)"
+  ui_say "  2. az login          — Azure"
+  ui_say "  3. agent-secrets add — only for keys that must live in env (e.g. ANTHROPIC_API_KEY)"
+  ui_say "  Install recipes for gh/az (brew-less):  agent-secrets help onboarding"
 }
 
 _key_ceremony() {
@@ -63,18 +72,12 @@ _key_ceremony() {
     ui_say "Paste back your PUBLIC key (age1...) from the note to confirm you saved it:"
     local pb; IFS= read -r pb || true
     if [ "$pb" = "$(cat "$(agsec_age_pub_file)")" ]; then ui_ok "verified"; else ui_warn "no match — the real check is the restore drill later"; fi
-    if _confirm "Store the key in your login Keychain for prompt-free use? (paste it once)" y; then
-      ui_say "Paste your key at the next hidden prompt:"
-      if security add-generic-password -U -a "${USER:-agent}" -s "$AGENT_SECRETS_KC_SERVICE" -w 2>/dev/null; then
-        manifest_record_keychain "$AGENT_SECRETS_KC_SERVICE" >/dev/null 2>&1 || true   # reversible: uninstall removes it
-      else
-        ui_warn "Keychain populate skipped — running on file custody (fully supported)"
-      fi
-    fi
     # Deliver the RECOVERY key (the store encrypts to recovery.pub, so the user MUST hold its private
     # half — without this the second recipient is permanently unusable). Mirror the primary-key handoff:
-    # clipboard → password manager, then a confirm. This MUST come AFTER the Keychain block so the
-    # primary key stays on the clipboard for its "paste it once" prompt; here it overwrites it.
+    # clipboard → password manager, then a confirm. (Login-Keychain custody is populated AFTER the whole
+    # ceremony by _kc_offer — a clean, read-back-verified re-offer that reads the key fresh from the 0600
+    # file. Deferring it here means the ceremony never silently degrades custody, and by the time we scrub
+    # the clipboard below it holds only the recovery key.)
     if agsec_have pbcopy; then pbcopy <"$rec"; ui_say "Your RECOVERY key is now on the clipboard — save it offline (password manager or a printed sheet)."
     else ui_say "Copy $rec to offline/printed storage now — it is removed once you confirm."; fi
     _confirm "Saved your RECOVERY key offline?" y || { rec_keep=1; ui_warn "recovery.key left at $rec — save it offline, then delete the file yourself"; }
@@ -100,11 +103,11 @@ _first_secret() {
       val="$AGENT_SECRETS_SEED_VALUE"                 # set AND non-empty (an empty SEED_VALUE falls through)
     elif [ ! -t 0 ]; then
       IFS= read -r -t 5 val 2>/dev/null || true      # val is set even on EOF-without-newline; timeout ⇒ empty
-      [ -n "$val" ] || val="unattended-placeholder-value"
+      [ -n "$val" ] || val="$AGENT_SECRETS_UNATTENDED_PLACEHOLDER"
     else
-      val="unattended-placeholder-value"
+      val="$AGENT_SECRETS_UNATTENDED_PLACEHOLDER"
     fi
-    [ -n "$val" ] || val="unattended-placeholder-value"   # never feed store_add an empty value (it fail-closes)
+    [ -n "$val" ] || val="$AGENT_SECRETS_UNATTENDED_PLACEHOLDER"   # never feed store_add an empty value (it fail-closes)
     printf '%s' "$val" | store_add "$name"; unset val; ui_ok "stored $name"; return 0
   fi
   name="$(ui_menu 'Which secret first?' ANTHROPIC_API_KEY OPENAI_API_KEY 'custom')"
@@ -153,17 +156,30 @@ _wire_tools() {
     local pre=1; [ -f "$sj" ] || pre=0            # existed BEFORE we touched it?
     [ "$pre" = 1 ] || printf '{}\n' >"$sj"
     local bak; bak="$(agsec_state_dir)/settings.json.bak"; mkdir -p "$(dirname "$bak")"
+    # $h is a jq variable bound by `jq --arg h` below — it MUST stay literal in the shell (single quotes),
+    # so SC2016's "expand it" advice would be a bug here. Applies to the created-file variant too.
+    # shellcheck disable=SC2016
+    local jqprog='.apiKeyHelper=$h'
     if [ "$pre" = 1 ]; then
       [ -f "$bak" ] || cp "$sj" "$bak"            # WRITE-ONCE: a re-run must not overwrite the pristine backup
       manifest_record_edit "$sj" "$bak" apiKeyHelper >/dev/null 2>&1 || true
     else
       # We created settings.json → rollback DELETES it (restoring an empty {} would leave residue).
       manifest_record_edit "$sj" "$bak" apiKeyHelper created >/dev/null 2>&1 || true
+      # On a file WE create, ALSO set cleanupPeriodDays=14 — clears the `hygiene ⚠ cleanupPeriodDays unset`
+      # that fired immediately after setup, and caps how long ~/.claude transcripts (which can hold
+      # secret-adjacent output) linger. Recorded as a SECOND surgical edit so rollback removes BOTH keys →
+      # the created file reduces to {} and is deleted; a single-marker revert would leave
+      # {"cleanupPeriodDays":14} orphaned. ONLY on create: never inject a second, less-cleanly-revertable
+      # key into a settings.json the user already owns.
+      manifest_record_edit "$sj" "$bak" cleanupPeriodDays created >/dev/null 2>&1 || true
+      # shellcheck disable=SC2016  # $h is a jq --arg variable; keep it literal in the shell
+      jqprog='.apiKeyHelper=$h | .cleanupPeriodDays=14'
     fi
     # Capture jq's exit: an INVALID pre-existing settings.json makes jq fail, mv is skipped, and — because
     # an &&-list is errexit-exempt — the old unconditional ui_ok printed a FALSE "wired" success and left
     # a settings.json.new residue. Only claim success when the write actually happened.
-    if jq --arg h "$bindir/apiKeyHelper" '.apiKeyHelper=$h' "$sj" >"$sj.new" 2>/dev/null; then
+    if jq --arg h "$bindir/apiKeyHelper" "$jqprog" "$sj" >"$sj.new" 2>/dev/null; then
       mv "$sj.new" "$sj"
       ui_ok "wired apiKeyHelper into settings.json (reversible)"
     else
@@ -191,34 +207,37 @@ _done_screen() {
       ui_say "Your key runs on the 0600-file fallback (fully supported). Restore prompt-free"
       ui_say "Keychain custody anytime, in a real terminal:  agent-secrets setup --keychain" ;;
   esac
-  # Cursor has no file-based global-rules path, so this is the one manual step left; hand the user
-  # the exact text at the exact moment instead of pointing at the README.
+  # Next steps: gh/az are deliberately NOT vendored (different lifecycle) — point at the self-contained
+  # in-product recipes so a user who needs GitHub/Azure isn't left hunting blog posts. `help onboarding`
+  # is the SSOT (docs/ is not shipped in the tarball); POST_INSTALL.md is the web copy. (P0-1)
+  ui_say ""
+  ui_say "Next steps — GitHub / Azure / more keys (brew-less recipes + the token ladder):"
+  ui_say "  agent-secrets help onboarding"
+  # Cursor has no stable file-based global-rules path, so this is the one manual step left; hand the user
+  # the exact text AND (P0-2) put it on the clipboard so it's a single paste, not a retype. Claude Code is
+  # covered by the installer's opt-in ~/.claude/CLAUDE.md block. Single source: agsec_agent_rules (no drift).
   ui_say ""
   ui_say "Cursor users — paste these once into Cursor Settings → Rules → User Rules"
   ui_say "(Claude Code is covered by the installer's opt-in ~/.claude/CLAUDE.md block):"
-  ui_say "  - NEVER write a secret to a .env, export it in plaintext, or print a secret VALUE."
-  ui_say "  - Run tools WITH secrets injected, process-scoped: agent-secrets run -- <cmd>"
-  # shellcheck disable=SC2016  # literal $VALUE is the point — this is a paste-ready template
-  ui_say '  - Add/update a secret via STDIN (never argv): printf %s "$VALUE" | agent-secrets add NAME'
-  ui_say "  - Names/health/manifest: agent-secrets list · doctor · help --json"
+  agsec_agent_rules | while IFS= read -r _rule; do ui_say "  $_rule"; done
+  if agsec_have pbcopy && agsec_agent_rules | pbcopy 2>/dev/null; then
+    ui_ok "…and copied to your clipboard — just paste into Cursor's User Rules"
+  fi
   ui_say ""
   ui_say "Docs: https://github.com/renchris/agent-secrets"
 }
 
-# Re-run ONLY the Keychain populate step (v2 feedback R2). On macOS Sequoia
-# `security add-generic-password -w` (no argv) does not read STDIN — it prompts /dev/tty with a
-# double-confirm — so any non-interactive first run leaves custody on the 0600-file fallback and
-# doctor reports "degraded (file custody)". This path restores PRIMARY (prompt-free Keychain)
-# custody in a real terminal without re-running the whole wizard. The key value transits the
-# clipboard and the hidden /dev/tty prompt only — never argv, stdout, or a transcript.
-_keychain_screen() {
-  ui_title "agent-secrets setup --keychain"
+# Shared Keychain-populate core (used by the end-of-ceremony offer AND `setup --keychain`). Reads the
+# age key from the 0600 file (present in both callers), copies it to the clipboard as a paste-assist,
+# runs the `security -w` write, records it for reversal, scrubs the clipboard, and reports back by exit
+# code: 0 = custody is primary afterward · 1 = the write ran but the read-back still falls to the file ·
+# 2 = the write command itself failed (or no key on disk). The value transits the clipboard and the
+# hidden /dev/tty paste only — never argv, stdout, or a transcript. Manages its OWN EXIT trap for the
+# clipboard scrub, so call it OUTSIDE any other EXIT-trap region (both callers qualify: the ceremony has
+# already disarmed its strand guard, and --keychain has none).
+_kc_populate() {
   local kf; kf="$(agsec_age_key_file)"
-  [ -s "$kf" ] || agsec_die "no key on this machine yet — run: agent-secrets setup"
-  if [ "$(kc_status)" = primary ]; then
-    ui_ok "Keychain custody is already primary — prompt-free reads work; nothing to do"
-    return 0
-  fi
+  [ -s "$kf" ] || return 2
   if [ -z "$UNATTENDED" ]; then
     if agsec_have pbcopy; then
       # Scrub the private key off the clipboard on ANY exit — a ^C at the macOS double-prompt would
@@ -227,18 +246,54 @@ _keychain_screen() {
       pbcopy <"$kf"; ui_say "Your key is on the clipboard — paste it at the hidden prompt (macOS asks twice)."
     else ui_say "Paste your age PRIVATE key (from your password manager) at the hidden prompt (macOS asks twice)."; fi
   fi
+  local wrote=1
   if security add-generic-password -U -a "${USER:-agent}" -s "$AGENT_SECRETS_KC_SERVICE" -w 2>/dev/null; then
     manifest_record_keychain "$AGENT_SECRETS_KC_SERVICE" >/dev/null 2>&1 || true   # reversible: uninstall removes it
-    [ -z "$UNATTENDED" ] && agsec_have pbcopy && printf '' | pbcopy; trap - EXIT
-    if [ "$(kc_status)" = primary ]; then
-      ui_ok "Keychain custody restored — primary (prompt-free reads)"
-    else
-      ui_warn "the Keychain write succeeded but the read-back still falls to the file — file custody remains (fully supported); re-run in Terminal.app to retry"
-    fi
-    return 0
+    wrote=0
   fi
   [ -z "$UNATTENDED" ] && agsec_have pbcopy && printf '' | pbcopy; trap - EXIT
-  agsec_die "Keychain populate did not complete — file custody remains in effect (fully supported); retry in Terminal.app with: agent-secrets setup --keychain"
+  [ "$(kc_status)" = primary ] && return 0
+  [ "$wrote" = 0 ] && return 1
+  return 2
+}
+
+# End-of-ceremony Keychain offer (P0-4). On macOS Sequoia the wizard's key ceremony leaves custody on
+# the 0600-file fallback (the `security -w` paste needs a real /dev/tty), so a full interactive setup
+# still ended "degraded (file custody)" and the user had to DISCOVER `setup --keychain` from a later
+# doctor run. Instead, offer to populate now — the setup ends `primary` OR the user explicitly declines,
+# never a silent degrade. Skipped in UNATTENDED (no tty for the double-prompt) and when already primary.
+_kc_offer() {
+  [ -n "$UNATTENDED" ] && return 0
+  [ "$(kc_status 2>/dev/null || echo missing)" = primary ] && return 0
+  if _confirm "Populate your login Keychain now for prompt-free reads? (paste your key once)" y; then
+    if _kc_populate; then ui_ok "Keychain custody — primary (prompt-free reads)"
+    else ui_warn "the Keychain write didn't take on this macOS — file custody remains (fully supported); enable it later in Terminal.app: agent-secrets setup --keychain"; fi
+  else
+    ui_say "Declined — running on the 0600 file fallback (fully supported). Enable prompt-free Keychain custody anytime: agent-secrets setup --keychain"
+  fi
+}
+
+# Re-run ONLY the Keychain populate step (v2 feedback R2). On macOS Sequoia
+# `security add-generic-password -w` (no argv) does not read STDIN — it prompts /dev/tty with a
+# double-confirm — so any non-interactive first run leaves custody on the 0600-file fallback and
+# doctor reports "degraded (file custody)". This path restores PRIMARY (prompt-free Keychain)
+# custody in a real terminal without re-running the whole wizard, via the shared _kc_populate core.
+_keychain_screen() {
+  ui_title "agent-secrets setup --keychain"
+  local kf; kf="$(agsec_age_key_file)"
+  [ -s "$kf" ] || agsec_die "no key on this machine yet — run: agent-secrets setup"
+  if [ "$(kc_status)" = primary ]; then
+    ui_ok "Keychain custody is already primary — prompt-free reads work; nothing to do"
+    return 0
+  fi
+  # `|| rc=$?` is load-bearing: _kc_populate returns 1/2 on a non-primary outcome, and a bare
+  # `_kc_populate; rc=$?` would let set -e abort setup on that non-zero return BEFORE rc is read.
+  local rc=0; _kc_populate || rc=$?
+  case "$rc" in
+    0) ui_ok "Keychain custody restored — primary (prompt-free reads)"; return 0 ;;
+    1) ui_warn "the Keychain write succeeded but the read-back still falls to the file — file custody remains (fully supported); re-run in Terminal.app to retry"; return 0 ;;
+    *) agsec_die "Keychain populate did not complete — file custody remains in effect (fully supported); retry in Terminal.app with: agent-secrets setup --keychain" ;;
+  esac
 }
 
 # Disaster recovery on a new machine: re-establish key custody from the saved age key + a restored
@@ -283,10 +338,12 @@ main() {
     partial) ui_say "A previous setup was interrupted — continuing (idempotent; your key is kept)." ;;
   esac
   ui_step 2 7 "Preflight";        _preflight;      _state preflight
-  ui_step 3 7 "Your one key";     _key_ceremony;   _state key
+  ui_step 3 7 "Your one key";     _key_ceremony;   _kc_offer;   _state key
   ui_step 4 7 "Your first secret";_first_secret;   _arm_canary; _state secret
   ui_step 5 7 "Wire your tools";  _wire_tools;     _state wired
-  ui_step 6 7 "Health check";     bash "$AGENT_SECRETS_CMD/doctor.sh" || true
+  # --summary so the wizard ends on core custody/toolchain/store/injection status instead of ~7 aspirational
+  # ⚠ (canary/backup/discovery/hygiene/…) that read as "broken" though exit is 0. Full report: `doctor`.
+  ui_step 6 7 "Health check";     bash "$AGENT_SECRETS_CMD/doctor.sh" --summary || true
   ui_step 7 7 "Done";             _done_screen;    _state 'done'
 }
 main "$@"
