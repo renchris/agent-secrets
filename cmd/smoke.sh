@@ -58,7 +58,8 @@ if [ -f "$mf" ]; then
         rb=$(printf '%s' "$line" | sed -E 's/.*=[[:space:]]*"?([0-9-]+)"?.*/\1/')
         due=$(date -j -f %Y-%m-%d "$rb" +%s 2>/dev/null) || continue
         days=$(( (due - today) / 86400 ))
-        if [ "$days" -le 14 ]; then notify "agent-secrets rotation" "$name rotate_by in ${days}d"; fi ;;
+        if [ "$days" -lt 0 ]; then notify "agent-secrets rotation" "$name overdue by $(( -days ))d"
+        elif [ "$days" -le 14 ]; then notify "agent-secrets rotation" "$name rotate_by in ${days}d"; fi ;;
     esac
   done < "$mf"
   agsec_ok "rotate_by scan"

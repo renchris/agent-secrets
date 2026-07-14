@@ -78,7 +78,7 @@ run	exit	1	no store (run setup)
 run	exit	2	usage error (missing `--` or no command)
 run	namesonly	values enter the child env only; the tool never prints them
 doctor	synopsis	agent-secrets doctor [--format=json] [--redact] [--gates] [--fix]
-doctor	summary	Health check across custody, store, backup, injection, discovery, hygiene, maintenance, supply-chain.
+doctor	summary	Health check across custody, toolchain, store, backup, injection, discovery, hygiene, maintenance, supply-chain.
 doctor	desc	Each check reports ✓/⚠/✗ with NAMES and status only. Exit is 0 when there is no ✗, else 1 — so an agent can gate on it. Non-destructive by default; --fix applies only safe fixes.
 doctor	flag	--format=json	machine-readable object {"checks":[{category,status,check,detail}],"exit":0|1}; exit=1 iff any status is "bad"; parse with jq '.checks[]|select(.status=="bad")' (status ∈ ok|attn|bad); no values
 doctor	flag	--redact	replace any sensitive-looking token with a sha256: digest in output
@@ -100,6 +100,7 @@ uninstall	example	agent-secrets uninstall	perform the removal (interactive keep-
 uninstall	writes	removes tool artifacts; store/keys only on explicit purge confirmation
 uninstall	exit	0	uninstall completed (or dry-run printed)
 uninstall	exit	1	nothing to roll back / error
+uninstall	exit	2	usage error (unknown argument — only --dry-run or --help)
 uninstall	namesonly	enumerates artifacts by name; never reads a secret value
 share	synopsis	agent-secrets share <NAME> --to <age1…|github:user|self> [--singleton] [--verify] [--sign] [--rename NEW]
 share	summary	Encrypt ONE secret to a colleague's key; ladder-gated, names-only. Refuses in an agent session.
@@ -129,7 +130,7 @@ receive	reads	STDIN (the pasted v1 envelope)
 receive	writes	~/.config/secrets/secrets.env, manifest.toml (direction=received, source=received:peer)
 receive	exit	0	stored
 receive	exit	1	bad/unknown-version envelope, canary name, NAME collision, or no tty
-receive	exit	2	usage error
+receive	exit	2	usage error, or a MULTI-LINE value (v0.1 stores single-line secrets only)
 receive	namesonly	the decrypted value goes straight into the store, never to stdout/argv
 pubkey	synopsis	agent-secrets pubkey [--copy]
 pubkey	summary	Print your age recipient string + fingerprint — hand it to a sender. Safe (public key).
@@ -165,6 +166,11 @@ agsec_help_render() {
   local want="${1:-top}"; [ "$want" = "top" ] && want=""
   local spec; spec="$(agsec_help_spec)"
   _f() { printf '%s\n' "$spec" | awk -F'\t' -v v="$want" -v f="$1" '$1==v && $2==f'; }
+  # Emit ONLY the key/description columns (3,4). For top-level rows the verb column ($1) is EMPTY,
+  # so reading the full row with `IFS=$'\t' read -r _ _ k d` collapses the leading empty field (TAB
+  # is IFS-whitespace) and shifts every column left — silently dropping the flag/env/exit/URL KEY.
+  # Projecting to $3"\t"$4 first means the key is never in leading position. `read -r k d` then works.
+  _kv() { _f "$1" | awk -F'\t' '{print $3"\t"$4}'; }
 
   if [ -z "$want" ]; then
     printf '%s%s%s %s — %s\n\n' "$C_BOLD" "agent-secrets" "$C_RESET" "$AGENT_SECRETS_VERSION" \
@@ -178,13 +184,13 @@ agsec_help_render() {
     done
     printf '  %-10s %s\n' "help" "show help; 'help <cmd>' or '<cmd> --help' for one command; 'help --json' for the manifest"
     printf '\n%sGlobal flags:%s\n' "$C_BOLD" "$C_RESET"
-    _f flag | while IFS=$'\t' read -r _ _ k d; do printf '  %-14s %s\n' "$k" "$d"; done
+    _kv flag | while IFS=$'\t' read -r k d; do printf '  %-14s %s\n' "$k" "$d"; done
     printf '\n%sEnvironment:%s\n' "$C_BOLD" "$C_RESET"
-    _f env | while IFS=$'\t' read -r _ _ k d; do printf '  %-24s %s\n' "$k" "$d"; done
+    _kv env | while IFS=$'\t' read -r k d; do printf '  %-24s %s\n' "$k" "$d"; done
     printf '\n%sExit codes:%s ' "$C_BOLD" "$C_RESET"
-    _f exit | while IFS=$'\t' read -r _ _ k d; do printf '%s=%s · ' "$k" "$d"; done; printf '\n'
+    _kv exit | while IFS=$'\t' read -r k d; do printf '%s=%s · ' "$k" "$d"; done; printf '\n'
     printf '\nReserved for v0.2 (not in %s): rotate, demo\n' "$AGENT_SECRETS_VERSION"
-    _f seealso | while IFS=$'\t' read -r _ _ k d; do printf 'See: %-12s %s\n' "$k" "$d"; done
+    _kv seealso | while IFS=$'\t' read -r k d; do printf 'See: %-12s %s\n' "$k" "$d"; done
     return 0
   fi
 

@@ -77,7 +77,13 @@ check_toolchain() {  # age + sops present, and sops NEW ENOUGH for SOPS_AGE_KEY_
   if agsec_have age && agsec_have age-keygen; then _row toolchain ok "age" "present"
   else _row toolchain bad "age" "missing — re-run the installer (or install age)"; fi
   if agsec_have sops; then
-    v="$(sops --version 2>/dev/null | head -1 | awk '{print $2}')"
+    # `|| v=""` is load-bearing: this bare command-substitution runs under `set -euo pipefail`
+    # with no _try/_guard wrapper, so a PRESENT-but-nonfunctional sops (EDR-blocked exec, wrong-arch
+    # vendored binary, a non-sops shim) that exits nonzero — or a SIGPIPE from head -1 — would abort
+    # doctor mid-check and, in --format=json, emit NO JSON, breaking the "doctor NEVER crashes"
+    # contract on exactly the broken-toolchain case this check exists to diagnose. Empty v falls
+    # through to the bad-row below.
+    v="$(sops --version 2>/dev/null | head -1 | awk '{print $2}')" || v=""
     if [ -n "$v" ] && _deps_ver_ge "$v" "$DEPS_SOPS_MIN"; then
       _row toolchain ok "sops" "$v (SOPS_AGE_KEY_CMD supported)"
     else
@@ -106,7 +112,10 @@ _scan_rotate() {  # manifest.toml rotate_by scan — names + days only, never va
         days=$(( (due - today) / 86400 ))
         if [ "$days" -le 14 ]; then
           dname=$name; if [ "$REDACT" = 1 ]; then dname=$(printf '%s' "$name" | agsec_digest); fi
-          _row store attn "rotation due" "$dname in ${days}d"; flagged=1
+          # A past rotate_by yields negative days; "in -30d" reads wrong — say "overdue by 30d".
+          if [ "$days" -lt 0 ]; then _row store attn "rotation due" "$dname overdue by $(( -days ))d"
+          else _row store attn "rotation due" "$dname in ${days}d"; fi
+          flagged=1
         fi ;;
     esac
   done < "$mf"
@@ -145,6 +154,19 @@ check_injection() {
     out=""
   else
     _row injection bad "apiKeyHelper" "missing"
+  fi
+  # Verify Claude Code is actually WIRED to our helper. The wrapper being executable is not enough:
+  # after an uninstall(keep)→reinstall, the returning-user fast path re-symlinks the wrapper but can
+  # skip _wire_tools, leaving settings.json unwired while every row above reads ok. A DIFFERENT helper
+  # is `attn` not `bad` — uninstall deliberately preserves a user's own pre-existing apiKeyHelper.
+  local sj helper; sj="$(agsec_home)/.claude/settings.json"
+  if agsec_have jq && [ -f "$sj" ]; then
+    helper="$(jq -r '.apiKeyHelper // empty' "$sj" 2>/dev/null || true)"
+    if [ "$helper" = "$akh" ]; then _row injection ok "settings.json apiKeyHelper" "wired"
+    elif [ -n "$helper" ]; then _row injection attn "settings.json apiKeyHelper" "points at a different helper (kept — your edit)"
+    else _row injection bad "settings.json apiKeyHelper" "not wired — run: agent-secrets setup"; fi
+  else
+    _row injection attn "settings.json apiKeyHelper" "settings.json/jq unavailable"
   fi
 }
 
@@ -205,8 +227,20 @@ check_supply() {
 
 check_gates() {  # execution gates (c)/(d)/(e) — (c) degradation is a note, never a block/error
   local st
-  if _try st kc_status && [ "$st" = primary ]; then _row gate ok "(c) keychain read" "primary"
-  else _row gate attn "(c) keychain read" "degraded (file custody)"; fi
+  # Distinguish missing custody from the file-custody fallback (a virgin machine has NO file to fall
+  # back TO — labeling it "degraded (file custody)" asserts a fallback that doesn't exist). Every
+  # non-primary state stays `attn`: gate (c) is a note, never a block (do NOT copy check_custody's
+  # `bad` for missing — a gate must not flip exit code).
+  if _try st kc_status; then
+    case "$st" in
+      primary)   _row gate ok   "(c) keychain read" "primary" ;;
+      degraded*) _row gate attn "(c) keychain read" "degraded (file custody)" ;;
+      missing)   _row gate attn "(c) keychain read" "no key custody — run: agent-secrets setup" ;;
+      *)         _row gate attn "(c) keychain read" "unknown state" ;;
+    esac
+  else
+    _row gate attn "(c) keychain read" "unavailable (not set up)"
+  fi
   if _guard store_exec -- true; then _row gate ok "(d) sops exec-env" "works"
   else _row gate attn "(d) sops exec-env" "unavailable (fallback: apiKeyHelper-only)"; fi
   # (e) egress: OUR process-scoped allowlist (the bound `run` applies) is primary; a system-wide
