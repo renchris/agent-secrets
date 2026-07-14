@@ -12,7 +12,7 @@ _rm_remote() { [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] && rm -rf "$(dirname "$AGSEC_M
   _mk_remote
   run agsec backup --repo testuser/agent-secrets-store --yes
   [ "$status" -eq 0 ]
-  [[ "$output" == *"backed up"* ]]
+  [[ "$output" == *"backed up"* ]] || return 1
 
   # Inspect exactly what landed in the remote.
   local work; work="$(mktemp -d)"; git clone -q "$AGSEC_MOCK_GH_REMOTE" "$work"
@@ -29,8 +29,8 @@ _rm_remote() { [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] && rm -rf "$(dirname "$AGSEC_M
 @test "backup records the target so doctor flips from 'none' to 'configured'" {
   setup_store
   run agsec doctor
-  [[ "$output" == *"off-machine backup"* ]]
-  [[ "$output" == *"none"* ]]
+  [[ "$output" == *"off-machine backup"* ]] || return 1
+  [[ "$output" == *"none"* ]] || return 1
 
   _mk_remote
   agsec backup --repo me/store --yes >/dev/null
@@ -38,7 +38,7 @@ _rm_remote() { [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] && rm -rf "$(dirname "$AGSEC_M
     [ -f "$AGENT_SECRETS_HOME/.config/secrets/backup-repo" ]
 
   run agsec doctor
-  [[ "$output" == *"configured (me/store)"* ]]
+  [[ "$output" == *"configured (me/store)"* ]] || return 1
   _rm_remote
 }
 
@@ -48,7 +48,7 @@ _rm_remote() { [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] && rm -rf "$(dirname "$AGSEC_M
   agsec backup --repo me/store --yes >/dev/null
   run agsec backup --repo me/store --yes
   [ "$status" -eq 0 ]
-  [[ "$output" == *"already up to date"* ]]
+  [[ "$output" == *"already up to date"* ]] || return 1
   _rm_remote
 }
 
@@ -57,7 +57,7 @@ _rm_remote() { [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] && rm -rf "$(dirname "$AGSEC_M
   _mk_remote
   run agsec backup --repo me/store --yes
   [ "$status" -ne 0 ]
-  [[ "$output" == *"no store to back up"* ]]
+  [[ "$output" == *"no store to back up"* ]] || return 1
   _rm_remote
 }
 
@@ -82,7 +82,7 @@ _rm_remote() { [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] && rm -rf "$(dirname "$AGSEC_M
   printf 'PLAINTEXT_KEY=oops-not-encrypted\n' >"$(agsec_config_dir)/secrets.env"  # simulate a broken/plaintext store
   run agsec backup --repo me/store --yes
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not sops ciphertext"* ]]
+  [[ "$output" == *"not sops ciphertext"* ]] || return 1
   rm -rf "$dir"
 }
 
@@ -113,7 +113,7 @@ _rm_remote() { [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] && rm -rf "$(dirname "$AGSEC_M
   export AGSEC_MOCK_GH_PRIVATE=false               # …and is PUBLIC
   run agsec backup --repo me/store --yes
   [ "$status" -ne 0 ]
-  [[ "$output" == *"PUBLIC"* ]]
+  [[ "$output" == *"PUBLIC"* ]] || return 1
   unset AGSEC_MOCK_GH_PRIVATE; rm -rf "$dir"
 }
 

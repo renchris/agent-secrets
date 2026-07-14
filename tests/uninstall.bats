@@ -10,7 +10,7 @@ load test_helper
   local f="$AGENT_SECRETS_HOME/fake-artifact"; echo hi >"$f"
   manifest_record_file "$f"
   run manifest_list file
-  [[ "$output" == *"fake-artifact"* ]]
+  [[ "$output" == *"fake-artifact"* ]] || return 1
   # dry-run must not delete the file
   manifest_rollback --dry-run >/dev/null
   [ -f "$f" ]
@@ -51,7 +51,7 @@ load test_helper
   # the script BEFORE manifest_rollback, exit 1, TOTAL residue. Post-fix: fail-closed to KEEP + rollback.
   run bash "$REPO_ROOT/cmd/uninstall.sh" </dev/null
   [ "$status" -eq 0 ]
-  [[ "$output" == *"uninstall complete"* ]]                   # rollback ran to completion
+  [[ "$output" == *"uninstall complete"* ]] || return 1                   # rollback ran to completion
   [ -f "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]    # KEEP default → the user's store survives
 }
 
@@ -125,9 +125,9 @@ load test_helper
   manifest_record_edit "$sj" "$bak" apiKeyHelper                      # pre-existing → surgical del by marker
   manifest_rollback >/dev/null
   run cat "$sj"
-  [[ "$output" == *'"model":"opus"'* ]]                              # preserved
-  [[ "$output" == *'"hooks"'* ]]                                     # user's POST-install addition preserved (not snapshot-reverted)
-  [[ "$output" != *"apiKeyHelper"* ]]                                # only the tool's key removed
+  [[ "$output" == *opus* ]] || return 1                                          # preserved (jq pretty-prints '"model": "opus"')
+  [[ "$output" == *'"hooks"'* ]] || return 1                                     # user's POST-install addition preserved (not snapshot-reverted)
+  [[ "$output" != *"apiKeyHelper"* ]] || return 1                                # only the tool's key removed
 }
 
 @test "rollback RESTORES a user's PRE-EXISTING apiKeyHelper value, not deletes it" {
@@ -141,9 +141,9 @@ load test_helper
   manifest_record_edit "$sj" "$bak" apiKeyHelper                          # pre-existing → RESTORE, not delete
   manifest_rollback >/dev/null
   run cat "$sj"
-  [[ "$output" == *'/Users/me/orig.sh'* ]]                               # user's ORIGINAL value restored
-  [[ "$output" != *'/tool/apiKeyHelper'* ]]                              # tool's value gone
-  [[ "$output" == *'opus'* ]]                                            # other keys preserved (jq pretty-prints)
+  [[ "$output" == *'/Users/me/orig.sh'* ]] || return 1                               # user's ORIGINAL value restored
+  [[ "$output" != *'/tool/apiKeyHelper'* ]] || return 1                              # tool's value gone
+  [[ "$output" == *'opus'* ]] || return 1                                            # other keys preserved (jq pretty-prints)
 }
 
 @test "rollback does NOT resurrect a stale backup value for a tool-CREATED file (deletes it)" {

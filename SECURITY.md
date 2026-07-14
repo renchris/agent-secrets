@@ -113,11 +113,14 @@ does **not** buy you:
   `[ -t ]` on the opened fd, not mere file-openability, so a *compliant* agent or an unattended pipe
   with no terminal cannot slip the boundary and print ciphertext into a transcript. The file-based
   `AGSEC_CONFIRM_SRC` seam is honored **only** under `AGSEC_TEST_CONFIRM=1` **and** a synthetic
-  (non-default) `AGENT_SECRETS_HOME` — so it can never be flipped against your *real* store, only a
-  throwaway test one. **The honest ceiling still governs:** an attacker who already runs as you can read
-  the whole store directly from the age key — no gate in a "runs-as-you" tool changes that, and this one
-  does not claim to. What it buys is stopping the *accidental / no-tty / compliant-agent* exfil path,
-  which is the vector the sharing design is actually built to defend.
+  `AGENT_SECRETS_HOME` (canonicalized to a directory that is not your real `$HOME`), so it steers a test
+  bypass onto a throwaway store rather than your real one. **The honest ceiling still governs and is the
+  real story:** an attacker who already runs as you — who can set env vars and invoke the binary — can
+  read the whole store directly from the age key, so *no* gate in a "runs-as-you" tool is a boundary
+  against them, and this one does not pretend to be. What the tty check actually buys is stopping the
+  *accidental / no-tty / compliant-agent* exfil-to-transcript path, the vector the sharing design is
+  built to defend; deliberate exfiltration by a process that fully controls your environment is out of
+  scope for every control here (see the honest-ceiling section above).
 
 ## Custody and recovery
 

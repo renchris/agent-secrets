@@ -5,10 +5,10 @@ load test_helper
 @test "unattended wizard completes and seeds the first secret" {
   run bash -c "printf '%s' fakeseed_val | AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"set up"* ]]
+  [[ "$output" == *"set up"* ]] || return 1
   run agsec list
-  [[ "$output" == *"ANTHROPIC_API_KEY"* ]]
-  [[ "$output" != *"fakeseed_val"* ]]
+  [[ "$output" == *"ANTHROPIC_API_KEY"* ]] || return 1
+  [[ "$output" != *"fakeseed_val"* ]] || return 1
 }
 
 @test "unattended wizard seeds from AGENT_SECRETS_SEED_VALUE with NO stdin (deterministic automation)" {
@@ -17,8 +17,8 @@ load test_helper
       bash "$REPO_ROOT/bin/agent-secrets" setup </dev/null
   [ "$status" -eq 0 ]
   run agsec list
-  [[ "$output" == *"OPENAI_API_KEY"* ]]
-  [[ "$output" != *"env-seed-xyz"* ]]     # value never surfaced
+  [[ "$output" == *"OPENAI_API_KEY"* ]] || return 1
+  [[ "$output" != *"env-seed-xyz"* ]] || return 1     # value never surfaced
 }
 
 @test "unattended wizard cannot hang on an open-but-empty stdin (feedback BLOCKER #3)" {
@@ -34,7 +34,7 @@ load test_helper
   exec 9>&-
   [ "$status" -eq 0 ]                      # 124 ⇒ it hung past the alarm (the old cat bug)
   run agsec list
-  [[ "$output" == *"ANTHROPIC_API_KEY"* ]] # placeholder still seeded the default name
+  [[ "$output" == *"ANTHROPIC_API_KEY"* ]] || return 1 # placeholder still seeded the default name
 }
 
 @test "wizard is idempotent: re-run mints no second key (resume)" {
@@ -64,7 +64,7 @@ load test_helper
   setup_store
   run agsec run printenv PATH
   [ "$status" -ne 0 ]
-  [[ "$output" == *"--"* ]]
+  [[ "$output" == *"--"* ]] || return 1
 }
 
 @test "cursor-agent single-instance guard blocks when Cursor is running" {
@@ -72,7 +72,7 @@ load test_helper
   install -m0755 "$REPO_ROOT/bin/cursor-agent" "$AGENT_SECRETS_HOME/cursor-agent"
   run env AGENT_SECRETS_MOCK_CURSOR_RUNNING=1 AGENT_SECRETS_ROOT="$REPO_ROOT" bash "$REPO_ROOT/bin/cursor-agent"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"quit"* ]] || [[ "$output" == *"running"* ]] || [[ "$output" == *"Cursor"* ]]
+  [[ "$output" == *"quit"* ]] || [[ "$output" == *"running"* ]] || [[ "$output" == *"Cursor"* ]] || return 1
 }
 
 @test "restore drill: returning-user check + restore_flow decrypts via the saved key" {
@@ -87,7 +87,7 @@ load test_helper
   rm -f "$(agsec_age_key_file)"
   run bash -c "printf '%s' '$saved' | { . '$REPO_ROOT/lib/common.sh'; . '$REPO_ROOT/lib/keychain.sh'; . '$REPO_ROOT/lib/store.sh'; . '$REPO_ROOT/lib/ui.sh'; . '$REPO_ROOT/lib/restore.sh'; restore_flow; }"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verified"* ]] || [[ "$output" == *"decrypt"* ]]
+  [[ "$output" == *"verified"* ]] || [[ "$output" == *"decrypt"* ]] || return 1
 }
 
 @test "setup --restore recovers via the CLI: paste the saved key over a restored store -> decrypts" {
@@ -98,7 +98,7 @@ load test_helper
   rm -f "$(agsec_age_key_file)"                 # wipe local key custody; the encrypted store copy remains
   run bash -c "printf '%s' '$saved' | env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash '$REPO_ROOT/bin/agent-secrets' setup --restore"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"verified"* ]] || [[ "$output" == *"decrypt"* ]]
+  [[ "$output" == *"verified"* ]] || [[ "$output" == *"decrypt"* ]] || return 1
   run store_extract "$AGENT_SECRETS_CANARY_NAME"   # store decryptable again after the CLI restore
   [ "$status" -eq 0 ]
 }
@@ -112,15 +112,15 @@ load test_helper
   rm -f "$(agsec_wizard_state)" "$AGENT_SECRETS_HOME/bin/claude-agent"
   run bash -c "printf '%s' x | env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"--restore"* ]]              # directed to the restore path, not a silent strand
+  [[ "$output" == *"--restore"* ]] || return 1              # directed to the restore path, not a silent strand
 }
 
 @test "done screen hands over the Cursor User Rules template and the degraded-custody fix (v2 feedback R2+R3)" {
   run bash -c "printf '%s' seedval | AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Cursor Settings"* ]]                 # R3: paste-ready User Rules template
-  [[ "$output" == *"agent-secrets run -- <cmd>"* ]]
-  [[ "$output" == *"setup --keychain"* ]]                # R2: unattended run leaves file custody → hint printed
+  [[ "$output" == *"Cursor Settings"* ]] || return 1                 # R3: paste-ready User Rules template
+  [[ "$output" == *"agent-secrets run -- <cmd>"* ]] || return 1
+  [[ "$output" == *"setup --keychain"* ]] || return 1                # R2: unattended run leaves file custody → hint printed
 }
 
 @test "unattended wizard with an EMPTY SEED_VALUE falls through to a placeholder (no abort)" {
@@ -129,5 +129,5 @@ load test_helper
       bash "$REPO_ROOT/bin/agent-secrets" setup </dev/null
   [ "$status" -eq 0 ]
   run agsec list
-  [[ "$output" == *"OPENAI_API_KEY"* ]]     # seeded with the placeholder, not aborted
+  [[ "$output" == *"OPENAI_API_KEY"* ]] || return 1     # seeded with the placeholder, not aborted
 }

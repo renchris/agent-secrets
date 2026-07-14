@@ -5,22 +5,22 @@ load test_helper
 @test "doctor on a bare HOME: all checks names-only, exit 1, no crash, no value" {
   run agsec doctor
   [ "$status" -eq 1 ]
-  [[ "$output" == *"[custody]"* ]]
-  [[ "$output" == *"[store]"* ]]
-  [[ "$output" == *"[injection]"* ]]
+  [[ "$output" == *"[custody]"* ]] || return 1
+  [[ "$output" == *"[store]"* ]] || return 1
+  [[ "$output" == *"[injection]"* ]] || return 1
 }
 
 @test "doctor with a store present: store category goes green" {
   setup_store
   run agsec doctor
-  [[ "$output" == *"store"* ]]
-  [[ "$output" == *"present"* ]]
+  [[ "$output" == *"store"* ]] || return 1
+  [[ "$output" == *"present"* ]] || return 1
 }
 
 @test "doctor --format=json is valid JSON with no value" {
   setup_store
   run bash -c "bash '$REPO_ROOT/bin/agent-secrets' doctor --format=json | jq -e . >/dev/null && echo VALID"
-  [[ "$output" == *"VALID"* ]]
+  [[ "$output" == *"VALID"* ]] || return 1
 }
 
 @test "doctor --format=json is the documented OBJECT schema {checks:[{category,status,check,detail}],exit}" {
@@ -39,24 +39,24 @@ load test_helper
 @test "doctor rejects an unknown flag with a usage error (exit 2)" {
   run bash "$REPO_ROOT/bin/agent-secrets" doctor --bogus
   [ "$status" -eq 2 ]
-  [[ "$output" == *"unknown flag"* ]]
+  [[ "$output" == *"unknown flag"* ]] || return 1
 }
 
 @test "doctor flags the unarmed canary as inert, then green once armed" {
   setup_store                                   # seeds the INERT placeholder canary
   run agsec doctor
-  [[ "$output" == *"INERT"* ]]                  # honest: no false 'active honeytoken' assurance
+  [[ "$output" == *"INERT"* ]] || return 1                  # honest: no false 'active honeytoken' assurance
   printf 'real-tripwire-token-xyz' | store_add "$AGENT_SECRETS_CANARY_NAME"   # arm it
   run agsec doctor
-  [[ "$output" == *"armed"* ]]
-  [[ "$output" != *"INERT"* ]]
+  [[ "$output" == *"armed"* ]] || return 1
+  [[ "$output" != *"INERT"* ]] || return 1
 }
 
 @test "doctor --gates runs and reports the c/d/e gates" {
   setup_store
   run agsec doctor --gates
   [ "$status" -eq 0 ] || [ "$status" -eq 1 ]   # gate outcomes are informational, not a hard fail
-  [[ "$output" == *"gate"* ]] || [[ "$output" == *"Keychain"* ]] || [[ "$output" == *"exec-env"* ]]
+  [[ "$output" == *"gate"* ]] || [[ "$output" == *"Keychain"* ]] || [[ "$output" == *"exec-env"* ]] || return 1
 }
 
 @test "doctor does NOT crash on a broken sops (D1: unguarded version capture under set -e)" {
@@ -80,10 +80,10 @@ load test_helper
   # unwired settings.json → the new row must report "not wired"
   printf '{}\n' > "$AGENT_SECRETS_HOME/.claude/settings.json"
   run agsec doctor
-  [[ "$output" == *"settings.json apiKeyHelper"* ]]
-  [[ "$output" == *"not wired"* ]]
+  [[ "$output" == *"settings.json apiKeyHelper"* ]] || return 1
+  [[ "$output" == *"not wired"* ]] || return 1
   # wired → reports "wired"
   jq -n --arg h "$bd/apiKeyHelper" '{apiKeyHelper:$h}' > "$AGENT_SECRETS_HOME/.claude/settings.json"
   run agsec doctor
-  [[ "$output" == *"settings.json apiKeyHelper — wired"* ]]
+  [[ "$output" == *"settings.json apiKeyHelper — wired"* ]] || return 1
 }

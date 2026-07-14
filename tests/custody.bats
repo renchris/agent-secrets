@@ -21,7 +21,7 @@ load test_helper
   [ "$output" = "degraded (file custody)" ]
   # doctor must report degraded, NOT a hard failure that blocks.
   run agsec doctor
-  [[ "$output" == *"degraded (file custody)"* ]]
+  [[ "$output" == *"degraded (file custody)"* ]] || return 1
 }
 
 @test "keychain-smoke: passes when the mock yields the key, fails cleanly when it doesn't" {
@@ -43,7 +43,7 @@ load test_helper
   # UNATTENDED bypasses the agent-session refusal; the key is piped so the mock `security -w` reads it.
   run bash -c "cat '$AGENT_SECRETS_HOME/.config/secrets/age.key' | AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup --keychain"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"primary"* ]]
+  [[ "$output" == *"primary"* ]] || return 1
   run kc_status
   [ "$output" = "primary" ]
 }
@@ -56,11 +56,11 @@ load test_helper
   printf 'AGE-SECRET-KEY-FAKE' | kc_add       # populates BOTH sinks → primary
   run bash -c "AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup --keychain </dev/null"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"nothing to do"* ]]
+  [[ "$output" == *"nothing to do"* ]] || return 1
 }
 
 @test "setup --keychain with no key on the machine routes to setup (exit 1)" {
   run bash -c "AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup --keychain </dev/null"
   [ "$status" -eq 1 ]
-  [[ "$output" == *"agent-secrets setup"* ]]
+  [[ "$output" == *"agent-secrets setup"* ]] || return 1
 }

@@ -70,6 +70,13 @@ check_custody() {
   else
     _row custody bad "keychain custody" "unavailable (not set up)"
   fi
+  # A recovery.key lingering on disk is a PRIVATE key that belongs offline (password manager / printed),
+  # not on the same disk as the primary. setup removes it after the ceremony; a leftover means an
+  # interrupted or declined ceremony (a hard kill the EXIT trap couldn't catch, or a user who deferred
+  # saving it). Warn so it gets moved offline and deleted — names/paths only, never the key.
+  if [ -f "$(agsec_config_dir)/recovery.key" ]; then
+    _row custody attn "recovery key on disk" "move it offline (password manager) then delete it: rm $(agsec_config_dir)/recovery.key"
+  fi
 }
 
 check_toolchain() {  # age + sops present, and sops NEW ENOUGH for SOPS_AGE_KEY_CMD (feedback BLOCKER #4)

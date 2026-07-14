@@ -25,9 +25,9 @@ teardown() {
   [ "$status" -eq 0 ]
   # The plan must name every real change (the dry-run-fidelity finding): dispatcher + wrappers,
   # the settings.json backup, and the launchd job.
-  [[ "$output" == *"agent-secrets, claude-agent, cursor-agent, apiKeyHelper"* ]]
-  [[ "$output" == *"back up an existing ~/.claude/settings.json"* ]]
-  [[ "$output" == *"weekly launchd smoke job"* ]]
+  [[ "$output" == *"agent-secrets, claude-agent, cursor-agent, apiKeyHelper"* ]] || return 1
+  [[ "$output" == *"back up an existing ~/.claude/settings.json"* ]] || return 1
+  [[ "$output" == *"weekly launchd smoke job"* ]] || return 1
   # Zero mutation.
   [ ! -d "$AGENT_SECRETS_HOME/.agent-secrets" ]
   [ ! -e "$AGENT_SECRETS_HOME/bin/agent-secrets" ]
@@ -39,7 +39,7 @@ teardown() {
   # EXPECTED_SHA256 → it must DIE rather than trust a same-origin sibling .sha256.
   run bash -c "printf '\n' | AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$REPO_ROOT/install.sh'"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"no baked release digest"* ]]
+  [[ "$output" == *"no baked release digest"* ]] || return 1
   [ ! -d "$AGENT_SECRETS_HOME/.agent-secrets" ]   # nothing unpacked
 }
 
@@ -49,7 +49,7 @@ teardown() {
   printf '%s  %s\n' "0000000000000000000000000000000000000000000000000000000000000000" "$PKG" >"$MIRROR/$PKG.sha256"
   run bash -c "printf '\n' | AGENT_SECRETS_BASE_URL='https://mirror.example' AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$REPO_ROOT/install.sh'"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"SHA-256 mismatch"* ]]
+  [[ "$output" == *"SHA-256 mismatch"* ]] || return 1
   [ ! -d "$AGENT_SECRETS_HOME/.agent-secrets" ]
 }
 
@@ -59,7 +59,7 @@ teardown() {
   local baked="$MIRROR/install.sh"
   sed "s/EXPECTED_SHA256=\"[a-f0-9]*\"/EXPECTED_SHA256=\"$BUILT_SHA\"/" "$REPO_ROOT/install.sh" >"$baked"
   run bash -c "printf '\nfake-value\n' | AGENT_SECRETS_UNATTENDED=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked'"
-  [[ "$output" == *"SHA-256 verified"* ]]
+  [[ "$output" == *"SHA-256 verified"* ]] || return 1
   # Baked gate passed → the tool unpacked with the expected single-prefix layout, dispatcher symlinked.
   [ -f "$AGENT_SECRETS_HOME/.agent-secrets/lib/common.sh" ]
   [ -L "$AGENT_SECRETS_HOME/bin/agent-secrets" ]
@@ -75,7 +75,7 @@ teardown() {
   # not merely render --dry-run (which returns before manifest.sh is ever sourced — false confidence).
   run bash -c "printf 'fake-value\n' | AGENT_SECRETS_UNATTENDED=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' /bin/sh '$baked'"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"SHA-256 verified"* ]]
+  [[ "$output" == *"SHA-256 verified"* ]] || return 1
   [ -L "$AGENT_SECRETS_HOME/bin/agent-secrets" ]                                 # wrappers wired ⇒ got past manifest.sh
   [ -f "$AGENT_SECRETS_HOME/.local/state/agent-secrets/install-manifest.json" ]  # manifest_init ran
 }
@@ -89,8 +89,8 @@ teardown() {
   # With no stdin piped, the tool install must SUCCEED (exit 0) and route the human to a real terminal.
   run bash -c "CLAUDECODE=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked' </dev/null"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"real terminal"* ]]
-  [[ "$output" == *"agent-secrets setup"* ]]
+  [[ "$output" == *"real terminal"* ]] || return 1
+  [[ "$output" == *"agent-secrets setup"* ]] || return 1
   [ -f "$AGENT_SECRETS_HOME/.agent-secrets/lib/common.sh" ]     # tool unpacked
   [ -L "$AGENT_SECRETS_HOME/bin/agent-secrets" ]                # wired onto PATH
   [ ! -f "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]    # key ceremony correctly SKIPPED

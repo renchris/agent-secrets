@@ -153,11 +153,21 @@ manifest_rollback() {
   jq -e 'type=="array"' "$mf" >/dev/null 2>&1 \
     || agsec_die "install manifest is not a valid JSON array — refusing to clear it or claim zero residue; inspect $mf (each recorded artifact is still on disk)"
 
-  local rec type
-  # Reverse order so later artifacts undo before earlier ones (LIFO).
+  local rec type p deferred_dirs=""
+  # Reverse order so later artifacts undo before earlier ones (LIFO). BUT a `file` record that points at
+  # an existing DIRECTORY (the install root, which holds the vendored jq/age/sops on a no-brew install)
+  # is DEFERRED to a final pass: removing it mid-loop deletes jq and every later `jq -r '.type'` exits
+  # 127, aborting the rest of the rollback under set -e — stranding the settings.json edit, the Keychain
+  # item, and user-file restores. A re-install re-records the install-dir path and move-to-tail floats it
+  # toward the front, so this ordering guard is load-bearing (not just belt-and-suspenders). Paths are
+  # extracted NOW (jq still present) and removed after the loop, so no jq call outlives the install dir.
   while IFS= read -r rec; do
     [ -n "$rec" ] || continue
     type="$(jq -r '.type' <<<"$rec")"
+    if [ "$type" = file ]; then
+      p="$(jq -r '.path' <<<"$rec")"
+      if [ -d "$p" ] && [ ! -L "$p" ]; then deferred_dirs="${deferred_dirs}${p}"$'\n'; continue; fi
+    fi
     case "$type" in
       file)      _manifest_rb_file "$rec" "$dry" ;;
       edit)      _manifest_rb_edit "$rec" "$dry" ;;
@@ -166,6 +176,15 @@ manifest_rollback() {
       pathblock) _manifest_rb_pathblock "$rec" "$dry" ;;
     esac
   done < <(jq -c 'reverse[]' "$mf")
+  # Deferred directory removals LAST (no jq needed — paths already captured; removing the install dir
+  # takes the vendored jq with it).
+  if [ -n "$deferred_dirs" ]; then
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) rm dir: $p"
+      else rm -rf "$p" && agsec_ok "removed dir: $p"; fi
+    done <<< "$deferred_dirs"
+  fi
 
   # Belt-and-suspenders: purge our EXACT-service Keychain item even if its record was lost.
   local svc

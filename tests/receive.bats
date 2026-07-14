@@ -37,8 +37,8 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"received MY_TOKEN"* ]]
-  [[ "$output" != *"sk-secret-abc123"* ]]     # value never surfaced
+  [[ "$output" == *"received MY_TOKEN"* ]] || return 1
+  [[ "$output" != *"sk-secret-abc123"* ]] || return 1     # value never surfaced
   run store_extract MY_TOKEN
   [ "$output" = "sk-secret-abc123" ]
 }
@@ -48,7 +48,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   make_blob MY_TOKEN 'v' > "$BATS_TEST_TMPDIR/blob"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/does-not-exist" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"controlling terminal"* ]]
+  [[ "$output" == *"controlling terminal"* ]] || return 1
   run store_has MY_TOKEN
   [ "$status" -ne 0 ]                          # nothing stored
 }
@@ -67,7 +67,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   make_blob "$AGENT_SECRETS_CANARY_NAME" 'x' > "$BATS_TEST_TMPDIR/blob"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/does-not-exist" bash "$(receive_bin)" receive --yes-i-reviewed < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"canary"* ]]
+  [[ "$output" == *"canary"* ]] || return 1
 }
 
 @test "--yes-i-reviewed treats a NAME collision as a HARD error (never a silent overwrite)" {
@@ -76,7 +76,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   make_blob COLLIDE 'attacker-value' > "$BATS_TEST_TMPDIR/blob"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/does-not-exist" bash "$(receive_bin)" receive --yes-i-reviewed < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"already exists"* ]]
+  [[ "$output" == *"already exists"* ]] || return 1
   run store_extract COLLIDE
   [ "$output" = "original-value" ]            # untouched
 }
@@ -85,7 +85,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   setup_store
   run bash "$(receive_bin)" receive --bogus </dev/null
   [ "$status" -eq 2 ]
-  [[ "$output" == *"unknown flag"* ]]
+  [[ "$output" == *"unknown flag"* ]] || return 1
 }
 
 @test "unknown envelope version is rejected" {
@@ -94,7 +94,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"unknown or unsupported share envelope"* ]]
+  [[ "$output" == *"unknown or unsupported share envelope"* ]] || return 1
 }
 
 @test "existing-NAME hard-stop: confirm honored (a 'no' aborts, value unchanged)" {
@@ -104,7 +104,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   printf 'n\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"aborted"* ]]
+  [[ "$output" == *"aborted"* ]] || return 1
   run store_extract DUPE
   [ "$output" = "keep-me" ]                    # confirm was HONORED, not defaulted to yes
 }
@@ -139,7 +139,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"canary"* ]]
+  [[ "$output" == *"canary"* ]] || return 1
 }
 
 @test "receive REFUSES a multi-line value (v0.1 stores single-line only)" {
@@ -150,8 +150,8 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -eq 2 ]                         # refused (multi-line unsupported in v0.1)
-  [[ "$output" == *"MULTI-LINE"* || "$output" == *"single-line"* ]]
-  [[ "$output" != *"AAAA1111"* ]]            # the refusal never echoes the value
+  [[ "$output" == *"MULTI-LINE"* || "$output" == *"single-line"* ]] || return 1
+  [[ "$output" != *"AAAA1111"* ]] || return 1            # the refusal never echoes the value
   ! store_has MY_PEM                          # nothing stored
 }
 
@@ -170,7 +170,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   [ "$status" -eq 0 ]
   [ -f "$log" ]
   run cat "$log"
-  [[ "$output" != *"super-secret-argv-value"* ]]
+  [[ "$output" != *"super-secret-argv-value"* ]] || return 1
 }
 
 @test "oversized raw envelope is rejected BEFORE decode" {
@@ -180,8 +180,8 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"too large"* ]]
-  [[ "$output" == *"before decode"* ]]
+  [[ "$output" == *"too large"* ]] || return 1
+  [[ "$output" == *"before decode"* ]] || return 1
 }
 
 @test "oversized decoded ciphertext is rejected BEFORE decrypt (raw under the first cap)" {
@@ -193,8 +193,8 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"too large"* ]]
-  [[ "$output" == *"before decrypt"* ]]
+  [[ "$output" == *"too large"* ]] || return 1
+  [[ "$output" == *"before decrypt"* ]] || return 1
 }
 
 @test "unsigned blob proceeds with a loud 'sender unverified' warning" {
@@ -203,7 +203,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"sender unverified"* ]]
+  [[ "$output" == *"sender unverified"* ]] || return 1
 }
 
 @test "the locally-recomputed digest is displayed, pointed at the in-band 'digest:' line" {
@@ -215,8 +215,8 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"digest $expect"* ]]                 # the recomputed value is shown …
-  [[ "$output" == *"matches the 'digest:' line"* ]]     # … and coherently framed (not the recipient-key fingerprint)
+  [[ "$output" == *"digest $expect"* ]] || return 1                 # the recomputed value is shown …
+  [[ "$output" == *"matches the 'digest:' line"* ]] || return 1     # … and coherently framed (not the recipient-key fingerprint)
 }
 
 @test "chat-mangled armor (a non-base64 byte) fails closed with the curated message, never a silent abort" {
@@ -236,7 +236,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -ne 0 ]
   [ -n "$output" ]                                       # NOT a silent zero-output abort
-  [[ "$output" == *"could not decrypt"* ]]
+  [[ "$output" == *"could not decrypt"* ]] || return 1
   run store_has MANGLED
   [ "$status" -ne 0 ]                                    # nothing stored
 }
@@ -271,7 +271,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   printf 'y\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"could not decrypt"* ]]
-  [[ "$output" != *"age:"* ]]                 # no raw age diagnostic leaked
-  [[ "$output" != *"no identity matched"* ]]
+  [[ "$output" == *"could not decrypt"* ]] || return 1
+  [[ "$output" != *"age:"* ]] || return 1                 # no raw age diagnostic leaked
+  [[ "$output" != *"no identity matched"* ]] || return 1
 }

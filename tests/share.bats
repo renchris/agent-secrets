@@ -31,24 +31,24 @@ _share_fixture() {
   _share_fixture; _confirm y
   _sh ANTHROPIC_API_KEY --to "$RECIP"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"mint their own"* ]]
-  [[ "$output" == *"--singleton"* ]]
-  [[ "$output" == *"Anthropic"* ]]
-  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]
+  [[ "$output" == *"mint their own"* ]] || return 1
+  [[ "$output" == *"--singleton"* ]] || return 1
+  [[ "$output" == *"Anthropic"* ]] || return 1
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1
 }
 
 @test "--singleton bypasses the R2 rung and proceeds to emit an envelope" {
   _share_fixture; _confirm y
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
   [ "$status" -eq 0 ]
-  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]]
+  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]] || return 1
 }
 
 @test "a symmetric-by-construction (WEBHOOK) name takes R3 and proceeds without --singleton" {
   _share_fixture; _confirm y
   _sh TEAM_WEBHOOK_SECRET --to "$RECIP"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]]
+  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]] || return 1
 }
 
 # --- self (R0) ----------------------------------------------------------------
@@ -56,7 +56,7 @@ _share_fixture() {
   _share_fixture; _confirm y
   _sh ANTHROPIC_API_KEY --to self
   [ "$status" -eq 0 ]
-  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]]
+  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]] || return 1
   run grep -c 'shared_with' "$AGENT_SECRETS_HOME/.config/secrets/manifest.toml"
   [ "$output" -eq 0 ]
 }
@@ -66,16 +66,16 @@ _share_fixture() {
   _share_fixture; _confirm n
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
   [ "$status" -ne 0 ]
-  [[ "$output" == *"aborted"* ]]
-  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]
+  [[ "$output" == *"aborted"* ]] || return 1
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1
 }
 
 @test "the confirm prompt leads with the VALUE of NAME + recipient fingerprint" {
   _share_fixture; _confirm y
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Share the VALUE of ANTHROPIC_API_KEY"* ]]
-  [[ "$output" == *"sha256:"* ]]
+  [[ "$output" == *"Share the VALUE of ANTHROPIC_API_KEY"* ]] || return 1
+  [[ "$output" == *"sha256:"* ]] || return 1
 }
 
 # --- value-in-argv guard (croc CVE-2023-43621) --------------------------------
@@ -101,18 +101,18 @@ EOF
   _share_fixture; _confirm y
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
   [ "$status" -eq 0 ]
-  [[ "$output" == *'```'* ]]
-  [[ "$output" == *"name: ANTHROPIC_API_KEY"* ]]
-  [[ "$output" == *"direction: sent"* ]]
-  [[ "$output" == *"digest: sha256:"* ]]
-  [[ "$output" == *"-----END AGENT-SECRETS SHARE v1-----"* ]]
+  [[ "$output" == *'```'* ]] || return 1
+  [[ "$output" == *"name: ANTHROPIC_API_KEY"* ]] || return 1
+  [[ "$output" == *"direction: sent"* ]] || return 1
+  [[ "$output" == *"digest: sha256:"* ]] || return 1
+  [[ "$output" == *"-----END AGENT-SECRETS SHARE v1-----"* ]] || return 1
 }
 
 @test "--rename relabels the envelope name field" {
   _share_fixture; _confirm y
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton --rename DANA_ANTHROPIC
   [ "$status" -eq 0 ]
-  [[ "$output" == *"name: DANA_ANTHROPIC"* ]]
+  [[ "$output" == *"name: DANA_ANTHROPIC"* ]] || return 1
 }
 
 # --- digest stability across a benign armor reflow ----------------------------
@@ -134,16 +134,16 @@ EOF
   _share_fixture; _confirm y
   _sh ANTHROPIC_API_KEY --to
   [ "$status" -eq 2 ]
-  [[ "$output" == *"--to <recipient> is required"* ]]
+  [[ "$output" == *"--to <recipient> is required"* ]] || return 1
 }
 
 @test "a NAME with regex metacharacters fails fast as 'no such secret', not a raw sops/age error" {
   _share_fixture; _confirm y
   _sh "ANTHROPIC.API.KEY" --to "$RECIP" --singleton     # '.' would wildcard-match ANTHROPIC_API_KEY in store_has's grep
   [ "$status" -ne 0 ]
-  [[ "$output" == *"no such secret"* ]]
-  [[ "$output" != *"encryption failed"* ]]
-  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]
+  [[ "$output" == *"no such secret"* ]] || return 1
+  [[ "$output" != *"encryption failed"* ]] || return 1
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1
 }
 
 # --- store_extract | age, NOT sops -e (static) --------------------------------
@@ -159,16 +159,16 @@ EOF
   local other; other="$(_gen_recip "$AGENT_SECRETS_HOME/dana.key")"
   AGSEC_MOCK_KEYS="$other" _sh TEAM_WEBHOOK_SECRET --to github:dana
   [ "$status" -eq 0 ]
-  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]]
-  [[ "$output" == *'name: TEAM_WEBHOOK_SECRET'* ]]
+  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]] || return 1
+  [[ "$output" == *'name: TEAM_WEBHOOK_SECRET'* ]] || return 1
 }
 
 @test "an empty .keys from github fails loud (never a zero-recipient encrypt)" {
   _share_fixture; _confirm y
   AGSEC_MOCK_KEYS="" _sh TEAM_WEBHOOK_SECRET --to github:ghost
   [ "$status" -ne 0 ]
-  [[ "$output" == *"no age-usable public keys"* ]]
-  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]
+  [[ "$output" == *"no age-usable public keys"* ]] || return 1
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1
 }
 
 # --- SSH cert / sk-FIDO2 rejection --------------------------------------------
@@ -176,7 +176,7 @@ EOF
   _share_fixture; _confirm y
   _sh TEAM_WEBHOOK_SECRET --to "sk-ssh-ed25519@openssh.com"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"sk-FIDO2"* ]]
+  [[ "$output" == *"sk-FIDO2"* ]] || return 1
 }
 
 # --- manifest row for a real recipient ----------------------------------------
@@ -195,8 +195,8 @@ EOF
   run env -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM CLAUDECODE=1 \
     bash "$REPO_ROOT/bin/agent-secrets" share ANTHROPIC_API_KEY --to "$RECIP" --singleton
   [ "$status" -ne 0 ]
-  [[ "$output" == *"agent session"* ]]
-  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]
+  [[ "$output" == *"agent session"* ]] || return 1
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1
 }
 
 @test "share refuses with no readable confirm source and no unattended flag" {
@@ -204,14 +204,14 @@ EOF
   export AGSEC_CONFIRM_SRC="$AGENT_SECRETS_HOME/nope/missing"
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
   [ "$status" -ne 0 ]
-  [[ "$output" == *"interactive terminal"* ]]
+  [[ "$output" == *"interactive terminal"* ]] || return 1
 }
 
 @test "the canary name is hard-refused for share (no confirm)" {
   _share_fixture; _confirm y
   _sh AWS_BACKUP_ACCESS_KEY_ID --to "$RECIP" --singleton
   [ "$status" -ne 0 ]
-  [[ "$output" == *"canary"* ]]
+  [[ "$output" == *"canary"* ]] || return 1
 }
 
 # --- AGENT_SECRETS_UNATTENDED auto-answers the confirm, but never bypasses the tty gate ---
@@ -220,7 +220,7 @@ EOF
   export AGENT_SECRETS_UNATTENDED=1
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
   [ "$status" -eq 0 ]
-  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]]
+  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]] || return 1
 }
 
 @test "AGENT_SECRETS_UNATTENDED=1 does NOT bypass the interactive-terminal gate (agent-exfil boundary)" {
@@ -228,8 +228,8 @@ EOF
   export AGSEC_CONFIRM_SRC="$AGENT_SECRETS_HOME/nope/missing" AGENT_SECRETS_UNATTENDED=1
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
   [ "$status" -ne 0 ]
-  [[ "$output" == *"interactive terminal"* ]]
-  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]     # nothing shared with no controlling tty
+  [[ "$output" == *"interactive terminal"* ]] || return 1
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1     # nothing shared with no controlling tty
 }
 
 # --- SH1: the confirm gate requires a REAL tty, not a mere openable file ---------
@@ -242,15 +242,15 @@ EOF
     AGSEC_CONFIRM_SRC="$AGENT_SECRETS_HOME/y" AGENT_SECRETS_UNATTENDED=1 \
     bash "$REPO_ROOT/bin/agent-secrets" share ANTHROPIC_API_KEY --to "$RECIP" --singleton
   [ "$status" -ne 0 ]
-  [[ "$output" == *"interactive terminal"* ]]
-  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]   # no ciphertext exfiltrated
+  [[ "$output" == *"interactive terminal"* ]] || return 1
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1   # no ciphertext exfiltrated
 }
 
 @test "share still works with the file-based confirm seam UNDER AGSEC_TEST_CONFIRM=1 (test harness)" {
   _share_fixture; _confirm y                        # test_helper exports AGSEC_TEST_CONFIRM=1
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
   [ "$status" -eq 0 ]
-  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]]
+  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]] || return 1
 }
 
 # --- SH4: --rename is grammar-checked at parse (fail-fast, not fail-late at recipient) ---
@@ -258,6 +258,6 @@ EOF
   _share_fixture; _confirm y
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton --rename 'bad-name.oops'
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not a valid name"* ]]
-  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]
+  [[ "$output" == *"not a valid name"* ]] || return 1
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1
 }

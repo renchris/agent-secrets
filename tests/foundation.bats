@@ -9,7 +9,7 @@ load test_helper
   # The base64-round-trip workaround corrupted values across run/share (see re-audit) → v0.1 refuses.
   run store_add_multiline FAKE_PEM_KEY
   [ "$status" -eq 2 ]
-  [[ "$output" == *"multi-line secrets are not supported"* ]]
+  [[ "$output" == *"multi-line secrets are not supported"* ]] || return 1
   ! store_has FAKE_PEM_KEY                                    # nothing stored
 }
 
@@ -55,6 +55,6 @@ load test_helper
   printf -- '-----BEGIN-----\n%s\n-----END-----\n' "$secret" > "$AGENT_SECRETS_HOME/v.in"
   run store_add_multiline LEAK_CHECK < "$AGENT_SECRETS_HOME/v.in"
   [ "$status" -eq 2 ]                                         # refused (stub never reads the value)
-  [[ "$output" != *"$secret"* ]]                             # the refusal message carries no value
+  [[ "$output" != *"$secret"* ]] || return 1                             # the refusal message carries no value
   run grep -c "$secret" "$(agsec_store_file)"; [ "$output" -eq 0 ]   # nothing stored
 }

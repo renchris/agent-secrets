@@ -46,7 +46,7 @@ _load_manifest() {
   printf '[{"type":"file","path":"x"} GARBAGE' > "$AGENT_SECRETS_HOME/.local/state/agent-secrets/install-manifest.json"
   run bash -c "bash '$REPO_ROOT/bin/agent-secrets' uninstall </dev/null"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not valid JSON"* ]]
+  [[ "$output" == *"not a valid JSON array"* ]] || return 1
   [ -f "$AGENT_SECRETS_HOME/bin/artifact" ]                             # artifact NOT falsely removed
 }
 
@@ -106,7 +106,7 @@ _load_manifest() {
     bash -c "bash '$REPO_ROOT/install.sh' </dev/null"
   rm -rf "$MIRROR"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"not a directory"* ]]
+  [[ "$output" == *"not a directory"* ]] || return 1
   [ ! -d "$AGENT_SECRETS_HOME/.agent-secrets" ]                        # no residue
 }
 
@@ -133,7 +133,7 @@ alarm 0; kill 'TERM',-$pid; kill 'TERM',$pid;
 print $got==50 ? "BODY_OK\n" : "BODY_BAD:$got\n";
 PERL
   [ "$status" -eq 0 ]
-  [[ "$output" == *"BODY_OK"* ]]
+  [[ "$output" == *"BODY_OK"* ]] || return 1
 }
 
 # --- HIGH re-audit: dedup × S4 wrapper-edit × RT5a rewire must NOT invert LIFO ------
@@ -170,7 +170,29 @@ PERL
   # Attacker mimic: TEST_CONFIRM set but HOME points at the REAL store (== $HOME) → file REFUSED.
   run env AGSEC_TEST_CONFIRM=1 AGENT_SECRETS_HOME="$HOME" bash -c ". '$REPO_ROOT/lib/common.sh'; agsec_src_is_tty '$f'"
   [ "$status" -ne 0 ]
-  # And with no HOME override at all (real store) → refused.
-  run env AGSEC_TEST_CONFIRM=1 -u AGENT_SECRETS_HOME bash -c ". '$REPO_ROOT/lib/common.sh'; agsec_src_is_tty '$f'"
+  # Alias bypass: a trailing slash resolves to the SAME real store after canonicalization → REFUSED.
+  run env AGSEC_TEST_CONFIRM=1 AGENT_SECRETS_HOME="$HOME/" bash -c ". '$REPO_ROOT/lib/common.sh'; agsec_src_is_tty '$f'"
   [ "$status" -ne 0 ]
+  # And with no HOME override at all (real store) → refused. (-u BEFORE the NAME=VALUE operand, else
+  # BSD env treats -u as the utility.)
+  run env -u AGENT_SECRETS_HOME AGSEC_TEST_CONFIRM=1 bash -c ". '$REPO_ROOT/lib/common.sh'; agsec_src_is_tty '$f'"
+  [ "$status" -ne 0 ]
+}
+
+# --- HIGH re-audit-r2: install-dir record rolled back LAST so vendored jq survives ------
+# A re-install re-records the install-dir; move-to-tail floats it to the front of reverse order.
+# If it were removed first, the vendored jq (inside it) would vanish and every later jq-parsed record
+# would abort rollback under set -e. The deferral processes directory records last.
+@test "rollback processes the install-dir record LAST (later edit/keychain records not stranded)" {
+  _load_manifest
+  local id="$AGENT_SECRETS_HOME/.agent-secrets"; mkdir -p "$id/vendor/bin"
+  manifest_record_file "$id" >/dev/null 2>&1 || true                     # install dir (shasum-on-dir is non-zero; real install guards with || true)
+  local sj="$AGENT_SECRETS_HOME/.claude/settings.json"; mkdir -p "$(dirname "$sj")"
+  printf '{"apiKeyHelper":"x"}\n' > "$sj"; local bak="$AGENT_SECRETS_HOME/sj.bak"; printf '{}\n' > "$bak"
+  manifest_record_edit "$sj" "$bak" apiKeyHelper created >/dev/null       # LATER record (jq-parsed at rollback)
+  manifest_record_file "$id" >/dev/null 2>&1 || true                     # RE-INSTALL re-records → move-to-tail floats it front
+  run manifest_rollback
+  [ "$status" -eq 0 ] || return 1
+  [ ! -f "$sj" ] || return 1                                             # the edit record WAS processed (not stranded before the dir)
+  [ ! -d "$id" ] || return 1                                            # install dir removed (last)
 }

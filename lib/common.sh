@@ -109,11 +109,16 @@ agsec_require() { agsec_have "$1" || agsec_die "required command not found: $1 �
 # requires a genuine controlling terminal. (An attacker who already runs as you can read the store
 # directly via the age key regardless — that is the documented honest ceiling, not this gate's job.)
 agsec_src_is_tty() {
-  if [ -n "${AGSEC_TEST_CONFIRM:-}" ] && [ -n "${AGENT_SECRETS_HOME:-}" ] && [ "${AGENT_SECRETS_HOME:-}" != "${HOME:-}" ]; then
-    ( : < "$1" ) 2>/dev/null
-  else
-    ( exec 3<"$1"; [ -t 3 ] ) 2>/dev/null
+  # Canonicalize both dirs before comparing so a trivial alias (AGENT_SECRETS_HOME="$HOME/", "$HOME/.",
+  # a symlink) cannot pass the "synthetic store" check while still resolving to the REAL store. An empty
+  # canonical HOME dir (unset/nonexistent AGENT_SECRETS_HOME) leaves the seam OFF → real tty required.
+  if [ -n "${AGSEC_TEST_CONFIRM:-}" ]; then
+    local _h _real
+    _h="$(cd -P "${AGENT_SECRETS_HOME:-/nonexistent-agsec}" 2>/dev/null && pwd -P)" || _h=""
+    _real="$(cd -P "${HOME:-/nonexistent-home}" 2>/dev/null && pwd -P)" || _real=""
+    if [ -n "$_h" ] && [ "$_h" != "$_real" ]; then ( : < "$1" ) 2>/dev/null; return; fi
   fi
+  ( exec 3<"$1"; [ -t 3 ] ) 2>/dev/null
 }
 
 # Refuse secret-bearing key ceremonies inside an agent session

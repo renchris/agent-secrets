@@ -28,7 +28,7 @@ PROBE() { bash "$BATS_TEST_DIRNAME/egress-probe.sh" "$@"; }
   local allow; allow="$(mktemp)"; printf 'api.anthropic.com\n' >"$allow"
   run PROBE "$allow" "10.255.255.1:443"        # not allowlisted; denied before any upstream connect
   [ "$status" -eq 0 ]
-  [[ "$output" == *"403"* ]]
+  [[ "$output" == *"403"* ]] || return 1
   rm -f "$allow"
 }
 
@@ -37,7 +37,7 @@ PROBE() { bash "$BATS_TEST_DIRNAME/egress-probe.sh" "$@"; }
   local allow; allow="$(mktemp)"; printf 'localhost\n' >"$allow"   # localhost → 127.0.0.1: proves name matching
   run PROBE "$allow" "localhost:UPPORT" --upstream
   [ "$status" -eq 0 ]
-  [[ "$output" == *"200"* ]]
+  [[ "$output" == *"200"* ]] || return 1
   rm -f "$allow"
 }
 
@@ -46,7 +46,7 @@ PROBE() { bash "$BATS_TEST_DIRNAME/egress-probe.sh" "$@"; }
   local allow; allow="$(mktemp)"; printf '*.anthropic.com\n' >"$allow"
   run PROBE "$allow" "localhost:9999"          # localhost is not *.anthropic.com; denied (no upstream)
   [ "$status" -eq 0 ]
-  [[ "$output" == *"403"* ]]
+  [[ "$output" == *"403"* ]] || return 1
   rm -f "$allow"
 }
 
@@ -55,7 +55,7 @@ PROBE() { bash "$BATS_TEST_DIRNAME/egress-probe.sh" "$@"; }
   local allow; allow="$(mktemp)"; printf 'localhost:UPPORT\n' >"$allow"   # probe substitutes the real port
   run PROBE "$allow" "localhost:UPPORT" --upstream
   [ "$status" -eq 0 ]
-  [[ "$output" == *"200"* ]]
+  [[ "$output" == *"200"* ]] || return 1
   rm -f "$allow"
 }
 
@@ -64,7 +64,7 @@ PROBE() { bash "$BATS_TEST_DIRNAME/egress-probe.sh" "$@"; }
   local allow; allow="$(mktemp)"; printf 'localhost:1\n' >"$allow"        # allowed host, wrong port
   run PROBE "$allow" "localhost:9999"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"403"* ]]
+  [[ "$output" == *"403"* ]] || return 1
   rm -f "$allow"
 }
 
@@ -88,6 +88,6 @@ PROBE() { bash "$BATS_TEST_DIRNAME/egress-probe.sh" "$@"; }
   printf 'api.example.com\n' >"$(agsec_config_dir)/egress.allow"          # allowlist configured
   run env HTTPS_PROXY="http://corp.example:3128" bash "$REPO_ROOT/bin/agent-secrets" run -- printenv HTTPS_PROXY
   [ "$status" -eq 0 ]
-  [[ "$output" == *"corp.example:3128"* ]]       # ambient proxy preserved…
-  [[ "$output" != *"127.0.0.1"* ]]               # …NOT rewritten to our loopback
+  [[ "$output" == *"corp.example:3128"* ]] || return 1       # ambient proxy preserved…
+  [[ "$output" != *"127.0.0.1"* ]] || return 1               # …NOT rewritten to our loopback
 }

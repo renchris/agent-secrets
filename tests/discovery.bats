@@ -29,8 +29,8 @@ load test_helper
   grep -qF "Be concise." "$cm"                  # pre-existing user content preserved
 
   run agsec doctor
-  [[ "$output" == *"global agent rules"* ]]
-  [[ "$output" == *"present in ~/.claude/CLAUDE.md"* ]]
+  [[ "$output" == *"global agent rules"* ]] || return 1
+  [[ "$output" == *"present in ~/.claude/CLAUDE.md"* ]] || return 1
 
   manifest_rollback >/dev/null
   run grep -c "agent-secrets" "$cm"; [ "$output" -eq 0 ]   # block fully stripped
@@ -39,6 +39,6 @@ load test_helper
 
 @test "doctor reports the discovery block absent when ~/.claude/CLAUDE.md carries none" {
   run agsec doctor
-  [[ "$output" == *"global agent rules"* ]]
-  [[ "$output" == *"not installed (opt-in"* ]]
+  [[ "$output" == *"global agent rules"* ]] || return 1
+  [[ "$output" == *"not installed (opt-in"* ]] || return 1
 }

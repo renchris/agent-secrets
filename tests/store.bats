@@ -11,8 +11,8 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   printf '%s' "$FAKE_VALUE" | agsec add "$FAKE_NAME"
   run agsec list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"$FAKE_NAME"* ]]
-  [[ "$output" != *"$FAKE_VALUE"* ]]
+  [[ "$output" == *"$FAKE_NAME"* ]] || return 1
+  [[ "$output" != *"$FAKE_VALUE"* ]] || return 1
 }
 
 @test "run injects the value (length only; tool never displays it)" {
@@ -40,14 +40,14 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
 @test "the in-store canary is present after init" {
   setup_store
   run agsec list
-  [[ "$output" == *"AWS_BACKUP_ACCESS_KEY_ID"* ]]
+  [[ "$output" == *"AWS_BACKUP_ACCESS_KEY_ID"* ]] || return 1
 }
 
 @test "list --format=json is valid and value-free" {
   setup_store
   printf '%s' "$FAKE_VALUE" | agsec add "$FAKE_NAME"
   run bash -c "bash '$REPO_ROOT/bin/agent-secrets' list --format=json | jq -e '.[].name' >/dev/null && echo VALID"
-  [[ "$output" == *"VALID"* ]]
+  [[ "$output" == *"VALID"* ]] || return 1
   run bash -c "bash '$REPO_ROOT/bin/agent-secrets' list --format=json | grep -c '$FAKE_VALUE'"
   [ "$output" -eq 0 ]
 }
@@ -56,7 +56,7 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   setup_store
   run bash -c "printf x | bash '$REPO_ROOT/bin/agent-secrets' add '1bad-name'"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"invalid name"* ]]
+  [[ "$output" == *"invalid name"* ]] || return 1
 }
 
 @test "list (text) survives a missing manifest row without truncating under set -e" {
@@ -65,16 +65,16 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   rm -f "$(agsec_manifest_toml)"                 # no manifest → _rotate_of's grep fails (exit non-zero)
   run bash "$REPO_ROOT/bin/agent-secrets" list
   [ "$status" -eq 0 ]                            # pre-fix: bare r=$(...) aborts under set -e after the header
-  [[ "$output" == *"ORPHAN_TOKEN"* ]]            # every name is listed, not truncated away
-  [[ "$output" == *"$AGENT_SECRETS_CANARY_NAME"* ]]
+  [[ "$output" == *"ORPHAN_TOKEN"* ]] || return 1            # every name is listed, not truncated away
+  [[ "$output" == *"$AGENT_SECRETS_CANARY_NAME"* ]] || return 1
 }
 
 @test "run -- with no command gives run's usage (exit 2), not an internal helper message" {
   setup_store
   run bash "$REPO_ROOT/bin/agent-secrets" run --
   [ "$status" -eq 2 ]
-  [[ "$output" == *"agent-secrets run"* ]]   # run's user-facing usage…
-  [[ "$output" == *"-- <cmd>"* ]]            # …not the internal store_exec helper string
+  [[ "$output" == *"agent-secrets run"* ]] || return 1   # run's user-facing usage…
+  [[ "$output" == *"-- <cmd>"* ]] || return 1            # …not the internal store_exec helper string
 }
 
 @test "static: no secret value passed to a logging/status helper (transcript-leak guard)" {
@@ -90,10 +90,10 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   setup_store
   run bash -c "printf 'line-one\nline-two\n' | bash '$REPO_ROOT/bin/agent-secrets' add MULTI_ADD"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"SINGLE-LINE"* ]]
+  [[ "$output" == *"SINGLE-LINE"* ]] || return 1
   # nothing stored under that name
   run bash "$REPO_ROOT/bin/agent-secrets" list
-  [[ "$output" != *"MULTI_ADD"* ]]
+  [[ "$output" != *"MULTI_ADD"* ]] || return 1
 }
 
 @test "store_add_multiline is a fail-closed stub (multi-line unsupported in v0.1)" {
@@ -103,7 +103,7 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/keychain.sh"; . "$REPO_ROOT/lib/store.sh"
   run store_add_multiline PEM_KEY
   [ "$status" -eq 2 ]
-  [[ "$output" == *"not supported"* ]]
+  [[ "$output" == *"not supported"* ]] || return 1
   ! store_has PEM_KEY
 }
 
@@ -111,7 +111,7 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   setup_store
   run bash -c "printf '' | bash '$REPO_ROOT/bin/agent-secrets' add EMPTY_ONE"
   [ "$status" -eq 2 ]
-  [[ "$output" == *"NON-EMPTY"* ]]
+  [[ "$output" == *"NON-EMPTY"* ]] || return 1
   run agsec list
-  [[ "$output" != *"EMPTY_ONE"* ]]     # never stored
+  [[ "$output" != *"EMPTY_ONE"* ]] || return 1     # never stored
 }
