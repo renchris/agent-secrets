@@ -43,6 +43,11 @@ AGENT_SECRETS_CANARY_NAME="AWS_BACKUP_ACCESS_KEY_ID"  # in-store canary (plausib
 # ARMS it by replacing the value with a real tripwire token (e.g. a canarytokens.org token bound to
 # their own alert). setup offers to arm it; doctor warns while it is still the placeholder.
 AGENT_SECRETS_CANARY_PLACEHOLDER="canary-INERT-arm-me-with-a-real-tripwire-token"
+# The value the UNATTENDED wizard seeds when no real value is piped (tests/CI). A single source of
+# truth so setup writes it and doctor can recognize it — flagging a store still holding this fake so
+# apiKeyHelper never silently feeds a placeholder credential (a non-empty value passes the naive
+# "returns a credential" check). Names-only: comparing against this known constant leaks nothing.
+AGENT_SECRETS_UNATTENDED_PLACEHOLDER="unattended-placeholder-value"
 AGENT_SECRETS_ROTATE_DAYS_DEFAULT=180                 # age key rotation cadence
 AGSEC_SHARE_ENVELOPE_VERSION="v1"                     # colleague-share envelope; receive rejects unknown versions
 AGENT_SECRETS_DISCOVERY_MARKER="agent-secrets"        # marker for the opt-in ~/.claude/CLAUDE.md discovery block (install writes, doctor greps, uninstall strips)
@@ -134,3 +139,17 @@ agsec_in_agent_session() {
 
 # umask for secret-bearing writes: owner-only (0600 files, 0700 dirs).
 agsec_secure_umask() { umask 077; }
+
+# The canonical four golden rules an agent (in any IDE) must follow — the SINGLE source consumed by
+# setup's done-screen (printed + copied to the clipboard for Cursor's User Rules) so the terminal
+# text and the clipboard payload can never drift. Plain lines to STDOUT; names-only (the `$VALUE`
+# literal is a paste-ready template, never a real value). install.sh keeps its own markdown-wrapped
+# variant for ~/.claude/CLAUDE.md (a distinct surface); the rule wording is intentionally identical.
+# shellcheck disable=SC2016  # the literal $VALUE is the point — a copy-paste template, not expansion
+agsec_agent_rules() {
+  printf '%s\n' \
+    '- NEVER write a secret to a .env, export it in plaintext, or print a secret VALUE.' \
+    '- Run tools WITH secrets injected, process-scoped: agent-secrets run -- <cmd>' \
+    '- Add/update a secret via STDIN (never argv): printf %s "$VALUE" | agent-secrets add NAME' \
+    '- Names/health/manifest: agent-secrets list · doctor · help --json'
+}

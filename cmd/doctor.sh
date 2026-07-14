@@ -12,7 +12,7 @@ case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render do
 . "$AGENT_SECRETS_LIB/egress.sh"      # egress allowlist status for gate (e)
 . "$AGENT_SECRETS_LIB/deps.sh"        # toolchain adequacy (sops SOPS_AGE_KEY_CMD version gate) — fn defs only
 
-FORMAT=text ; REDACT=0 ; FIX=0 ; GATES=0
+FORMAT=text ; REDACT=0 ; FIX=0 ; GATES=0 ; SUMMARY=0
 for arg in "$@"; do
   case "$arg" in
     --format=json) FORMAT=json ;;
@@ -20,7 +20,8 @@ for arg in "$@"; do
     --redact)      REDACT=1 ;;
     --fix)         FIX=1 ;;
     --gates)       GATES=1 ;;
-    -h|--help) printf '%s\n' "usage: agent-secrets doctor [--format=json] [--redact] [--gates] [--fix]"; exit 0 ;;
+    --summary)     SUMMARY=1 ;;
+    -h|--help) printf '%s\n' "usage: agent-secrets doctor [--format=json] [--redact] [--gates] [--summary] [--fix]"; exit 0 ;;
     *) agsec_die "doctor: unknown flag: $arg (see --help)" 2 ;;
   esac
 done
@@ -28,18 +29,28 @@ done
 # Must match install.sh's SMOKE_LABEL exactly, else the maintenance check can never pass.
 LAUNCHD_LABEL="${AGENT_SECRETS_LAUNCHD_LABEL:-com.agent-secrets.smoke}"
 had_bad=0
+SUMMARY_HIDDEN=0    # count of optional rows suppressed under --summary (reported in the footer)
 JSON_ROWS=()
 
 _js() { local s=${1//\\/\\\\}; printf '%s' "${s//\"/\\\"}"; }  # minimal JSON string escape
 
-# Emit one check result.  Args: category status(ok|attn|bad) name [detail]  — names-only.
+# Emit one check result.  Args: category status(ok|attn|bad) name [detail] [tier(core|optional)]
+# — names-only. `tier` (default core) drives --summary presentation ONLY: a healthy fresh install
+# raises ~7 aspirational `attn` rows (canary/backup/discovery/hygiene/maintenance/supply-chain) that
+# read as "broken" though exit is 0. --summary hides `optional` rows that are NOT `bad`, so the wizard
+# ends on core custody/toolchain/store/injection status. It NEVER changes the exit code (had_bad is set
+# before any display filter) and NEVER filters JSON (agents parse the full manifest) — presentation only.
 _row() {
-  local cat=$1 st=$2 name=$3 detail=${4:-}
+  local cat=$1 st=$2 name=$3 detail=${4:-} tier=${5:-core}
   if [ "$st" = bad ]; then had_bad=1; fi
   if [ "$FORMAT" = json ]; then
     JSON_ROWS+=("$(printf '{"category":"%s","status":"%s","check":"%s","detail":"%s"}' \
       "$cat" "$st" "$(_js "$name")" "$(_js "$detail")")")
     return 0
+  fi
+  # --summary text filter: keep every ✗ and every core row; hide non-bad optional rows (count them).
+  if [ "$SUMMARY" = 1 ] && [ "$st" != bad ] && [ "$tier" != core ]; then
+    SUMMARY_HIDDEN=$((SUMMARY_HIDDEN + 1)); return 0
   fi
   case "$st" in
     ok)   agsec_ok   "[$cat] $name${detail:+ — $detail}" ;;
@@ -101,13 +112,13 @@ check_toolchain() {  # age + sops present, and sops NEW ENOUGH for SOPS_AGE_KEY_
   else
     _row toolchain bad "sops" "missing — re-run the installer (or install sops >= $DEPS_SOPS_MIN)"
   fi
-  if agsec_have gum; then _row toolchain ok "gum" "present"
-  else _row toolchain attn "gum" "absent (optional — plain-text UI is used)"; fi
+  if agsec_have gum; then _row toolchain ok "gum" "present" optional
+  else _row toolchain attn "gum" "absent (optional — plain-text UI is used)" optional; fi
 }
 
 _scan_rotate() {  # manifest.toml rotate_by scan — names + days only, never values
   local mf; mf=$(agsec_manifest_toml)
-  if [ ! -f "$mf" ]; then _row store attn "rotation scan" "no manifest"; return 0; fi
+  if [ ! -f "$mf" ]; then _row store attn "rotation scan" "no manifest" optional; return 0; fi
   local today line name rb due days dname flagged=0
   today=$(date +%s); name=""
   while IFS= read -r line; do
@@ -120,13 +131,13 @@ _scan_rotate() {  # manifest.toml rotate_by scan — names + days only, never va
         if [ "$days" -le 14 ]; then
           dname=$name; if [ "$REDACT" = 1 ]; then dname=$(printf '%s' "$name" | agsec_digest); fi
           # A past rotate_by yields negative days; "in -30d" reads wrong — say "overdue by 30d".
-          if [ "$days" -lt 0 ]; then _row store attn "rotation due" "$dname overdue by $(( -days ))d"
-          else _row store attn "rotation due" "$dname in ${days}d"; fi
+          if [ "$days" -lt 0 ]; then _row store attn "rotation due" "$dname overdue by $(( -days ))d" optional
+          else _row store attn "rotation due" "$dname in ${days}d" optional; fi
           flagged=1
         fi ;;
     esac
   done < "$mf"
-  if [ "$flagged" = 0 ]; then _row store ok "rotation scan" "none due ≤14d"; fi
+  if [ "$flagged" = 0 ]; then _row store ok "rotation scan" "none due ≤14d" optional; fi
 }
 
 check_store() {
@@ -134,16 +145,27 @@ check_store() {
   if [ -f "$sf" ]; then _row store ok "store file" "present"; else _row store bad "store file" "absent"; fi
   if _try v store_extract "$AGENT_SECRETS_CANARY_NAME" && [ -n "$v" ]; then
     _row store ok "decrypt self-test" "canary readable"
-    # Armed-canary status: comparing against the known placeholder constant leaks nothing.
+    # Armed-canary status: comparing against the known placeholder constant leaks nothing. Both states
+    # are `optional` — an unarmed decoy is a deliberate default, not a defect (P1-4: mark "(optional)").
     if [ "$v" = "$AGENT_SECRETS_CANARY_PLACEHOLDER" ]; then
-      _row store attn "canary" "INERT decoy — no breach detection until armed (agent-secrets add $AGENT_SECRETS_CANARY_NAME)"
+      _row store attn "canary" "INERT decoy (optional) — no breach detection until armed (agent-secrets add $AGENT_SECRETS_CANARY_NAME)" optional
     else
-      _row store ok "canary" "armed"
+      _row store ok "canary" "armed" optional
     fi
   else
     _row store bad "decrypt self-test" "canary unreadable"
   fi
   v=""
+  # Placeholder-credential guard: the UNATTENDED wizard seeds ANTHROPIC_API_KEY with a known fake so
+  # tests never hang. It is a NON-EMPTY value, so check_injection's apiKeyHelper "returns a credential"
+  # passes and the install reads healthy while Claude would auth with a placeholder. Flag it (core, so it
+  # survives --summary) with the exact fix. Comparing to the known constant is names-only. Guarded via
+  # _try so an absent ANTHROPIC_API_KEY (the common case) is simply skipped.
+  local pv
+  if _try pv store_extract ANTHROPIC_API_KEY && [ "$pv" = "$AGENT_SECRETS_UNATTENDED_PLACEHOLDER" ]; then
+    _row store attn "ANTHROPIC_API_KEY" "holds the unattended TEST placeholder — replace it: agent-secrets add ANTHROPIC_API_KEY"
+  fi
+  pv=""
   _scan_rotate
 }
 
@@ -180,9 +202,13 @@ check_injection() {
 check_backup() {  # is an off-machine second copy configured? (makes disaster recovery real, not a hope)
   local marker; marker="$(agsec_config_dir)/backup-repo"
   if [ -f "$marker" ] && [ -s "$marker" ]; then
-    _row backup ok "off-machine backup" "configured ($(cat "$marker"))"
+    _row backup ok "off-machine backup" "configured ($(cat "$marker"))" optional
+  elif agsec_have gh; then
+    _row backup attn "off-machine backup" "none — run: gh auth login (if needed), then agent-secrets backup (or keep a copy of ~/.config/secrets/ somewhere safe)" optional
   else
-    _row backup attn "off-machine backup" "none — run: agent-secrets backup (or keep a copy of ~/.config/secrets/ somewhere safe)"
+    # backup's prerequisite chain is gh → gh auth login → backup. Name the missing first link and where
+    # the brew-less install recipe lives (P1-5) instead of a bare "run: agent-secrets backup" that dies.
+    _row backup attn "off-machine backup" "none — needs gh: install it (agent-secrets help onboarding), then gh auth login, then agent-secrets backup (or keep a copy of ~/.config/secrets/ safe)" optional
   fi
 }
 
@@ -190,9 +216,9 @@ check_discovery() {  # is the opt-in machine-wide agent-discovery block present 
   local cm marker; cm="$(agsec_home)/.claude/CLAUDE.md"
   marker="# >>> ${AGENT_SECRETS_DISCOVERY_MARKER} >>>"
   if [ -f "$cm" ] && grep -qF "$marker" "$cm" 2>/dev/null; then
-    _row discovery ok "global agent rules" "present in ~/.claude/CLAUDE.md"
+    _row discovery ok "global agent rules" "present in ~/.claude/CLAUDE.md" optional
   else
-    _row discovery attn "global agent rules" "not installed (opt-in — agents outside this repo won't know agent-secrets exists; re-run the installer to add)"
+    _row discovery attn "global agent rules" "not installed (opt-in — agents outside this repo won't know agent-secrets exists; re-run the installer to add)" optional
   fi
 }
 
@@ -200,34 +226,34 @@ check_hygiene() {
   local pd mode sj cpd; pd="$(agsec_home)/.claude/projects"
   if [ -d "$pd" ]; then
     mode=$(stat -f '%OLp' "$pd" 2>/dev/null || echo '???')
-    if [ "$mode" = 700 ]; then _row hygiene ok "projects dir mode" "700"
+    if [ "$mode" = 700 ]; then _row hygiene ok "projects dir mode" "700" optional
     else
-      _row hygiene attn "projects dir mode" "$mode (want 700)"
-      if [ "$FIX" = 1 ] && chmod 700 "$pd" 2>/dev/null; then _row hygiene ok "projects dir mode" "fixed → 700"; fi
+      _row hygiene attn "projects dir mode" "$mode (want 700)" optional
+      if [ "$FIX" = 1 ] && chmod 700 "$pd" 2>/dev/null; then _row hygiene ok "projects dir mode" "fixed → 700" optional; fi
     fi
-  else _row hygiene attn "projects dir" "absent"; fi
+  else _row hygiene attn "projects dir" "absent" optional; fi
   sj="$(agsec_home)/.claude/settings.json"
   if [ -f "$sj" ] && agsec_have jq; then
     cpd=$(jq -r '.cleanupPeriodDays // empty' "$sj" 2>/dev/null || echo '')
-    if [ -n "$cpd" ] && [ "$cpd" -le 14 ] 2>/dev/null; then _row hygiene ok "cleanupPeriodDays" "$cpd"
-    elif [ -n "$cpd" ]; then _row hygiene attn "cleanupPeriodDays" "$cpd (want ≤14)"
-    else _row hygiene attn "cleanupPeriodDays" "unset (want ≤14)"; fi
-  else _row hygiene attn "cleanupPeriodDays" "settings.json/jq unavailable"; fi
+    if [ -n "$cpd" ] && [ "$cpd" -le 14 ] 2>/dev/null; then _row hygiene ok "cleanupPeriodDays" "$cpd" optional
+    elif [ -n "$cpd" ]; then _row hygiene attn "cleanupPeriodDays" "$cpd (want ≤14)" optional
+    else _row hygiene attn "cleanupPeriodDays" "unset (want ≤14)" optional; fi
+  else _row hygiene attn "cleanupPeriodDays" "settings.json/jq unavailable" optional; fi
 }
 
 check_maintenance() {
-  if _guard launchctl list "$LAUNCHD_LABEL"; then _row maintenance ok "weekly smoke job" "loaded"
-  else _row maintenance attn "weekly smoke job" "not loaded ($LAUNCHD_LABEL)"; fi
+  if _guard launchctl list "$LAUNCHD_LABEL"; then _row maintenance ok "weekly smoke job" "loaded" optional
+  else _row maintenance attn "weekly smoke job" "not loaded ($LAUNCHD_LABEL)" optional; fi
 }
 
 check_supply() {
   local val
   if agsec_have npm && _try val npm config get ignore-scripts && [ "$val" = true ]; then
-    _row supply-chain ok "npm ignore-scripts" "true"
+    _row supply-chain ok "npm ignore-scripts" "true" optional
   else
-    _row supply-chain attn "npm ignore-scripts" "not set (want true)"
+    _row supply-chain attn "npm ignore-scripts" "not set (want true)" optional
     if [ "$FIX" = 1 ] && agsec_have npm && npm config set ignore-scripts true >/dev/null 2>&1; then
-      _row supply-chain ok "npm ignore-scripts" "fixed → true"
+      _row supply-chain ok "npm ignore-scripts" "fixed → true" optional
     fi
   fi
 }
@@ -240,28 +266,28 @@ check_gates() {  # execution gates (c)/(d)/(e) — (c) degradation is a note, ne
   # `bad` for missing — a gate must not flip exit code).
   if _try st kc_status; then
     case "$st" in
-      primary)   _row gate ok   "(c) keychain read" "primary" ;;
-      degraded*) _row gate attn "(c) keychain read" "degraded (file custody)" ;;
-      missing)   _row gate attn "(c) keychain read" "no key custody — run: agent-secrets setup" ;;
-      *)         _row gate attn "(c) keychain read" "unknown state" ;;
+      primary)   _row gate ok   "(c) keychain read" "primary" optional ;;
+      degraded*) _row gate attn "(c) keychain read" "degraded (file custody)" optional ;;
+      missing)   _row gate attn "(c) keychain read" "no key custody — run: agent-secrets setup" optional ;;
+      *)         _row gate attn "(c) keychain read" "unknown state" optional ;;
     esac
   else
-    _row gate attn "(c) keychain read" "unavailable (not set up)"
+    _row gate attn "(c) keychain read" "unavailable (not set up)" optional
   fi
-  if _guard store_exec -- true; then _row gate ok "(d) sops exec-env" "works"
-  else _row gate attn "(d) sops exec-env" "unavailable (fallback: apiKeyHelper-only)"; fi
+  if _guard store_exec -- true; then _row gate ok "(d) sops exec-env" "works" optional
+  else _row gate attn "(d) sops exec-env" "unavailable (fallback: apiKeyHelper-only)" optional; fi
   # (e) egress: OUR process-scoped allowlist (the bound `run` applies) is primary; a system-wide
   # firewall app is reported as defense-in-depth. perl + the proxy script present ⇒ the bound can start.
   local ef; ef="$(egress_allow_file)"
   if egress_enabled && [ -x /usr/bin/perl ] && [ -f "$(egress_proxy_script)" ]; then
-    _row gate ok "(e) egress allowlist" "active — $(egress_rule_count) rule(s); run bounds child HTTP(S) to them"
+    _row gate ok "(e) egress allowlist" "active — $(egress_rule_count) rule(s); run bounds child HTTP(S) to them" optional
   elif [ -f "$ef" ]; then
-    _row gate attn "(e) egress allowlist" "present but no rules — add hosts to $ef to bound run"
+    _row gate attn "(e) egress allowlist" "present but no rules — add hosts to $ef to bound run" optional
   else
-    _row gate attn "(e) egress allowlist" "not configured — create $ef to bound where run can send data"
+    _row gate attn "(e) egress allowlist" "not configured — create $ef to bound where run can send data" optional
   fi
   if [ -d "/Applications/LuLu.app" ] || ls -d "/Applications/Little Snitch"*.app >/dev/null 2>&1; then
-    _row gate ok "(e) egress firewall" "system-wide firewall app present (ruleset unverified) — extra layer"
+    _row gate ok "(e) egress firewall" "system-wide firewall app present (ruleset unverified) — extra layer" optional
   fi
 }
 
@@ -279,6 +305,12 @@ run_checks() {
 }
 
 run_checks
+# --summary footer: reassure that the hidden rows are optional hardening, not failures, and name the
+# one command that shows them. Only when something was actually hidden; same stream as the rows.
+if [ "$SUMMARY" = 1 ] && [ "$FORMAT" = text ] && [ "$SUMMARY_HIDDEN" -gt 0 ]; then
+  printf '%s+%d optional hardening check(s) hidden — full report: agent-secrets doctor%s\n' \
+    "$C_DIM" "$SUMMARY_HIDDEN" "$C_RESET"
+fi
 if [ "$FORMAT" = json ]; then
   printf '{"checks":['
   i=0
