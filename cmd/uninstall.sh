@@ -36,6 +36,13 @@ main() {
   local purge=0
   if [ "$dry" -eq 1 ]; then
     agsec_note "(dry-run) would ASK: keep or purge the encrypted store + age keys under $config_dir"
+    agsec_note "(dry-run) on a real run: answering 'y' → rm -rf $config_dir (store + age keys deleted); 'N'/Enter → keep them (share roster purged from manifest.toml)"
+  elif [ ! -t 0 ]; then
+    # No terminal to ask at: an OPEN-but-empty stdin (an agent session's inherited pipe never sends EOF)
+    # would make `read` BLOCK FOREVER before manifest_rollback, hanging the whole uninstall. Fail closed
+    # to KEEP without prompting — the tool-artifact rollback still runs; the destructive store purge
+    # (data loss) is never taken without an explicit interactive 'y'.
+    agsec_note "non-interactive (no terminal) — keeping the store + keys; run in a terminal to be asked about purging them"
   else
     printf 'Also delete your encrypted store + age keys under %s? [y = purge / N = keep]: ' "$config_dir" >&2
     # EOF-guard (matches setup.sh / share.sh / receive.sh): a bare `read` returns non-zero at stdin
@@ -67,8 +74,17 @@ main() {
   # Tool STATE (install manifest is now empty; drop the dir + edit backups) — always residue.
   if [ "$dry" -eq 1 ]; then
     agsec_note "(dry-run) rm tool state dir: $state_dir"
+    agsec_note "(dry-run) rmdir now-empty tool-created parent dirs (~/bin, ~/Library/LaunchAgents, ~/.local/state, ~/.local) if empty"
   else
     rm -rf "$state_dir"
+    # Best-effort: remove tool-created parent dirs that are now EMPTY (rmdir is a no-op on a dir that
+    # still holds the user's own files) — closes the "zero residue" gap for empty ~/bin etc. on a fresh
+    # Mac. Order matters: children before parents. Purge also empties ~/.config/secrets' parent.
+    local d
+    for d in "$(agsec_bin_dir)" "$(agsec_home)/Library/LaunchAgents" "$state_dir" "$(agsec_home)/.local/state" "$(agsec_home)/.local"; do
+      rmdir "$d" 2>/dev/null || true
+    done
+    [ "$purge" -eq 1 ] && { rmdir "$(agsec_home)/.config" 2>/dev/null || true; }
     agsec_ok "uninstall complete — every recorded artifact removed$([ "$purge" -eq 1 ] && printf '; store purged' || printf '; store kept')"
   fi
 }

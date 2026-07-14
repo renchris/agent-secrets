@@ -37,8 +37,7 @@ unset _agsec_root
 export SOPS_DISABLE_VERSION_CHECK=1
 
 AGENT_SECRETS_VERSION="0.1.0"
-AGENT_SECRETS_KC_SERVICE="agent-age-key"              # Keychain service: the bootstrap age key
-AGENT_SECRETS_KC_PREFIX="agent-"                      # uninstall enumerates Keychain by this prefix
+AGENT_SECRETS_KC_SERVICE="agent-age-key"              # Keychain service: the bootstrap age key (uninstall purges this EXACT service)
 AGENT_SECRETS_CANARY_NAME="AWS_BACKUP_ACCESS_KEY_ID"  # in-store canary (plausible name)
 # The canary ships as this INERT decoy value — it provides breach detection only after the operator
 # ARMS it by replacing the value with a real tripwire token (e.g. a canarytokens.org token bound to

@@ -14,13 +14,25 @@
 _manifest_block_begin() { printf '# >>> %s >>>' "$1"; }
 _manifest_block_end()   { printf '# <<< %s <<<' "$1"; }
 
+# Replace FILE with FILE.new. A `mv` over a SYMLINK (a stow/chezmoi-managed ~/.zshenv or
+# ~/.claude/CLAUDE.md) would replace the LINK with a regular file, silently diverging the dotfiles
+# repo; write THROUGH the link instead. Regular files keep the atomic mv.
+_manifest_replace() {
+  local file="$1"
+  if [ -L "$file" ]; then cat "${file}.new" >"$file" && rm -f "${file}.new"
+  else mv "${file}.new" "$file"; fi
+}
+
 # --- low-level append (idempotent init; jq is the only writer) ------------------
 _manifest_append() {
   local rec="$1" mf tmp
   mf="$(agsec_install_manifest)"
   manifest_init
   tmp="$(mktemp "${mf}.XXXXXX")"
-  jq --argjson r "$rec" '. += [$r]' "$mf" >"$tmp" && mv "$tmp" "$mf"
+  # Append only if an IDENTICAL record is not already present — a re-install / install+setup both
+  # record the same symlinks, PATH block, launchd job, so a blind append grew the manifest unbounded.
+  # First-occurrence order is preserved (never `unique`, which sorts and would break LIFO rollback).
+  jq --argjson r "$rec" 'if any(.[]; . == $r) then . else . + [$r] end' "$mf" >"$tmp" && mv "$tmp" "$mf"
 }
 
 manifest_init() {
@@ -74,7 +86,7 @@ manifest_pathblock_install() {
     _manifest_block_begin "$marker"; printf '\n'
     printf '%s\n' "$line"
     _manifest_block_end "$marker"; printf '\n'
-  } >"${file}.new" && mv "${file}.new" "$file"
+  } >"${file}.new" && _manifest_replace "$file"
   manifest_record_pathblock "$file" "$marker" "$created"
 }
 
@@ -98,9 +110,13 @@ _manifest_strip_block() {
   b="$(_manifest_block_begin "$marker")"
   e="$(_manifest_block_end "$marker")"
   [ -f "$file" ] || return 0
+  # Compare on a CR-stripped copy of the line (line) but PRINT the original ($0): a CRLF-saved rc /
+  # CLAUDE.md (cross-platform editor, synced dotfile) would otherwise never match the CR-free marker
+  # and leave the whole block as residue. Preserving $0 keeps the user's own CRLF lines byte-for-byte.
   awk -v b="$b" -v e="$e" '
-    $0==b { if(bufn){ for(i=1;i<=bufn;i++) print buf[i] }; buffering=1; bufn=0; buf[++bufn]=$0; next }
-    buffering && $0==e { buffering=0; bufn=0; next }        # complete block → drop it
+    { line=$0; sub(/\r$/,"",line) }
+    line==b { if(bufn){ for(i=1;i<=bufn;i++) print buf[i] }; buffering=1; bufn=0; buf[++bufn]=$0; next }
+    buffering && line==e { buffering=0; bufn=0; next }      # complete block → drop it
     buffering { buf[++bufn]=$0; next }
     { print }
     END { if(buffering){ for(i=1;i<=bufn;i++) print buf[i] } }   # unterminated block → keep it all
@@ -108,9 +124,10 @@ _manifest_strip_block() {
 }
 
 # Enumerate login-keychain generic-password services the tool created — scoped to the EXACT service
-# (not the broad `agent-` prefix, which would over-delete a user's unrelated `agent-*` items). An
-# attribute dump does NOT prompt (only reading a secret data blob would); best-effort.
-_manifest_kc_by_prefix() {
+# via `grep -Fx` (whole-line match on the single service name), NOT a broad `agent-` prefix that would
+# over-delete a user's unrelated `agent-*` items. An attribute dump does NOT prompt (only reading a
+# secret data blob would); best-effort.
+_manifest_kc_exact() {
   security dump-keychain 2>/dev/null \
     | sed -n 's/^[[:space:]]*"svce"<blob>="\(.*\)"$/\1/p' \
     | grep -Fx "$AGENT_SECRETS_KC_SERVICE" 2>/dev/null | sort -u
@@ -126,6 +143,11 @@ manifest_rollback() {
   [ "${1:-}" = "--dry-run" ] && dry=1
   local mf; mf="$(agsec_install_manifest)"
   [ -f "$mf" ] || { agsec_note "no install manifest — nothing to roll back"; return 0; }
+  # A CORRUPTED manifest makes `jq reverse[]` emit nothing → the loop rolls back ZERO records, yet the
+  # tail still clears the manifest + prints "every artifact removed" while everything stays on disk and
+  # the evidence is gone. Validate it parses first; on failure fail LOUD and preserve the file.
+  jq -e . "$mf" >/dev/null 2>&1 \
+    || agsec_die "install manifest is not valid JSON — refusing to clear it or claim zero residue; inspect $mf (each recorded artifact is still on disk)"
 
   local rec type
   # Reverse order so later artifacts undo before earlier ones (LIFO).
@@ -141,13 +163,13 @@ manifest_rollback() {
     esac
   done < <(jq -c 'reverse[]' "$mf")
 
-  # Belt-and-suspenders: purge any lingering agent-* Keychain item not in a record.
+  # Belt-and-suspenders: purge our EXACT-service Keychain item even if its record was lost.
   local svc
   while IFS= read -r svc; do
     [ -n "$svc" ] || continue
-    if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) keychain purge (prefix): $svc"
-    else _manifest_kc_delete "$svc"; agsec_ok "keychain purged (prefix): $svc"; fi
-  done < <(_manifest_kc_by_prefix)
+    if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) keychain purge (exact service): $svc"
+    else _manifest_kc_delete "$svc"; agsec_ok "keychain purged (exact service): $svc"; fi
+  done < <(_manifest_kc_exact)
 
   if [ "$dry" -eq 1 ]; then
     agsec_note "(dry-run) install manifest would be cleared"
@@ -233,7 +255,7 @@ _manifest_rb_pathblock() {
     rm -f "$file" && agsec_ok "removed tool-created: $file"
     rmdir "$(dirname "$file")" 2>/dev/null || true   # drop a now-empty tool-created dir (e.g. ~/.claude)
   else
-    printf '%s\n' "$stripped" >"${file}.new" && mv "${file}.new" "$file"
+    printf '%s\n' "$stripped" >"${file}.new" && _manifest_replace "$file"
     agsec_ok "stripped block: $file"
   fi
 }
