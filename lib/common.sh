@@ -95,6 +95,17 @@ agsec_digest() { shasum -a 256 2>/dev/null | awk '{print "sha256:"substr($1,1,12
 agsec_have()    { command -v "$1" >/dev/null 2>&1; }
 agsec_require() { agsec_have "$1" || agsec_die "required command not found: $1 — run: agent-secrets doctor"; }
 
+# True iff PATH1 is a readable CONTROLLING TERMINAL — the share/receive agent-exfil boundary. `( : <
+# file )` openability is NOT enough: it passes for ANY readable regular file (and /dev/null), so an
+# `env -u CLAUDECODE …` agent could point AGSEC_CONFIRM_SRC at a "y" file and slip past. `[ -t ]` on the
+# opened fd is the real test; the subshell isolates a failed open (an exec redirection error would
+# otherwise exit the caller). Under AGSEC_TEST_CONFIRM=1 (the bats harness ONLY, never production) fall
+# back to openability so the file-based confirm seam works in tests.
+agsec_src_is_tty() {
+  if [ -n "${AGSEC_TEST_CONFIRM:-}" ]; then ( : < "$1" ) 2>/dev/null
+  else ( exec 3<"$1"; [ -t 3 ] ) 2>/dev/null; fi
+}
+
 # Refuse secret-bearing key ceremonies inside an agent session
 # (~/.claude/projects transcripts capture stdout in plaintext).
 agsec_in_agent_session() {

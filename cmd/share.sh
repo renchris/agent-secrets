@@ -21,12 +21,21 @@ while [ "$#" -gt 0 ]; do
     --sign)      sign=1; shift ;;
     --rename)    [ "$#" -ge 2 ] || agsec_die "share: --rename <NEW> requires a value" 2; rename="$2"; shift 2 ;;
     --rename=*)  rename="${1#--rename=}"; shift ;;
+    # (--rename value is grammar-checked after the loop, once we know whether it was given)
     -*)          agsec_die "share: unknown flag '$1'" 2 ;;
     *)           if [ -z "$name" ]; then name="$1"; else agsec_die "share: unexpected argument '$1'" 2; fi; shift ;;
   esac
 done
 [ -n "$name" ] || agsec_die "usage: agent-secrets share <NAME> --to <age1…|github:user|self> [--singleton] [--verify] [--sign] [--rename NEW]" 2
 [ -n "$to" ]   || agsec_die "share: --to <recipient> is required" 2
+# Validate --rename against the store-NAME grammar NOW (same as the positional NAME below). Without this
+# an invalid label is emitted in the envelope and the recipient's receive rejects it — a fail-LATE error
+# the sender never sees while still reporting success.
+if [ -n "$rename" ]; then
+  case "$rename" in
+    [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*) agsec_die "share: --rename '$rename' is not a valid name — use letters, digits, underscore (start with a letter/_)" 2 ;;
+  esac
+fi
 
 # --- work area (0700; holds only the temp github keyfile + armor) ---------------
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/agsec-share.XXXXXX")"; chmod 700 "$workdir"
@@ -35,10 +44,12 @@ trap 'rm -rf "$workdir"' EXIT
 # --- 2. agent-session refuse + interactive confirm source -----------------------
 agsec_in_agent_session && agsec_die "share refuses inside an agent session (transcripts are secret-bearing)"
 confirm_src="${AGSEC_CONFIRM_SRC:-/dev/tty}"
-# The interactive-terminal requirement is the REAL agent-exfil boundary (design §3.10): an injected
-# agent with no controlling tty hard-refuses HERE even after it strips CLAUDECODE. It is NOT gated by
-# AGENT_SECRETS_UNATTENDED — that flag only auto-answers the y/N confirm (step 7), never this gate.
-( : < "$confirm_src" ) 2>/dev/null || agsec_die "share needs an interactive terminal"
+# The REAL agent-exfil boundary (design §3.10): require a genuine CONTROLLING TERMINAL (agsec_src_is_tty
+# tests `[ -t ]` on the opened fd), NOT mere openability — `( : < file )` passes for any readable "y"
+# file, so an `env -u CLAUDECODE …` agent could set AGSEC_CONFIRM_SRC to one and slip past, printing the
+# ciphertext into its transcript. NOT gated by AGENT_SECRETS_UNATTENDED — that flag only auto-answers
+# the y/N confirm (step 7), never this gate.
+agsec_src_is_tty "$confirm_src" || agsec_die "share needs an interactive terminal"
 
 # --- 3. canary refuse (hard, no confirm) ----------------------------------------
 [ "$name" = "$AGENT_SECRETS_CANARY_NAME" ] \
@@ -81,8 +92,8 @@ case "$to" in
     [ -n "$ghuser" ] || agsec_die "share --to github:<user>: empty user"
     keyfile="$workdir/gh.keys"; usable="$workdir/gh.usable"
     ( umask 177; : >"$keyfile" )
-    curl -fsSL "https://github.com/${ghuser}.keys" >"$keyfile" 2>/dev/null \
-      || agsec_die "share: could not fetch https://github.com/${ghuser}.keys — check the handle, or paste an age1… recipient instead"
+    curl -fsSL --connect-timeout 5 --max-time 20 "https://github.com/${ghuser}.keys" >"$keyfile" 2>/dev/null \
+      || agsec_die "share: could not fetch https://github.com/${ghuser}.keys — check the handle (or a blocked/slow network), or paste an age1… recipient instead"
     # Keep only usable recipient lines (ssh pubkeys / age1); drop certs + sk-FIDO2.
     grep -E '^(ssh-(rsa|ed25519|ecdsa)|age1)' "$keyfile" 2>/dev/null \
       | grep -vE '(-cert-v01@|^sk-ssh-|^sk-ecdsa-)' >"$usable" || true
@@ -149,7 +160,9 @@ if [ -n "$sign" ]; then
     if ssh-keygen -Y sign -n "share-v1@agent-secrets" -f "$sigkey" "$armor" >/dev/null 2>&1 \
        && [ -f "$armor.sig" ]; then
       mv -f "$armor.sig" "$sigfile"
-      printf '\nSender signature (optional; the recipient verifies with ssh-keygen -Y verify):\n' >&2
+      # Name the signing namespace + the allowed_signers requirement so the recipient can actually verify:
+      #   ssh-keygen -Y verify -f allowed_signers -I <you> -n share-v1@agent-secrets -s blob.sig < blob.age
+      printf '\nSender signature (optional). Verify with:  ssh-keygen -Y verify -f <allowed_signers> -I <sender> -n share-v1@agent-secrets -s <this-sig> < <the-age-blob>\n' >&2
       printf '```\n'; cat "$sigfile"; printf '```\n'
     else
       agsec_warn "--sign: ssh-keygen -Y sign failed — proceeding UNSIGNED (recipient sees 'sender unverified')"

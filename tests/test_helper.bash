@@ -12,6 +12,11 @@ setup() {
   export PATH="$BATS_TEST_DIRNAME/mocks:$PATH"
   # Deterministic, value-free output.
   export AGENT_SECRETS_PLAIN=1 NO_COLOR=1
+  # The share/receive agent-exfil boundary requires a real controlling tty in production; the bats
+  # harness has none, so it feeds the confirm from a regular file via AGSEC_CONFIRM_SRC. This flag tells
+  # agsec_src_is_tty to accept an openable file — a TEST-ONLY seam, never set in production. The
+  # dedicated hardening test unsets it to prove a plain file is refused without it.
+  export AGSEC_TEST_CONFIRM=1
 }
 
 teardown() {

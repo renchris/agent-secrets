@@ -34,10 +34,6 @@ done
 # Every human confirm reads from here — NOT STDIN (the blob occupies STDIN).
 CONFIRM_SRC="${AGSEC_CONFIRM_SRC:-/dev/tty}"
 
-# Openable-for-read test: a subshell open() catches both an unreadable path AND /dev/tty with no
-# controlling terminal (ENXIO) — `[ -r /dev/tty ]` alone passes on the permission bits and lies.
-_receive_src_openable() { ( exec 3<"$1" ) 2>/dev/null; }
-
 # Read one y/N answer from the confirm source (never STDIN). No answer → treated as No.
 _receive_confirm_yes() {
   local ans=""
@@ -45,8 +41,10 @@ _receive_confirm_yes() {
   case "$ans" in [Yy] | [Yy][Ee][Ss]) return 0 ;; *) return 1 ;; esac
 }
 
-# No usable confirm source and no CI escape → hard-refuse (never auto-default the gate).
-if [ -z "$yes_reviewed" ] && ! _receive_src_openable "$CONFIRM_SRC"; then
+# No CONTROLLING TERMINAL and no CI escape → hard-refuse (never auto-default the gate). A genuine tty is
+# required, not mere openability: `( : < file )` passes for any readable "y" file, which an agent could
+# point AGSEC_CONFIRM_SRC at to slip the confirm. agsec_src_is_tty tests `[ -t ]` on the opened fd.
+if [ -z "$yes_reviewed" ] && ! agsec_src_is_tty "$CONFIRM_SRC"; then
   agsec_die "receive needs a controlling terminal (or pass --yes-i-reviewed for CI)"
 fi
 
@@ -59,6 +57,9 @@ if [ -t 0 ]; then
 else
   blob="$(cat)"
 fi
+# Normalize CRLF: a Windows/cross-platform chat paste carries \r, which the anchored `^…-----$` parses
+# below would reject outright (the whole flow is "paste through chat"). Strip carriage returns.
+blob="${blob//$'\r'/}"
 
 # --- cap 1: raw envelope BEFORE decode ------------------------------------------
 raw_bytes="$(printf '%s' "$blob" | wc -c | tr -d ' ')"
@@ -111,9 +112,14 @@ printf '%s\n' "$body" | base64 -D >"$dbody" 2>/dev/null \
 # Reflow-stable, advisory ONLY: compare it to the block's own `digest:` line (a paste-integrity
 # check); a sender running `share --verify` reads this same value to you out-of-band.
 local_digest="$(agsec_digest <"$dbody")"
-agsec_note "digest $local_digest — matches the 'digest:' line in the block you pasted (a --verify sender reads it aloud)"
-if [ -n "$embedded_digest" ] && [ "$embedded_digest" != "$local_digest" ]; then
-  agsec_warn "envelope digest hint ($embedded_digest) differs from the locally computed value — possible corruption"
+# Only claim a match when the in-band digest actually equals the local one — the old note asserted
+# "matches" unconditionally, contradicting the mismatch warning below on a corrupt envelope.
+if [ -z "$embedded_digest" ]; then
+  agsec_note "digest $local_digest — no in-band 'digest:' line to compare; have the sender read theirs to you (share --verify)"
+elif [ "$embedded_digest" = "$local_digest" ]; then
+  agsec_note "digest $local_digest — matches the 'digest:' line in the block you pasted (a --verify sender reads it aloud)"
+else
+  agsec_warn "envelope digest hint ($embedded_digest) differs from the locally computed value ($local_digest) — possible corruption"
 fi
 
 # --- cap 2: decoded ciphertext BEFORE decrypt -----------------------------------
@@ -166,6 +172,8 @@ store_add "$name" <"$pt"
 rm -f "$pt"; pt=""
 
 # --- manifest (design §3.8; values-free) ----------------------------------------
-store_manifest_set_sharing "$name" direction="received" source="received:peer"
+# Provenance is best-effort: the secret is already stored above, so a manifest-rewrite hiccup must not
+# make receive exit non-zero (a caller would retry and hit the NAME-collision refusal). Match share's guard.
+store_manifest_set_sharing "$name" direction="received" source="received:peer" 2>/dev/null || true
 
 agsec_ok "received $name (value never shown)"
