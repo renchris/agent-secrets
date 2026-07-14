@@ -106,3 +106,12 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   [[ "$output" == *"not supported"* ]]
   ! store_has PEM_KEY
 }
+
+@test "add rejects an EMPTY value (fail-closed — the curl|bash empty-secret bug)" {
+  setup_store
+  run bash -c "printf '' | bash '$REPO_ROOT/bin/agent-secrets' add EMPTY_ONE"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"NON-EMPTY"* ]]
+  run agsec list
+  [[ "$output" != *"EMPTY_ONE"* ]]     # never stored
+}

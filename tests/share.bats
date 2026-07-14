@@ -231,3 +231,33 @@ EOF
   [[ "$output" == *"interactive terminal"* ]]
   [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]     # nothing shared with no controlling tty
 }
+
+# --- SH1: the confirm gate requires a REAL tty, not a mere openable file ---------
+@test "share REFUSES a regular-file confirm source in production (no AGSEC_TEST_CONFIRM) — the exfil block" {
+  _share_fixture
+  # Reproduce the exfil chain: env stripped, confirm pointed at a 'y' file, unattended + singleton.
+  # Without the test seam the tty gate must refuse (a regular file is not a controlling terminal).
+  printf 'y\n' > "$AGENT_SECRETS_HOME/y"
+  run env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM -u AGSEC_TEST_CONFIRM \
+    AGSEC_CONFIRM_SRC="$AGENT_SECRETS_HOME/y" AGENT_SECRETS_UNATTENDED=1 \
+    bash "$REPO_ROOT/bin/agent-secrets" share ANTHROPIC_API_KEY --to "$RECIP" --singleton
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"interactive terminal"* ]]
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]   # no ciphertext exfiltrated
+}
+
+@test "share still works with the file-based confirm seam UNDER AGSEC_TEST_CONFIRM=1 (test harness)" {
+  _share_fixture; _confirm y                        # test_helper exports AGSEC_TEST_CONFIRM=1
+  _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]]
+}
+
+# --- SH4: --rename is grammar-checked at parse (fail-fast, not fail-late at recipient) ---
+@test "share --rename with an invalid NAME fails fast with a clear error, emits nothing" {
+  _share_fixture; _confirm y
+  _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton --rename 'bad-name.oops'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"not a valid name"* ]]
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]]
+}

@@ -58,3 +58,32 @@ load test_helper
   [ "$status" -eq 0 ] || [ "$status" -eq 1 ]   # gate outcomes are informational, not a hard fail
   [[ "$output" == *"gate"* ]] || [[ "$output" == *"Keychain"* ]] || [[ "$output" == *"exec-env"* ]]
 }
+
+@test "doctor does NOT crash on a broken sops (D1: unguarded version capture under set -e)" {
+  setup_store
+  # A present-but-nonfunctional sops (EDR-blocked / wrong-arch / shim) exits nonzero on --version.
+  shim="$AGENT_SECRETS_HOME/brokenbin"; mkdir -p "$shim"
+  printf '#!/bin/sh\nexit 3\n' > "$shim/sops"; chmod +x "$shim/sops"
+  run env PATH="$shim:$PATH" bash "$REPO_ROOT/bin/agent-secrets" doctor --format=json
+  # Must still emit valid JSON (not an empty/crashed output) and flag sops bad.
+  echo "$output" | tail -1 | jq -e '.checks | map(select(.category=="toolchain" and .check=="sops")) | .[0].status=="bad"' >/dev/null
+}
+
+@test "doctor injection verifies settings.json is wired to our apiKeyHelper (RT5b)" {
+  setup_store
+  bd="$AGENT_SECRETS_HOME/bin"; mkdir -p "$bd"
+  ln -sf "$REPO_ROOT/bin/apiKeyHelper" "$bd/apiKeyHelper"
+  ln -sf "$REPO_ROOT/bin/claude-agent" "$bd/claude-agent"
+  ln -sf "$REPO_ROOT/bin/cursor-agent" "$bd/cursor-agent"
+  printf '%s' 'sk-ant-x' | agsec add ANTHROPIC_API_KEY
+  mkdir -p "$AGENT_SECRETS_HOME/.claude"
+  # unwired settings.json → the new row must report "not wired"
+  printf '{}\n' > "$AGENT_SECRETS_HOME/.claude/settings.json"
+  run agsec doctor
+  [[ "$output" == *"settings.json apiKeyHelper"* ]]
+  [[ "$output" == *"not wired"* ]]
+  # wired → reports "wired"
+  jq -n --arg h "$bd/apiKeyHelper" '{apiKeyHelper:$h}' > "$AGENT_SECRETS_HOME/.claude/settings.json"
+  run agsec doctor
+  [[ "$output" == *"settings.json apiKeyHelper — wired"* ]]
+}

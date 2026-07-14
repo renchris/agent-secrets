@@ -89,3 +89,13 @@ load test_helper
   run bash -c "bash '$REPO_ROOT/bin/agent-secrets' help --json | jq -e '.commands[] | select(.name==\"setup\") | .flags | map(.flag) | index(\"--keychain\") != null'"
   [ "$status" -eq 0 ]
 }
+
+@test "top-level help renders flag NAMES, env NAMES, exit CODES, and the seealso URL (renderer key-drop regression)" {
+  run agsec help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"--plain"* ]]                 # flag name, not just its description
+  [[ "$output" == *"--no-color"* ]]
+  [[ "$output" == *"AGENT_SECRETS_HOME"* ]]       # env name
+  [[ "$output" == *"0=success"* ]]                # exit code number
+  [[ "$output" == *"https://github.com/renchris/agent-secrets"* ]]   # seealso URL
+}
