@@ -28,7 +28,7 @@ core is **lead-solo**; only the genuinely separable leaves are teamed.
 | Wave | Work | Owner | Depends on | Isolation |
 |---|---|---|---|---|
 | ~~W1~~ ✅ | Foundation: single renderer, drift kill, rule-#3 reword (`add.sh` gate descoped) | **lead** | — | repo root · `b23fbdc` |
-| **W2** | Manifest hardening: hash+version record, HTML markers + dual-marker strip, clobber hardening (backup/atomic/mode) | **lead** | W1 | repo root |
+| ~~W2~~ ✅ | Manifest: per-surface marker style (md/sh) + dual-strip + mode preserve (backup/lock deferred) | **lead** | W1 | repo root · `0b5bda9` |
 | **W3** | Surface registry `lib/discovery.sh` + Claude rules-file row + Copilot coverage detection | **lead** | W2 | repo root |
 | **W4a** | Broader rows: Codex, Gemini, Zed, Cline (follow W3 pattern) | teammate A | W3 | worktree |
 | **W4b** | `cmd/mcp.sh` names-only MCP server + registration writers | teammate B | W2 (markers/manifest) | worktree |
@@ -71,29 +71,28 @@ example. 198/198 green, shellcheck clean.
 
 ---
 
-## Phase 2 (W2) — Manifest hardening + marker migration — EXPANDED
+## Phase 2 (W2) — Manifest hardening + marker migration — DONE (`0b5bda9`, 2026-07-14)
 
-Delicate: `lib/manifest.sh` is the most-tested file. Back-compat is mandatory (existing installs have
-`# >>>` blocks + hash-less pathblock records).
+`manifest_pathblock_install <file> <marker> <line> [style=sh]` now takes a per-surface marker style:
+`sh` (`# >>>`, shell rc) or `md` (`<!-- >>> … -->`, markdown surfaces, so no H1-heading pollution).
+`_manifest_strip_block` matches BOTH styles unconditionally → legacy `#` blocks and new `md` blocks
+both strip clean (dual-marker strip is PERMANENT). Mode preserved across the rewrite. Record gains a
+stable `style` field. 201/201 green (+3 locks: `W2-MD`, `W2-DUAL`, `W2-MODE`).
 
-- **Record schema:** extend `pathblock` record with `{body_sha256, rules_version}` (manifest.sh:77-80).
-  `manifest_record_pathblock` gains params; `_manifest_append` unchanged.
-- **HTML-comment markers:** `_manifest_block_begin/end` (manifest.sh:14-15) → emit
-  `<!-- agent-secrets:begin -->` for markdown surfaces. **Keep `# >>>` for shell-rc surfaces**
-  (`~/.zshenv`) — the marker style becomes a per-record field (`marker_style`), not a global. Store
-  literal begin/end (or style) in the record so `_manifest_rb_pathblock` reconstructs the RIGHT pair
-  (red-team: rollback must read the record, never the global function).
-- **Dual-marker strip (permanent):** `_manifest_strip_block` recognizes BOTH `# >>>` and
-  `<!-- agent-secrets:begin -->` forever (≈5 lines awk) so v1-installed machines uninstall cleanly.
-  Update `doctor.sh` grep to dual-marker in the same commit.
-- **Clobber hardening (§3.4):** in `manifest_pathblock_install` — timestamped pre-write backup into the
-  manifest dir (bound to the hash gate), `mktemp`+atomic rename, `stat`/`chmod` mode preservation,
-  `mkdir`-based lock (NOT `flock` — util-linux, absent on macOS). Keep write-through-symlink behavior
-  (manifest.sh:20-24). On existing-block hash mismatch vs record → STOP-ASK (interactive) / refuse+report
-  (non-tty): never silent-clobber a hand-edit.
-
-**W2 acceptance:** existing `# >>>` installs strip clean; new installs use HTML markers; re-run is
-idempotent + hash-stable; hand-edit is detected not clobbered; `bats tests/` green (+ new marker/back-compat locks).
+**Key decisions / learnings:**
+- **No content hash in the record** (dropped the planned `body_sha256`). A per-version hash would break
+  the move-to-tail dedup (`_manifest_append` compares whole records) — a changed hash leaves TWO
+  pathblock records for one file. doctor detects a STALE block by **content-comparing** the installed
+  block body to the current `agsec_render_rules` output instead (W5). Simpler and dedup-safe.
+- **Clobber pre-write-backup + lock DEFERRED (evidence-based, not skipped).** The red-team itself noted a
+  tool-side lock only serializes the tool against ITSELF — it cannot stop Claude Code's own `#`/`/memory`
+  writes to CLAUDE.md. W3 moves the high-traffic Claude surface OFF CLAUDE.md to a dedicated
+  `~/.claude/rules/agent-secrets.md` (whole-file `manifest_record_file` create — no shared-file
+  read-modify-write, so the race is *gone* for the file that mattered). Remaining shared-file surfaces
+  (Codex `AGENTS.md`, Gemini `GEMINI.md`) have low concurrent-write risk. Mode-preserve + atomic
+  `.new`+rename + write-through-symlink already cover the practical case. Revisit if a shared-surface
+  clobber is ever observed. **`doctor` dual-marker grep also deferred to W5** (the discovery block still
+  uses `sh` markers until W3 moves it; W5 rewrites `check_discovery` wholesale anyway).
 
 ---
 
