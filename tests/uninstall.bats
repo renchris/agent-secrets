@@ -87,7 +87,9 @@ load test_helper
   printf '{"user":"kept","apiKeyHelper":"x"}\n' >"$sj"        # tool's edit
   manifest_record_edit "$sj" "$bak" apiKeyHelper              # no created flag → restore
   manifest_rollback >/dev/null
-  run cat "$sj"; [[ "$output" == *'"user":"kept"'* ]]; [[ "$output" != *"apiKeyHelper"* ]]
+  run cat "$sj"
+  [[ "$output" == *kept* ]] || return 1                  # user's key preserved (jq pretty-prints '"user": "kept"')
+  [[ "$output" != *"apiKeyHelper"* ]] || return 1        # tool's key removed
 }
 
 @test "rollback removes a tool-CREATED rc file left empty after stripping the PATH block" {
