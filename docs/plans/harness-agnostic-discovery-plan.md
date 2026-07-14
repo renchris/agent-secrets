@@ -27,7 +27,7 @@ core is **lead-solo**; only the genuinely separable leaves are teamed.
 
 | Wave | Work | Owner | Depends on | Isolation |
 |---|---|---|---|---|
-| **W1** | Foundation: single renderer, drift kill, rule-#3 reword, `add.sh` gate | **lead** | — | repo root |
+| ~~W1~~ ✅ | Foundation: single renderer, drift kill, rule-#3 reword (`add.sh` gate descoped) | **lead** | — | repo root · `b23fbdc` |
 | **W2** | Manifest hardening: hash+version record, HTML markers + dual-marker strip, clobber hardening (backup/atomic/mode) | **lead** | W1 | repo root |
 | **W3** | Surface registry `lib/discovery.sh` + Claude rules-file row + Copilot coverage detection | **lead** | W2 | repo root |
 | **W4a** | Broader rows: Codex, Gemini, Zed, Cline (follow W3 pattern) | teammate A | W3 | worktree |
@@ -46,42 +46,28 @@ rule text or markers updates the locking tests IN THE SAME COMMIT.
 
 ---
 
-## Phase 1 (W1) — Foundation — EXPANDED
+## Phase 1 (W1) — Foundation — DONE (`b23fbdc`, 2026-07-14)
 
-**Goal:** kill the already-shipped drift (§3.1) + the rule-#3 agent-leak (§3.2), establish the single
-renderer everything else consumes. Lowest back-compat risk (no marker/schema change yet).
+Single renderer `agsec_render_rules <plain|claude-md>` in `lib/common.sh` is now the SOLE rule source;
+`agsec_agent_rules` aliases `plain`; `install.sh:280` renders the CLAUDE.md block via `claude-md`; the
+drifted `_discovery_block` is deleted. Rule #3 reworded to drop the leak-prone `printf %s "$VALUE" | add`
+example. 198/198 green, shellcheck clean.
 
-### 1a. Single renderer — `lib/common.sh`
-- Add `agsec_render_rules <plain|claude-md>` as the SOLE rule data + envelope source.
-  - `plain` → the 4 golden-rule lines currently in `agsec_agent_rules()` (common.sh:149-155).
-  - `claude-md` → the markdown-wrapped block currently hand-maintained in `_discovery_block()`
-    (install.sh:326-335) — now GENERATED from the same 4 lines + a markdown header.
-- `agsec_agent_rules()` becomes a thin alias → `agsec_render_rules plain` (keep the name; `setup.sh`
-  + tests call it).
-- `install.sh` `_discovery_block()` becomes a thin alias → `agsec_render_rules claude-md` (delete the
-  hand-maintained body — the drift seam).
-- **Preserve test-locked substrings verbatim:** `"NEVER write a secret to a .env"`,
-  `"agent-secrets run -- <cmd>"` (onboarding.bats:109-110,122; flows.bats:122).
-
-### 1b. Rule #3 reword (agent-safe) — in the single renderer
-- Current rule #3 tells agents `printf %s "$VALUE" | agent-secrets add NAME` — an agent substitutes the
-  LITERAL secret into the Bash command → transcript leak.
-- New agent-facing wording (both `plain` + `claude-md`): *"To add/rotate a secret, ask the USER to run
-  `agent-secrets add <NAME>` in a real terminal — never place a secret value in a command."* Keep the
-  human-facing STDIN form in `AGENTS.md`/`help` where the reader is a human, clearly labeled.
-
-### 1c. `add.sh` session guard — `cmd/add.sh` (**DECISION: warn, don't refuse**)
-- `add` via STDIN is a legitimate scriptable path — a hard refusal breaks automation. So: when
-  `agsec_in_agent_session` is true AND stdin is a tty (interactive agent typing a value), emit a loud
-  warning routing to a real terminal; when stdin is piped, proceed (the value is already off-argv) but
-  print a one-line note that values must never be placed literally in a command. Rationale: preserves
-  the scriptable pipe path, closes the "agent types the literal value" foot-gun.
-- **Open sub-decision for the user:** if you'd rather `add` HARD-refuse inside an agent session
-  (stricter, breaks pipe automation), say so — default is warn.
-
-**W1 acceptance:** `agsec_render_rules plain` == old `agsec_agent_rules`; `claude-md` render contains
-the locked substrings; no textual drift possible (one source); `add` warns in-agent; `bats tests/`
-green (update discovery/onboarding/flows locks for the rule-#3 wording in the same commit).
+**Key learnings:**
+- `install.sh` sources `lib/common.sh` at line 202 (before the discovery write at 280), so the renderer
+  is a clean single-source — no data-file indirection needed. That is why the drift was *fixable*, not
+  structural.
+- **`add.sh` session-guard DESCOPED (evidence-based).** `add` is already argv-safe (name on argv, value
+  on STDIN only), so it *cannot* prevent the §3.2 leak — the literal lands in the agent's `printf`
+  command **upstream**, before `add.sh` runs. A guard there would be educational-only. The real §3.2 fix
+  is the rule-text reword (done). Revisit only if stricter behavior is explicitly wanted.
+- **`CLAUDECODE=1` is set in the dev shell** → `bats` runs with `agsec_in_agent_session` **true** (and
+  `store.bats` pipes `agsec add` ~8×). Any future agent-session guard must not fire spuriously here — a
+  second reason the `add.sh` guard was wrong. Tests rely on `AGENT_SECRETS_UNATTENDED=1` to bypass the
+  `setup` ceremony refusal under this condition.
+- No test asserts the `claude-md` block *body* (only the `plain` output via `agsec_agent_rules`), so the
+  markdown block was free to unify. Test-locked substrings preserved: `"NEVER write a secret to a .env"`,
+  `"agent-secrets run -- <cmd>"`.
 
 ---
 
