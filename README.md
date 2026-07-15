@@ -263,7 +263,7 @@ flowchart LR
 | `agent-secrets add <NAME>` | add or update one secret (value typed hidden, never shown) |
 | `agent-secrets list` | list secret **names** + rotation dates — never values |
 | `agent-secrets run -- <cmd>` | run a command with secrets injected just for that process |
-| `agent-secrets doctor` | health check — `--gates`, `--format=json`, `--redact`, `--fix` |
+| `agent-secrets doctor` | health check — `--gates`, `--summary`, `--format=json`, `--redact`, `--fix` |
 | `agent-secrets pubkey` | print your `age` recipient string + fingerprint — hand it to a sender (`--copy`) |
 | `agent-secrets share <NAME> --to <recipient>` | encrypt one secret to a colleague's key as a paste-able blob (last-rung — prefer the ladder) |
 | `agent-secrets receive` | decrypt a colleague's pasted blob into your store (confirms on the terminal) |
@@ -321,8 +321,11 @@ binary, not a PATH impostor), carries a **self-guard** (it goes inert if the fil
 without the tool), and an invisible **integrity marker** (`doctor` flags tampering). Discovery is
 **advisory** (it makes agents *aware* of the tool; it is not an enforced guarantee), everything is
 recorded for total rollback, and nothing is written unless you say yes on an interactive install (a
-piped `curl | bash` never silently edits a global file). `agent-secrets doctor` reports each surface's
-status.
+piped `curl | bash` never silently edits a global file, and the prompt **names each file** it would
+write + previews the block first). On an **org/MDM-managed** machine the installer **defers entirely** —
+it writes nothing machine-wide and leaves that tier to your IT (see
+**[docs/enterprise-deployment.md](docs/enterprise-deployment.md)**). `agent-secrets doctor` reports each
+surface's status (and flags a tampered block).
 
 #### Who reads what
 
