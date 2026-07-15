@@ -178,5 +178,90 @@ defer W4b (Cursor stays clipboard-covered).
 ## Known back-compat hazards (carry forward)
 - Marker migration: dual-strip must be permanent OR records migrated on first v2 run.
 - `CLAUDE_CONFIG_DIR` split: Claude Code vs Copilot read different paths — per-reader rows, not per-file.
-- Dotfiles sync: self-guard "ignore unless `<abs-path>` exists AND `doctor` succeeds" line + `# synced-from` provenance.
+- Dotfiles sync: self-guard "ignore unless `<abs-path>` exists" line + `# synced-from` provenance.
 - Windsurf 6 KB / Codex 32 KiB caps: registry `max_bytes`, refuse-and-report before crossing.
+
+---
+
+# Phase C — composable, corporate-safe hardening (added 2026-07-14)
+
+**Trigger:** user asked for the "100th-percentile, long-horizon, vulnerability-free-for-corporate"
+decision. A 7-agent adversarial workflow (`wkst974ty`, verdict **"revised"**) + a 2-agent source/docs
+cross-check settled the architecture. **SSOT for the verdict:** `docs/research/` (workflow output) + the
+in-repo write-up below. **Guiding principle (user, 2026-07-14):** composable & applicable to ALL
+environments (managed/unmanaged, any OS, tool-present/absent, writable/read-only) — general primitives,
+NOT hardcoded corporate branches.
+
+**The validated model — management-state-conditional, deference-first:**
+1. **MCP = dropped from default, permanently.** Config-registration IS the RCE primitive regardless of
+   names-only output (OX Security 2026; MCPoison CVE-2025-54136 name-trust swap; CurXecute CVE-2025-54135
+   prompt-injection write→exec; Anthropic calls it "expected"/unpatched). Persistent EDR-visible process
+   + settings-sync-propagated hijackable command reference + allowlist-policy collision. Never default;
+   at most explicit opt-in, "unmanaged machines only," loud warning.
+2. **On MANAGED machines → per-user installer writes NOTHING machine-wide; it DETECTS + DEFERS.** The
+   machine-wide invariant, if any, is IT-deployed to the managed tier (managed `claudeMd` +
+   `permissions.deny .env*`), which the tool SHIPS as a documented copy-paste fragment for Jamf/Intune —
+   never auto-written (root/MDM paths are unwritable by design). Only the managed tier is centrally
+   audited, tamper-protected, highest-precedence, and outranks a malicious repo's Project Rules.
+3. **On UNMANAGED machines → inert advisory files as an opt-in FALLBACK**, framed as "advisory
+   defense-in-depth, NEVER the security invariant." The `sops+age` store + Keychain custody remain the
+   SOLE invariant carriers. **"Inert" is a category error** — an instruction file is executed-by-proxy at
+   the agent's full privilege; sell it on auditability + reversibility + precedence-deference.
+
+## HC1 — Copilot target fix + render hardening — DONE (`1c22228`, 2026-07-14)
+
+VS Code Copilot does NOT read user-home `~/.claude/rules` by default on stable (source `main@52dde1f`
+shows `true`, but the published/stable settings reference shows `false` — version skew; don't rely on
+it). Only `~/.claude/CLAUDE.md` is default-read on every version (`chat.useClaudeMdFile=true`). So the
+Claude+Copilot surface moved back to a `~/.claude/CLAUDE.md` md-comment block (W2 markers), per-reader
+dual-write on `CLAUDE_CONFIG_DIR` divergence. Render is now: **abs-path-pinned** (anti PATH-hijack),
+**self-guarded** (inert when synced to a tool-less machine), **version+integrity-marked**
+(`agsec_block_integrity` → ok/tampered/unmarked), **graceful-degrade + false-green-fixed** (denied write
+= skip; label only on a confirmed write), rule-3 routes value entry to a human terminal. README
+corrected. 206 green. Key fact for HC: VS Code exposes NO `policy:` field on these settings → an org
+cannot centrally disable CLAUDE.md ingestion via VS Code policy, only via MDM-pinned settings.
+
+## HC2 — doctor integrity + honest coverage — EXPANDED (next)
+
+- Wire `agsec_block_integrity` into `agsec_discovery_status_key`: emit `present-tampered` (embedded
+  sha≠recompute → **flip `had_bad`/exit 1** + STOP-ASK wording) vs `present-stale` (integrity ok but
+  embedded `version` < `agsec_version` → benign, "re-run installer") vs `present-in-sync`.
+- Directory-level audit: enumerate the FULL loaded rules set + each shared `AGENTS.md`; flag any
+  non-authored `agent-secrets`-marked block in an unexpected file, and any hidden-Unicode/bidi/zero-width
+  char in a loaded instruction file (Rules-File-Backdoor / ATLAS AML-CS0041) → `bad` (exit 1).
+- doctor rows for `managed layer present — deferring` and `denied/read-only — skipped` (no false green).
+- Discovery integrity must affect exit code even under `--summary` (tampered is not `optional`).
+
+## HC3 — managed-layer detect + defer — EXPANDED (composable, data-driven)
+
+- New `_disc_managed_present <key>`: a GENERAL capability probe (data-driven per-surface managed paths in
+  the registry, per-OS), returns 0 if a higher-precedence managed/policy layer exists — Claude Code
+  managed `CLAUDE.md`/`managed-settings.json` (macOS `/Library/Application Support/ClaudeCode`, Linux
+  `/etc/claude-code`, Windows `C:\Program Files\ClaudeCode`), `~/.claude/remote-settings.json`, VS Code /
+  Cursor policy files. When present → SKIP the per-user machine-wide write + doctor "deferring" row.
+  Registry rows carry `os_paths{macos,linux,windows}` + `managed_paths` from day one (composable across
+  OSes even though v1 ships macOS behavior).
+
+## HC4 — install consent + add.sh gate — EXPANDED
+
+- Per-surface, per-file explicit consent naming each product/file (no one-keypress fan to six vendors);
+  narrow the default to the Claude surface, broader rows behind their own opt-in line.
+- `cmd/add.sh`: add the `agsec_in_agent_session` awareness (mirror `setup.sh:318`) — an in-session warn +
+  route value entry to a real terminal (the gate absent since W1's descope; the corporate panel wants it).
+
+## HC5 — IT managed-policy fragment + SECURITY.md — EXPANDED
+
+- Ship `docs/` (or `share/`) a copy-paste managed-settings fragment (`claudeMd` + `permissions.deny
+  .env*`) for IT to deploy via Jamf/Intune — documented, NOT auto-written.
+- SECURITY.md: an "MCP not shipped by default" subsection (the CVEs + the "expected"/unpatched config→exec
+  primitive) so the ABSENCE reads as a deliberate, documented security decision; document the discovery
+  threat model (advisory, bidirectional, names-only shrinks-not-removes, managed-tier for invariants).
+
+## HC residual risks (carry forward, from the panel)
+- Local-tamper defense is fundamentally limited (an attacker controlling PATH/binary controls a
+  `doctor`-based check too) → self-guard is a PURE file-existence predicate, NOT "run doctor".
+- Density dilution: added standing orders lower adherence (~68% ceiling) to ALL instructions incl. the
+  org's own — keep the block minimal.
+- Threat-model consistency: `bin/apiKeyHelper` is itself a PATH-resolved command reference whose stdout is
+  a live credential — either it gets the same abs-path/scrutiny as the MCP-drop rationale, or that
+  rationale reads as conclusion-driven. (`bin/` is permission-locked in this env; flag for the owner.)
