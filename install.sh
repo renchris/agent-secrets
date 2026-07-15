@@ -267,31 +267,40 @@ main() {
   # here too would double the revert record, so the installer intentionally does not.
 
   # --- OPT-IN: machine-wide agent discovery ------------------------------------
-  # A single dedicated file — ${CLAUDE_CONFIG_DIR:-~/.claude}/rules/agent-secrets.md — teaches agents
-  # everywhere this Mac has agent-secrets. Claude Code auto-loads ~/.claude/rules/*.md in EVERY repo,
-  # AND VS Code Copilot reads ~/.claude/rules by default, so ONE file covers both readers. A dedicated
-  # file (vs a marker block inside the user's own CLAUDE.md) means uninstall = delete, with no
-  # read-modify-write of a file Claude Code itself also writes. The registry (lib/discovery.sh) also
-  # covers any OTHER agent CLI present on this Mac (Codex/Gemini/… once enabled). OPT-IN, every write
-  # recorded for total rollback. Interactive stdin only — a piped/CI install NEVER silently edits a
-  # global agent-instruction file (safe default: no edit; re-run interactively to add it).
+  # A marker block in ~/.claude/CLAUDE.md teaches agents everywhere this Mac has agent-secrets: Claude
+  # Code loads it in EVERY repo, AND VS Code Copilot reads it by default (chat.useClaudeMdFile) — so ONE
+  # file covers both readers (user-home ~/.claude/rules is NOT default-read by Copilot on stable VS Code).
+  # The registry (lib/discovery.sh) also covers any OTHER agent CLI present on this Mac (Codex/Gemini/
+  # Zed/Cline, each its own file), DEFERS on any org/MDM-managed machine, and SKIPS unwritable targets.
+  # Consent is INFORMED: the prompt NAMES each file it would write + previews the block — never a blind
+  # one-keypress fan-out. Interactive stdin only — a piped/CI install NEVER silently edits a global file.
+  # Pin AGENT_SECRETS_BIN to the PATH command so the preview and the write share one abs-path (the
+  # rendered rules reference THIS binary, not a PATH impostor).
+  AGENT_SECRETS_BIN="$BIN_DIR/agent-secrets"; export AGENT_SECRETS_BIN
   if [ -t 0 ] && [ "$DRY_RUN" -eq 0 ]; then
-    printf '\nMake every coding agent on this Mac aware of agent-secrets?\n' >&2
-    printf 'Writes a short, reversible rules file read by Claude Code + VS Code Copilot (and any other\n' >&2
-    printf 'detected agent CLI). Uninstall removes it. [y = yes, recommended · Enter = skip]: ' >&2
-    local dreply=''; read -r dreply || dreply=''
-    case "$dreply" in
-      [yY]*)
-        local _wrote; _wrote="$(agsec_discovery_install_all)"
-        if [ -n "$_wrote" ]; then
-          printf '%s\n' "$_wrote" | while IFS= read -r _l; do _say "  → aware: $_l"; done
-          _say "  (uninstall removes them)"
-        else
-          _say "  → no supported agent surfaces detected on this Mac — nothing written"
-        fi ;;
-      *)
-        _say "  → skipped machine-wide discovery (add later by re-running the installer)" ;;
-    esac
+    local _plan; _plan="$(agsec_discovery_plan)"
+    if [ -z "$_plan" ]; then
+      _say "  → no writable agent surfaces detected (or all are org/MDM-managed) — machine-wide discovery skipped"
+    else
+      printf '\nMake every coding agent on this Mac aware of agent-secrets?\n' >&2
+      printf 'This writes a short, reversible, advisory block into EACH of these files (uninstall removes them):\n' >&2
+      printf '%s\n' "$_plan" | while IFS="$(printf '\t')" read -r _lbl _pth; do printf '   • %s\n' "$_pth" >&2; done
+      printf 'The block (advisory — makes agents aware of the tool; not an enforced guarantee):\n' >&2
+      agsec_render_rules claude-md | sed 's/^/     │ /' >&2
+      printf '[y = yes, write them (recommended) · Enter = skip]: ' >&2
+      local dreply=''; read -r dreply || dreply=''
+      case "$dreply" in
+        [yY]*)
+          local _wrote; _wrote="$(agsec_discovery_install_all)"
+          if [ -n "$_wrote" ]; then
+            printf '%s\n' "$_wrote" | while IFS= read -r _l; do _say "  → aware: $_l"; done
+          else
+            _say "  → nothing written (targets became unwritable)"
+          fi ;;
+        *)
+          _say "  → skipped machine-wide discovery (add later by re-running the installer)" ;;
+      esac
+    fi
   fi
 
   # --- finish: the key ceremony ------------------------------------------------

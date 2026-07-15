@@ -178,6 +178,26 @@ agsec_discovery_install_all() {
   done
 }
 
+# The WRITE PLAN: the exact files a `yes` would touch on this machine — every present, non-managed,
+# writable target, as "label<TAB>path" lines. The installer shows this (each file NAMED) + a preview
+# before writing, so consent is informed and never a blind one-keypress fan-out to N vendors' agents.
+agsec_discovery_plan() {
+  local key kind path targets t
+  for key in $AGSEC_DISCOVERY_KEYS; do
+    _disc_gate "$key" || continue
+    _disc_managed_present "$key" && continue          # managed → deferred, not in the plan
+    kind="$(_disc_field "$key" 1)"; path="$(_disc_field "$key" 2)"
+    targets="$path"
+    if [ "$key" = claude ]; then
+      local lit; lit="$(_disc_claude_literal_dir)/CLAUDE.md"
+      [ "$lit" != "$path" ] && targets="$(printf '%s\n%s' "$path" "$lit")"
+    fi
+    while IFS= read -r t; do [ -n "$t" ] || continue; printf '%s\t%s\n' "$(_disc_field "$key" 5)" "$t"; done <<EOF
+$targets
+EOF
+  done
+}
+
 # Report coverage for one key → TAB: key \t status \t path \t label
 #   status: in-sync | stale | tampered | absent | not-applicable
 # Integrity is judged by the block's OWN embedded version+sha marker (agsec_block_integrity), NOT by a

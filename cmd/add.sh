@@ -18,6 +18,14 @@ case "$name" in
 esac
 [ -f "$(agsec_store_file)" ] || agsec_die "no store yet — run: agent-secrets setup"
 
+# Defensive-consistency with setup/share (which refuse in-session): `add` is argv-safe — the value is read
+# from STDIN only, never argv — so it STAYS usable for scripted/agent piping. But inside an agent session,
+# remind that a LITERAL value placed in the command leaks into the transcript (the pipe SOURCE is upstream
+# of us, so this is a guardrail note, not a refusal, to preserve the scriptable path).
+if agsec_in_agent_session; then
+  printf 'note: inside an agent session — pipe the value from a variable/file, never a literal in the command; for interactive entry, use a real terminal.\n' >&2
+fi
+
 if [ -t 0 ]; then
   ui_read_secret "Value for $name" | store_add "$name"
 else

@@ -151,3 +151,16 @@ _load_disc() {
   run agsec doctor
   [[ "$output" == *"managed"* ]]                             # doctor surfaces the deferral (not a "gap")
 }
+
+# --- HC4: informed consent plan (name each file; exclude absent + managed) -----------
+@test "HC4: discovery plan NAMES each writable surface; excludes absent and managed" {
+  _load_disc
+  mkdir -p "$AGENT_SECRETS_HOME/.claude" "$AGENT_SECRETS_HOME/.codex"
+  local plan; plan="$(agsec_discovery_plan)"
+  [[ "$plan" == *".claude/CLAUDE.md"* ]]                      # claude surface named with its exact file
+  [[ "$plan" == *".codex/AGENTS.md"* ]]                       # codex named (present)
+  [[ "$plan" != *".gemini"* ]]                                # gemini absent → NOT planned
+  local mgd="$AGENT_SECRETS_HOME/m"; mkdir -p "$mgd"; : >"$mgd/claude"
+  plan="$(AGENT_SECRETS_MANAGED_DIR="$mgd" agsec_discovery_plan)"
+  [[ "$plan" != *"CLAUDE.md"* ]]                              # managed claude → deferred, not planned
+}
