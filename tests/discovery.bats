@@ -105,3 +105,36 @@ _load_disc() {
   run grep -c agent-secrets "$AGENT_SECRETS_HOME/.codex/AGENTS.md"
   [ "$output" -eq 0 ]                                         # skipped — never pushed past the cap
 }
+
+# --- HC2: integrity — TAMPERED flips doctor's exit code; STALE stays benign ---------
+@test "HC2: a hand-edited claude block is flagged TAMPERED and flips doctor's exit code" {
+  _load_disc
+  mkdir -p "$AGENT_SECRETS_HOME/.claude"
+  agsec_discovery_write_key claude >/dev/null
+  local cm="$AGENT_SECRETS_HOME/.claude/CLAUDE.md"
+  [ "$(agsec_discovery_status_key claude | cut -f2)" = in-sync ]
+  sed -i '' 's/NEVER write/ALWAYS write/' "$cm"              # attacker/user edits the standing orders
+  [ "$(agsec_discovery_status_key claude | cut -f2)" = tampered ]
+  run agsec doctor
+  [ "$status" -ne 0 ]                                        # TAMPERED is a security event → non-zero exit
+  [[ "$output" == *"TAMPERED"* ]]
+}
+
+@test "HC2: a hidden-Unicode (bidi-override) payload in the block is flagged TAMPERED" {
+  _load_disc
+  mkdir -p "$AGENT_SECRETS_HOME/.claude"
+  agsec_discovery_write_key claude >/dev/null
+  # inject U+202E (RIGHT-TO-LEFT OVERRIDE, UTF-8 e2 80 ae) into a block line
+  LC_ALL=C perl -i -pe 's/Names/\xe2\x80\xaeNames/ if /Names/' "$AGENT_SECRETS_HOME/.claude/CLAUDE.md"
+  [ "$(agsec_discovery_status_key claude | cut -f2)" = tampered ]
+}
+
+@test "HC2: an integrity-valid but OLDER-version block is STALE (benign), not tampered" {
+  _load_disc
+  mkdir -p "$AGENT_SECRETS_HOME/.claude"
+  agsec_discovery_write_key claude >/dev/null
+  local cm="$AGENT_SECRETS_HOME/.claude/CLAUDE.md"
+  # rewrite ONLY the version field in the integrity marker (body + sha unchanged → integrity still ok)
+  sed -i '' 's/agent-secrets:version=[^ ]*/agent-secrets:version=0.0.0-old/' "$cm"
+  [ "$(agsec_discovery_status_key claude | cut -f2)" = stale ]
+}

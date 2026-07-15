@@ -226,19 +226,22 @@ check_onboarding() {  # service-readiness triage: the external CLIs the user con
 
 check_discovery() {  # machine-wide agent-discovery surfaces (ADVISORY — makes agents AWARE, not enforced)
   # Iterate the surface registry (lib/discovery.sh). The flagship "claude" surface (Claude Code + VS
-  # Code Copilot, ~/.claude/rules/agent-secrets.md) is ALWAYS surfaced as an opt-in reminder even when
-  # its dir is absent; other harnesses are reported only when actually present on this Mac.
-  local key line status label
+  # Code Copilot, ~/.claude/CLAUDE.md) is ALWAYS surfaced as an opt-in reminder even when its dir is
+  # absent; other harnesses are reported only when actually present on this Mac. A TAMPERED block
+  # (integrity-marker mismatch or hidden-Unicode payload) is a `bad` row — visible even under --summary
+  # AND it flips doctor's exit code, because a hostile standing-order file is a security event, not a nag.
+  local key line status label path
   for key in $AGSEC_DISCOVERY_KEYS; do
     line="$(agsec_discovery_status_key "$key" 2>/dev/null)" || continue
-    status="$(printf '%s' "$line" | cut -f2)"; label="$(printf '%s' "$line" | cut -f4)"
+    status="$(printf '%s' "$line" | cut -f2)"; path="$(printf '%s' "$line" | cut -f3)"; label="$(printf '%s' "$line" | cut -f4)"
     if [ "$status" = not-applicable ]; then
       if [ "$key" = claude ]; then status=absent; else continue; fi
     fi
     case "$status" in
-      present-in-sync) _row discovery ok   "agent rules ($label)" "present — advisory, not enforced" optional ;;
-      present-stale)   _row discovery attn "agent rules ($label)" "STALE — re-run the installer to refresh the rules" optional ;;
-      *)               _row discovery attn "agent rules ($label)" "not installed (opt-in — agents won't know agent-secrets exists; re-run the installer to add)" optional ;;
+      in-sync)  _row discovery ok   "agent rules ($label)" "present — advisory, not enforced" optional ;;
+      stale)    _row discovery attn "agent rules ($label)" "STALE (older version) — re-run the installer to refresh the rules" optional ;;
+      tampered) _row discovery bad  "agent rules ($label)" "TAMPERED / hand-edited — content does not match its integrity marker (or carries hidden-Unicode); re-run the installer to restore, or inspect $path" ;;
+      *)        _row discovery attn "agent rules ($label)" "not installed (opt-in — agents won't know agent-secrets exists; re-run the installer to add)" optional ;;
     esac
   done
   # Cursor has NO global rules FILE (User Rules live in an opaque, cloud-synced settings DB), so the tool

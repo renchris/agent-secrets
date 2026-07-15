@@ -144,23 +144,45 @@ agsec_discovery_install_all() {
 }
 
 # Report coverage for one key → TAB: key \t status \t path \t label
-#   status: present-in-sync | present-stale | present-hand-edited | absent | not-applicable
-# For kind=file we content-compare against the current render; for kind=block we compare the block body.
+#   status: in-sync | stale | tampered | absent | not-applicable
+# Integrity is judged by the block's OWN embedded version+sha marker (agsec_block_integrity), NOT by a
+# content-compare to the current render — so a dotfile-synced block carrying another machine's abs-path
+# is NOT falsely flagged (its self-hash still verifies). tampered = embedded sha mismatch OR a
+# hidden-Unicode payload; stale = integrity ok but an OLDER tool version; unmarked (legacy/hand-authored)
+# falls back to a content-compare.
 agsec_discovery_status_key() {
-  local key="$1" kind path fmt label want got
+  local key="$1" kind path fmt label block integ ver
   kind="$(_disc_field "$key" 1)"; path="$(_disc_field "$key" 2)"
   fmt="$(_disc_field "$key" 3)"; label="$(_disc_field "$key" 5)"
   if ! _disc_gate "$key"; then printf '%s\tnot-applicable\t%s\t%s\n' "$key" "$path" "$label"; return 0; fi
-  want="$(agsec_render_rules "$fmt")"
   if [ "$kind" = file ]; then
-    if [ ! -f "$path" ]; then printf '%s\tabsent\t%s\t%s\n' "$key" "$path" "$label"; return 0; fi
-    got="$(cat "$path" 2>/dev/null)"
+    [ -f "$path" ] && block="$(cat "$path" 2>/dev/null)" || block=""
   else
-    got="$(_disc_extract_block "$path")"
-    [ -n "$got" ] || { printf '%s\tabsent\t%s\t%s\n' "$key" "$path" "$label"; return 0; }
+    block="$(_disc_extract_block "$path")"
   fi
-  if [ "$got" = "$want" ]; then printf '%s\tpresent-in-sync\t%s\t%s\n' "$key" "$path" "$label"
-  else printf '%s\tpresent-stale\t%s\t%s\n' "$key" "$path" "$label"; fi
+  [ -n "$block" ] || { printf '%s\tabsent\t%s\t%s\n' "$key" "$path" "$label"; return 0; }
+  # A hidden-Unicode / bidi payload makes the block read one way to a human, another to the agent.
+  if _disc_has_hidden_unicode "$block"; then printf '%s\ttampered\t%s\t%s\n' "$key" "$path" "$label"; return 0; fi
+  integ="$(agsec_block_integrity "$block")"
+  case "$integ" in
+    tampered) printf '%s\ttampered\t%s\t%s\n' "$key" "$path" "$label" ;;
+    ok\ *)
+      ver="${integ#ok }"
+      if [ "$ver" = "$(agsec_version)" ]; then printf '%s\tin-sync\t%s\t%s\n' "$key" "$path" "$label"
+      else printf '%s\tstale\t%s\t%s\n' "$key" "$path" "$label"; fi ;;
+    *)  # unmarked (legacy / hand-authored): best-effort content-compare to the current render
+      if [ "$block" = "$(agsec_render_rules "$fmt")" ]; then printf '%s\tin-sync\t%s\t%s\n' "$key" "$path" "$label"
+      else printf '%s\tstale\t%s\t%s\n' "$key" "$path" "$label"; fi ;;
+  esac
+}
+
+# Detect bidi-override / zero-width / BOM characters in a loaded instruction block — the Rules-File-
+# Backdoor / ATLAS AML-CS0041 class where hidden Unicode makes a block say one thing to a human reviewer
+# and another to the agent. Byte-level (LC_ALL=C) match on the UTF-8 encodings of U+202A-202E,
+# U+2066-2069, U+200B-200F, U+FEFF. Returns 0 if any is present. (Em-dash U+2014 / middot U+00B7 used in
+# our own render do NOT match these ranges.)
+_disc_has_hidden_unicode() {
+  printf '%s' "$1" | LC_ALL=C grep -qE $'\xe2\x80[\xaa-\xae]|\xe2\x81[\xa6-\xa9]|\xe2\x80[\x8b-\x8f]|\xef\xbb\xbf'
 }
 
 # Extract the body BETWEEN our markers (either style) from a shared file; empty if no block.
