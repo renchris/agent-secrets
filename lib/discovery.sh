@@ -81,6 +81,39 @@ _disc_gate() {
   esac
 }
 
+# --- managed-layer detection (defer, never fight org/MDM policy) -------------------------------------
+# On a centrally-managed machine a higher-precedence layer (org/MDM-deployed managed policy) already
+# owns machine-wide agent guidance, at a precedence a per-user write cannot override — so the installer
+# must DEFER (write nothing) and let IT own it. This is a GENERAL capability probe, data-driven per OS
+# and per surface, NOT a hardcoded corporate branch: adding an OS or a harness is adding rows below.
+
+# OS family (composable: v1 ships macOS behavior; linux/windows paths are DATA, ready for a port).
+_disc_os() { case "$(uname -s 2>/dev/null)" in Darwin) printf macos;; Linux) printf linux;; *) printf other;; esac; }
+
+# Candidate managed/policy paths for a surface — root/MDM-owned, org-deployed, unwritable without sudo by
+# OS design. AGENT_SECRETS_MANAGED_DIR (test/override) is honored first so the defer path is exercisable
+# without root. Newline-separated.
+_disc_managed_paths() {
+  local key="$1"
+  [ -n "${AGENT_SECRETS_MANAGED_DIR:-}" ] && printf '%s/%s\n' "$AGENT_SECRETS_MANAGED_DIR" "$key"
+  case "$key" in
+    claude)
+      case "$(_disc_os)" in
+        macos) printf '%s\n' '/Library/Application Support/ClaudeCode/managed-settings.json' '/Library/Application Support/ClaudeCode/CLAUDE.md' ;;
+        linux) printf '%s\n' '/etc/claude-code/managed-settings.json' '/etc/claude-code/CLAUDE.md' ;;
+      esac ;;
+  esac
+}
+
+# Is a higher-precedence managed layer present for this surface? If so, DEFER.
+_disc_managed_present() {
+  local p
+  while IFS= read -r p; do [ -n "$p" ] || continue; [ -e "$p" ] && return 0; done <<EOF
+$(_disc_managed_paths "$1")
+EOF
+  return 1
+}
+
 # --- render / install / report -----------------------------------------------------------------------
 
 # Field extractor: _disc_field <key> <1..6> (kind path format style label max_bytes).
@@ -109,6 +142,8 @@ _disc_write_one() {
 agsec_discovery_write_key() {
   local key="$1" kind path fmt style label max targets t wrote=0
   _disc_gate "$key" || return 0
+  # DEFER to an org/MDM-managed layer if present — never write over higher-precedence policy.
+  _disc_managed_present "$key" && return 0
   kind="$(_disc_field "$key" 1)"; path="$(_disc_field "$key" 2)"; fmt="$(_disc_field "$key" 3)"
   style="$(_disc_field "$key" 4)"; label="$(_disc_field "$key" 5)"; max="$(_disc_field "$key" 6)"
   # Per-READER coverage: Claude Code honors CLAUDE_CONFIG_DIR while VS Code Copilot reads the LITERAL
@@ -155,6 +190,7 @@ agsec_discovery_status_key() {
   kind="$(_disc_field "$key" 1)"; path="$(_disc_field "$key" 2)"
   fmt="$(_disc_field "$key" 3)"; label="$(_disc_field "$key" 5)"
   if ! _disc_gate "$key"; then printf '%s\tnot-applicable\t%s\t%s\n' "$key" "$path" "$label"; return 0; fi
+  if _disc_managed_present "$key"; then printf '%s\tmanaged\t%s\t%s\n' "$key" "$path" "$label"; return 0; fi
   if [ "$kind" = file ]; then
     [ -f "$path" ] && block="$(cat "$path" 2>/dev/null)" || block=""
   else

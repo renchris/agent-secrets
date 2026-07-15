@@ -138,3 +138,16 @@ _load_disc() {
   sed -i '' 's/agent-secrets:version=[^ ]*/agent-secrets:version=0.0.0-old/' "$cm"
   [ "$(agsec_discovery_status_key claude | cut -f2)" = stale ]
 }
+
+# --- HC3: managed-layer detect + defer (never fight org/MDM policy) ------------------
+@test "HC3: on an org-managed machine the installer DEFERS — writes nothing; doctor reports managed" {
+  _load_disc
+  mkdir -p "$AGENT_SECRETS_HOME/.claude"
+  local mgd="$AGENT_SECRETS_HOME/managed"; mkdir -p "$mgd"; : >"$mgd/claude"   # simulate the org policy layer
+  export AGENT_SECRETS_MANAGED_DIR="$mgd"
+  agsec_discovery_write_key claude >/dev/null
+  [ ! -f "$AGENT_SECRETS_HOME/.claude/CLAUDE.md" ]           # DEFERRED — nothing written over policy
+  [ "$(agsec_discovery_status_key claude | cut -f2)" = managed ]
+  run agsec doctor
+  [[ "$output" == *"managed"* ]]                             # doctor surfaces the deferral (not a "gap")
+}

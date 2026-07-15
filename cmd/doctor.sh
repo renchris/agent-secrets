@@ -239,6 +239,7 @@ check_discovery() {  # machine-wide agent-discovery surfaces (ADVISORY — makes
     fi
     case "$status" in
       in-sync)  _row discovery ok   "agent rules ($label)" "present — advisory, not enforced" optional ;;
+      managed)  _row discovery ok   "agent rules ($label)" "org/MDM-managed — deployment is IT's job; the installer defers (writes nothing here)" optional ;;
       stale)    _row discovery attn "agent rules ($label)" "STALE (older version) — re-run the installer to refresh the rules" optional ;;
       tampered) _row discovery bad  "agent rules ($label)" "TAMPERED / hand-edited — content does not match its integrity marker (or carries hidden-Unicode); re-run the installer to restore, or inspect $path" ;;
       *)        _row discovery attn "agent rules ($label)" "not installed (opt-in — agents won't know agent-secrets exists; re-run the installer to add)" optional ;;
