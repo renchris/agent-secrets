@@ -140,39 +140,80 @@ agsec_in_agent_session() {
 # umask for secret-bearing writes: owner-only (0600 files, 0700 dirs).
 agsec_secure_umask() { umask 077; }
 
-# The four golden rules an agent (in any IDE) must follow — the SINGLE source of rule DATA, rendered
-# per surface by agsec_render_rules so the wording can never drift. Consumed by setup's done-screen +
-# Cursor clipboard (plain) AND install.sh's ~/.claude/CLAUDE.md discovery block (claude-md) — one
-# source, zero drift. (Regression this closes: install.sh's hand-maintained _discovery_block had
-# textually diverged from this rule text despite a comment asserting the two were identical.)
-# Names-only: `<NAME>` is a paste template, never a real value. Rule 3 deliberately DROPS the old
-# inline `printf … "$VALUE" | add` example — an AGENT lacking $VALUE as a shell variable would
-# substitute the LITERAL secret into its command, leaking it into the transcript (the exact failure
-# this tool exists to prevent). `add` reads the value from STDIN only (never argv), so the safe
-# programmatic path is still available; the rule just stops advertising the leak-prone form.
+# The resolved absolute path to the installed agent-secrets dispatcher. Pinned into machine-wide rule
+# FILES so an agent invokes THIS binary, not an impostor an attacker may have planted earlier on PATH
+# (PATH-hijack of `run`/`add`). AGENT_SECRETS_BIN wins (installer + tests); else derived from the lib dir.
+# shellcheck disable=SC2153  # AGENT_SECRETS_LIB is set by the dispatcher; not a misspelling of _BIN
+agsec_bin_path() {
+  if [ -n "${AGENT_SECRETS_BIN:-}" ]; then printf '%s\n' "$AGENT_SECRETS_BIN"; return 0; fi
+  printf '%s\n' "${AGENT_SECRETS_LIB%/lib}/bin/agent-secrets"
+}
+
+# Tool version, for staleness detection of an installed rule block (embedded in the block's integrity
+# marker; doctor compares it to this). Best-effort; "0" if the VERSION file is unreadable.
+# shellcheck disable=SC2153  # AGENT_SECRETS_LIB is dispatcher-set
+agsec_version() { cat "${AGENT_SECRETS_LIB%/lib}/VERSION" 2>/dev/null || printf '0'; }
+
+# The four golden rules — the SINGLE source of rule DATA, rendered per surface so the wording can never
+# drift. <bin> = the command an agent should invoke: bare `agent-secrets` for a user-PASTED surface
+# (Cursor User Rules), the RESOLVED ABSOLUTE path for a written FILE (so an impostor earlier on PATH
+# cannot intercept `run`/`add`). Names-only: `<NAME>` is a template, never a real value. Rule 3
+# advertises NEITHER an inline `printf "$VALUE"` NOR a bare form an agent might fill with a literal — it
+# routes value entry to a human terminal (an agent substituting a literal secret into its command leaks
+# it into the transcript, the exact failure this tool prevents).
 _agsec_rule_lines() {
+  local bin="${1:-agent-secrets}"
   printf '%s\n' \
     'NEVER write a secret to a .env, export it in plaintext, or print a secret VALUE.' \
-    'Run tools WITH secrets injected, process-scoped: agent-secrets run -- <cmd>' \
-    'To add a secret, run agent-secrets add <NAME> in a terminal, or pipe it from a variable — never place a value literally in a command.' \
-    'Names/health/manifest: agent-secrets list · doctor · help --json'
+    "Run tools WITH secrets injected, process-scoped: $bin run -- <cmd>" \
+    "To add or rotate a secret, ask the USER to run: $bin add <NAME>  — in a real terminal, never a secret value in a command." \
+    "Names / health / manifest: $bin list · doctor · help --json"
 }
 
 # Render the golden rules for a target surface:
-#   plain      → "- <rule>" bullet lines (Cursor User Rules paste / clipboard / terminal display)
-#   claude-md  → a markdown section for ~/.claude/CLAUDE.md, ~/.claude/rules/*, AGENTS.md, GEMINI.md, …
-# shellcheck disable=SC2016  # the backticks in the markdown header are literal, not command substitution
+#   plain               → "- <rule>" bullets, BARE command name (Cursor User Rules paste / clipboard / TTY)
+#   claude-md|agents-md → a markdown FILE section: a self-guard ("ignore unless this binary exists" — so a
+#                         dotfile/settings-synced copy is INERT on a machine that lacks the tool), the
+#                         rules pinned to the ABSOLUTE binary, and an invisible version+integrity marker
+#                         (HTML comment — Claude Code strips it before injecting, so it is a disk-level
+#                         tamper/staleness target only, never seen by the agent). <bin> defaults to the
+#                         resolved install path; pass one to override (installer passes the real path).
+# shellcheck disable=SC2016  # backticks in the markdown header are literal, not command substitution
 agsec_render_rules() {
-  case "${1:-plain}" in
+  local fmt="${1:-plain}" bin="${2:-}"
+  case "$fmt" in
     plain)
-      _agsec_rule_lines | while IFS= read -r _r; do printf -- '- %s\n' "$_r"; done ;;
+      _agsec_rule_lines "agent-secrets" | while IFS= read -r _r; do printf -- '- %s\n' "$_r"; done ;;
     claude-md|agents-md)
-      printf '## Secrets: use `agent-secrets` (never plaintext)\n'
-      printf 'This machine has `agent-secrets` — encrypted (sops+age), names-only secret management for coding agents.\n'
-      _agsec_rule_lines | while IFS= read -r _r; do printf -- '- %s\n' "$_r"; done ;;
-    *) agsec_die "agsec_render_rules: unknown format '${1:-}'" ;;
+      [ -n "$bin" ] || bin="$(agsec_bin_path)"
+      local body
+      body="$(
+        printf '## Secrets: use `agent-secrets` (never plaintext)\n'
+        printf 'This machine has `agent-secrets` — encrypted (sops+age), names-only secret management for coding agents.\n'
+        printf 'Ignore this entire section unless the file `%s` exists on THIS machine (these rules may have been synced from another machine that has the tool).\n' "$bin"
+        _agsec_rule_lines "$bin" | while IFS= read -r _r; do printf -- '- %s\n' "$_r"; done
+      )"
+      printf '%s\n' "$body"
+      printf '<!-- agent-secrets:version=%s sha256=%s -->\n' "$(agsec_version)" "$(printf '%s' "$body" | shasum -a 256 | awk '{print $1}')" ;;
+    *) agsec_die "agsec_render_rules: unknown format '$fmt'" ;;
   esac
 }
 
 # Back-compat name — the plain four rules. setup's done-screen + Cursor clipboard call THIS.
 agsec_agent_rules() { agsec_render_rules plain; }
+
+# Given the full block body extracted from a written surface (between our markers, INCLUDING the trailing
+# integrity marker), report its integrity: prints "ok <version>" if the embedded sha256 matches a
+# recompute over the body-minus-marker, "tampered" if it mismatches, "unmarked" if no marker is present
+# (a legacy block or a hand-authored one). Used by doctor to distinguish TAMPERED from benign STALE.
+agsec_block_integrity() {
+  local block="$1" line sha ver body recompute
+  line="$(printf '%s\n' "$block" | grep -oE '<!-- agent-secrets:version=[^ ]+ sha256=[0-9a-f]{64} -->' | tail -1)"
+  [ -n "$line" ] || { printf 'unmarked\n'; return 0; }
+  ver="$(printf '%s' "$line" | sed -E 's/.*version=([^ ]+) .*/\1/')"
+  sha="$(printf '%s' "$line" | sed -E 's/.* sha256=([0-9a-f]{64}) -->/\1/')"
+  body="$(printf '%s\n' "$block" | grep -vF "$line")"
+  # The body used for the hash had NO trailing newline (printf '%s' in the renderer); strip one here.
+  recompute="$(printf '%s' "$body" | shasum -a 256 | awk '{print $1}')"
+  if [ "$recompute" = "$sha" ]; then printf 'ok %s\n' "$ver"; else printf 'tampered\n'; fi
+}

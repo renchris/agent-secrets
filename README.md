@@ -104,8 +104,8 @@ uninstall); the `agent-secrets` command plus the `claude-agent`, `cursor-agent`,
 `apiKeyHelper` wrappers in `~/bin`; an encrypted store at `~/.config/secrets/`; your age key in the
 login Keychain (with a `0600` file fallback); one `PATH` line in `~/.zshenv`; a weekly `launchd`
 smoke job; and the `apiKeyHelper` line in `~/.claude/settings.json`. It also *offers* (opt-in) to write
-a short agent-discovery rules file (`~/.claude/rules/agent-secrets.md`, read by Claude Code + VS Code
-Copilot, plus any other agent CLI present). Every change is recorded in
+a short agent-discovery block into `~/.claude/CLAUDE.md` (read by Claude Code + VS Code Copilot, plus a
+per-tool file for any other agent CLI present). Every change is recorded in
 `install-manifest.json` and reversed by `agent-secrets uninstall` — all removable in one command.
 
 > **Running this from inside a coding agent (Cursor / Claude Code)?** The installer finishes the file
@@ -309,16 +309,20 @@ agent-secrets <command> --help     # detailed per-command help (side-effect-free
 **Machine-wide discovery — how agents in *other* repos find out.** This repo's `AGENTS.md` is
 repo-scoped, and the `apiKeyHelper` only auths Claude Code's own key, so by default an agent working
 in some *other* project has no idea this Mac has `agent-secrets`. To close that gap the installer
-*offers* (opt-in, and reversed by `uninstall`) to write a short, reversible rules file —
-`~/.claude/rules/agent-secrets.md` — carrying the golden rules (no plaintext `.env`;
-`agent-secrets run -- <cmd>`; add secrets in a real terminal, never a value in a command;
-`agent-secrets help --json`). **One file, two readers:** Claude Code auto-loads `~/.claude/rules/*.md`
-in every repo, *and* VS Code Copilot reads `~/.claude/rules` by default — so the same file covers both.
-The installer also writes the rules into any **other** agent CLI present on this Mac (Codex, Gemini,
-Zed, Cline — each in its own instruction file). Discovery is **advisory** (it makes agents *aware* of
-the tool; it is not an enforced guarantee), everything is recorded for total rollback, and nothing is
-written unless you say yes on an interactive install (a piped `curl | bash` never silently edits a
-global file). `agent-secrets doctor` reports each surface's status.
+*offers* (opt-in, and reversed by `uninstall`) to write a short, reversible marker block into
+`~/.claude/CLAUDE.md` — carrying the golden rules (no plaintext `.env`; `agent-secrets run -- <cmd>`;
+add secrets in a real terminal, never a value in a command; `agent-secrets help --json`). **One file,
+two readers:** Claude Code loads `~/.claude/CLAUDE.md` in every repo, *and* VS Code Copilot reads it by
+default (`chat.useClaudeMdFile`) — so the same file covers both. (User-home `~/.claude/rules` is **not**
+read by Copilot by default on stable VS Code, so `CLAUDE.md` is the version-robust surface.) The
+installer also writes the rules into any **other** agent CLI present on this Mac (Codex, Gemini, Zed,
+Cline — each in its own instruction file). Every block is **abs-path-pinned** (an agent invokes the real
+binary, not a PATH impostor), carries a **self-guard** (it goes inert if the file is synced to a machine
+without the tool), and an invisible **integrity marker** (`doctor` flags tampering). Discovery is
+**advisory** (it makes agents *aware* of the tool; it is not an enforced guarantee), everything is
+recorded for total rollback, and nothing is written unless you say yes on an interactive install (a
+piped `curl | bash` never silently edits a global file). `agent-secrets doctor` reports each surface's
+status.
 
 #### Who reads what
 
@@ -327,8 +331,8 @@ config every IDE honors**. Here's the honest picture:
 
 | Surface | How it learns the rules | Automated? |
 |---|---|---|
-| **Claude Code** (global) | The opt-in `~/.claude/rules/agent-secrets.md`, auto-loaded in every session in every repo | ✅ installer opt-in; `doctor` verifies it |
-| **VS Code Copilot** (global) | The **same** `~/.claude/rules/agent-secrets.md` — Copilot reads `~/.claude/rules` by default | ✅ covered free by the Claude file; `doctor` reports it |
+| **Claude Code** (global) | The opt-in block in `~/.claude/CLAUDE.md`, loaded in every session in every repo | ✅ installer opt-in; `doctor` verifies it |
+| **VS Code Copilot** (global) | The **same** `~/.claude/CLAUDE.md` block — Copilot reads it by default (`chat.useClaudeMdFile`) | ✅ covered free by the Claude file; `doctor` reports it |
 | **Cursor** (global) | **Settings → Rules → User Rules** — paste the four golden rules once | ⚠️ semi-automated: `setup` prints them **and copies them to your clipboard** (Cursor has no stable file-based path to write) |
 | **Codex / Gemini / Zed / Cline** (global) | Each tool's own file (`~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.config/zed/AGENTS.md`, `~/.agents/AGENTS.md`) | ✅ installer opt-in when the tool is present on this Mac |
 | **Any repo** (`AGENTS.md`) | A repo's own `AGENTS.md`, which Claude Code, Cursor, and others read | 📄 add per repo (this project ships one you can copy as a template) |

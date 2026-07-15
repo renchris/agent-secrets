@@ -54,7 +54,11 @@ AGSEC_DISCOVERY_KEYS="${AGSEC_DISCOVERY_KEYS:-claude codex gemini zed cline}"
 #         block = a marker block appended to a shared, possibly user-populated file
 _disc_row() {
   case "$1" in
-    claude) printf 'file\t%s\tclaude-md\tmd\tClaude Code + VS Code Copilot (~/.claude/rules)\t0\n' "$(_disc_claude_dir)/rules/agent-secrets.md" ;;
+    # CLAUDE.md (a marker block), NOT ~/.claude/rules/*.md: CLAUDE.md is the version-robust surface BOTH
+    # Claude Code and VS Code Copilot read by default (chat.useClaudeMdFile=true on every version);
+    # user-home ~/.claude/rules is NOT default-read by Copilot on stable VS Code (verified against source
+    # + docs 2026-07-14). W2's md-comment markers keep it from rendering as an H1.
+    claude) printf 'block\t%s\tclaude-md\tmd\tClaude Code + VS Code Copilot (~/.claude/CLAUDE.md)\t0\n' "$(_disc_claude_dir)/CLAUDE.md" ;;
     codex)  printf 'block\t%s\tagents-md\tmd\tCodex CLI (~/.codex/AGENTS.md)\t32768\n'            "$(_disc_codex_dir)/AGENTS.md" ;;
     gemini) printf 'block\t%s\tagents-md\tmd\tGemini CLI (~/.gemini/GEMINI.md)\t0\n'              "$(_disc_gemini_dir)/GEMINI.md" ;;
     zed)    printf 'block\t%s\tagents-md\tmd\tZed (~/.config/zed/AGENTS.md)\t0\n'                 "$(_disc_zed_dir)/AGENTS.md" ;;
@@ -82,47 +86,52 @@ _disc_gate() {
 # Field extractor: _disc_field <key> <1..6> (kind path format style label max_bytes).
 _disc_field() { _disc_row "$1" | cut -f"$2"; }
 
-# Write discovery for ONE present harness (idempotent, reversible). Prints the label on success, nothing
-# when skipped. Callers own the consent prompt (never silent-write a global agent-instruction file).
-agsec_discovery_write_key() {
-  local key="$1" kind path fmt style label
-  _disc_gate "$key" || return 0
-  kind="$(_disc_field "$key" 1)"; path="$(_disc_field "$key" 2)"
-  fmt="$(_disc_field "$key" 3)"; style="$(_disc_field "$key" 4)"; label="$(_disc_field "$key" 5)"
+# Write ONE surface (kind=file|block) at <path>, rendered against the ABSOLUTE bin. Returns 0 ONLY if a
+# write actually happened; returns 1 (a normal SKIP, never fatal) when the target is not writable —
+# managed / MDM-locked / read-only. This is the false-green fix: the caller must never claim a surface it
+# did not write. Composable across environments: a denied write degrades to a skip everywhere.
+_disc_write_one() {
+  local kind="$1" path="$2" fmt="$3" style="$4" bin dir
+  bin="$(agsec_bin_path)"; dir="$(dirname "$path")"
+  mkdir -p "$dir" 2>/dev/null || true
+  if [ -e "$path" ]; then [ -w "$path" ] || return 1; else [ -w "$dir" ] || return 1; fi
   case "$kind" in
-    file)
-      mkdir -p "$(dirname "$path")"
-      agsec_render_rules "$fmt" >"$path"
-      manifest_record_file "$path" >/dev/null 2>&1 || true
-      # Per-READER coverage: Claude Code reads $CLAUDE_CONFIG_DIR/rules, but VS Code Copilot reads the
-      # LITERAL ~/.claude/rules. When they diverge (relocated config) write BOTH so neither is dropped.
-      if [ "$key" = claude ]; then
-        local lit; lit="$(_disc_claude_literal_dir)/rules/agent-secrets.md"
-        if [ "$lit" != "$path" ]; then
-          mkdir -p "$(dirname "$lit")"; agsec_render_rules "$fmt" >"$lit"
-          manifest_record_file "$lit" >/dev/null 2>&1 || true
-        fi
-      fi
-      ;;
-    block)
-      [ -d "$(dirname "$path")" ] || mkdir -p "$(dirname "$path")"
-      # Respect a per-surface byte cap (e.g. Codex AGENTS.md 32 KiB): appending past it silently truncates
-      # the tail — possibly OUR block, possibly the user's own rules. Refuse + report rather than corrupt.
-      local max cur add
-      max="$(_disc_field "$key" 6)"
-      if [ "${max:-0}" -gt 0 ] && [ -f "$path" ]; then
-        cur="$(wc -c <"$path" 2>/dev/null || printf 0)"
-        add="$(agsec_render_rules "$fmt" | wc -c)"
-        if [ "$((cur + add + 8))" -gt "$max" ]; then
-          agsec_warn "discovery: $path is near its ${max}-byte cap — skipped to avoid truncating it" 2>/dev/null || true
-          return 0
-        fi
-      fi
-      manifest_pathblock_install "$path" "$AGENT_SECRETS_DISCOVERY_MARKER" "$(agsec_render_rules "$fmt")" "$style"
-      ;;
+    file)  agsec_render_rules "$fmt" "$bin" >"$path" 2>/dev/null || return 1
+           manifest_record_file "$path" >/dev/null 2>&1 || true ;;
+    block) manifest_pathblock_install "$path" "$AGENT_SECRETS_DISCOVERY_MARKER" "$(agsec_render_rules "$fmt" "$bin")" "$style" ;;
     *) return 1 ;;
   esac
-  printf '%s\n' "$label"
+}
+
+# Write discovery for ONE present harness (idempotent, reversible). Prints the label ONLY if at least one
+# target was actually written; prints nothing when gated-out or every target was unwritable. Callers own
+# the consent prompt (never silent-write a global agent-instruction file).
+agsec_discovery_write_key() {
+  local key="$1" kind path fmt style label max targets t wrote=0
+  _disc_gate "$key" || return 0
+  kind="$(_disc_field "$key" 1)"; path="$(_disc_field "$key" 2)"; fmt="$(_disc_field "$key" 3)"
+  style="$(_disc_field "$key" 4)"; label="$(_disc_field "$key" 5)"; max="$(_disc_field "$key" 6)"
+  # Per-READER coverage: Claude Code honors CLAUDE_CONFIG_DIR while VS Code Copilot reads the LITERAL
+  # ~/.claude/CLAUDE.md — when a relocated config makes them diverge, target BOTH so neither reader is
+  # dropped. Common case (var unset / tests): they coincide → a single target.
+  targets="$path"
+  if [ "$key" = claude ]; then
+    local lit; lit="$(_disc_claude_literal_dir)/CLAUDE.md"
+    [ "$lit" != "$path" ] && targets="$(printf '%s\n%s' "$path" "$lit")"
+  fi
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    # Per-surface byte cap (e.g. Codex AGENTS.md 32 KiB) — refuse rather than truncate a near-cap file.
+    if [ "$kind" = block ] && [ "${max:-0}" -gt 0 ] && [ -f "$t" ]; then
+      local cur add; cur="$(wc -c <"$t" 2>/dev/null || printf 0)"; add="$(agsec_render_rules "$fmt" "$(agsec_bin_path)" | wc -c)"
+      if [ "$((cur + add + 8))" -gt "$max" ]; then agsec_warn "discovery: $t near its ${max}-byte cap — skipped" 2>/dev/null || true; continue; fi
+    fi
+    _disc_write_one "$kind" "$t" "$fmt" "$style" && wrote=1
+  done <<EOF
+$targets
+EOF
+  [ "$wrote" = 1 ] && printf '%s\n' "$label"
+  return 0
 }
 
 # Install discovery across every PRESENT harness in the registry. Returns 0 always; prints one label

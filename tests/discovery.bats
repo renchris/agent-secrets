@@ -22,25 +22,35 @@ _load_disc() {
   [ "$output" -eq 0 ]
 }
 
-@test "claude discovery writes the dedicated ~/.claude/rules file (Claude Code + Copilot); rollback deletes it" {
+@test "claude discovery writes a marker block to ~/.claude/CLAUDE.md (Claude Code + Copilot); rollback strips it, user content kept" {
   _load_disc
-  mkdir -p "$AGENT_SECRETS_HOME/.claude"                       # Claude Code present → gate passes
-  local rf="$AGENT_SECRETS_HOME/.claude/rules/agent-secrets.md"
+  local cm="$AGENT_SECRETS_HOME/.claude/CLAUDE.md"
+  mkdir -p "$AGENT_SECRETS_HOME/.claude"
+  printf '# My global rules\nBe concise.\n' >"$cm"             # pre-existing user content
   run agsec_discovery_write_key claude
   [ "$status" -eq 0 ]
-  [ -f "$rf" ]                                                 # dedicated rules file written (not a CLAUDE.md block)
-  grep -qF "agent-secrets run -- <cmd>" "$rf"                 # the golden rules landed
-  grep -qF "Secrets: use" "$rf"                                # markdown section header present
+  grep -qF '<!-- >>> agent-secrets >>> -->' "$cm"              # md-comment markers (CLAUDE.md is the both-reader surface)
+  grep -qF 'run -- <cmd>' "$cm"                                # golden rules landed
+  grep -qF 'Be concise.' "$cm"                                 # user content preserved
+  run grep -c '^# >>> agent-secrets' "$cm"; [ "$output" -eq 0 ]   # NO shell-comment H1 marker
   manifest_rollback >/dev/null 2>&1
-  [ ! -f "$rf" ]                                               # uninstall DELETES the dedicated file (no shared-file surgery)
+  run grep -c 'agent-secrets' "$cm"; [ "$output" -eq 0 ]      # block stripped
+  grep -qF 'Be concise.' "$cm"                                 # user content still there (pre-existing file not deleted)
 }
 
-@test "claude discovery content matches the single renderer (no drift between file and source)" {
+@test "claude block is abs-path pinned + self-guarded + integrity-marked (drift-proof, PATH-hijack-safe, synced-inert)" {
   _load_disc
   mkdir -p "$AGENT_SECRETS_HOME/.claude"
-  agsec_discovery_write_key claude >/dev/null
-  local rf="$AGENT_SECRETS_HOME/.claude/rules/agent-secrets.md"
-  diff <(agsec_render_rules claude-md) "$rf"                   # file == render, byte for byte
+  local cm="$AGENT_SECRETS_HOME/.claude/CLAUDE.md"
+  AGENT_SECRETS_BIN=/opt/x/bin/agent-secrets agsec_discovery_write_key claude >/dev/null
+  grep -qF '/opt/x/bin/agent-secrets run -- <cmd>' "$cm"                       # abs-path pinned (anti PATH-hijack)
+  grep -qF 'Ignore this entire section unless the file' "$cm"                  # self-guard → inert if synced to a tool-less machine
+  grep -qE '<!-- agent-secrets:version=.* sha256=[0-9a-f]{64} -->' "$cm"       # version+integrity marker
+  local blk; blk="$(_disc_extract_block "$cm")"
+  [[ "$(agsec_block_integrity "$blk")" == ok\ * ]]                             # integrity verifies (untampered)
+  # a hand-edit flips integrity to 'tampered'
+  local edited; edited="$(printf '%s\n' "$blk" | sed 's/NEVER write/ALWAYS write/')"
+  [ "$(agsec_block_integrity "$edited")" = tampered ]
 }
 
 @test "discovery does NOT fabricate a config dir for an absent tool (codex gate)" {
