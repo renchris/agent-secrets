@@ -221,41 +221,41 @@ dual-write on `CLAUDE_CONFIG_DIR` divergence. Render is now: **abs-path-pinned**
 corrected. 206 green. Key fact for HC: VS Code exposes NO `policy:` field on these settings → an org
 cannot centrally disable CLAUDE.md ingestion via VS Code policy, only via MDM-pinned settings.
 
-## HC2 — doctor integrity + honest coverage — EXPANDED (next)
+## HC2 — doctor integrity + honest coverage — DONE (`035f2ad`, 2026-07-14)
 
-- Wire `agsec_block_integrity` into `agsec_discovery_status_key`: emit `present-tampered` (embedded
-  sha≠recompute → **flip `had_bad`/exit 1** + STOP-ASK wording) vs `present-stale` (integrity ok but
-  embedded `version` < `agsec_version` → benign, "re-run installer") vs `present-in-sync`.
-- Directory-level audit: enumerate the FULL loaded rules set + each shared `AGENTS.md`; flag any
-  non-authored `agent-secrets`-marked block in an unexpected file, and any hidden-Unicode/bidi/zero-width
-  char in a loaded instruction file (Rules-File-Backdoor / ATLAS AML-CS0041) → `bad` (exit 1).
-- doctor rows for `managed layer present — deferring` and `denied/read-only — skipped` (no false green).
-- Discovery integrity must affect exit code even under `--summary` (tampered is not `optional`).
+`agsec_discovery_status_key` judges a block by its OWN embedded version+sha256 marker
+(`agsec_block_integrity`), not a content-compare — so a synced block carrying another machine's abs-path
+is not falsely flagged. `tampered` (sha mismatch OR bidi/zero-width/BOM hidden-Unicode via
+`_disc_has_hidden_unicode`) is a doctor `bad` row: visible under `--summary` AND flips the exit code.
+`stale` (integrity ok, older `agsec_version`) stays advisory. +3 locks.
 
-## HC3 — managed-layer detect + defer — EXPANDED (composable, data-driven)
+## HC3 — managed-layer detect + defer — DONE (`5dddb9e`, 2026-07-14)
 
-- New `_disc_managed_present <key>`: a GENERAL capability probe (data-driven per-surface managed paths in
-  the registry, per-OS), returns 0 if a higher-precedence managed/policy layer exists — Claude Code
-  managed `CLAUDE.md`/`managed-settings.json` (macOS `/Library/Application Support/ClaudeCode`, Linux
-  `/etc/claude-code`, Windows `C:\Program Files\ClaudeCode`), `~/.claude/remote-settings.json`, VS Code /
-  Cursor policy files. When present → SKIP the per-user machine-wide write + doctor "deferring" row.
-  Registry rows carry `os_paths{macos,linux,windows}` + `managed_paths` from day one (composable across
-  OSes even though v1 ships macOS behavior).
+`_disc_managed_present` (data-driven, per-OS `_disc_managed_paths`: macOS `/Library/Application
+Support/ClaudeCode`, Linux `/etc/claude-code`; Windows-ready): when an org/MDM managed layer exists the
+installer writes nothing + doctor reports `managed`. `AGENT_SECRETS_MANAGED_DIR` overrides for root-free
+testing. +1 lock. (Dropped `~/.claude/remote-settings.json` from the probe — too weak a signal, would
+false-defer regular users; only unambiguous root/MDM system paths trigger deferral.)
 
-## HC4 — install consent + add.sh gate — EXPANDED
+## HC4 — install consent + add.sh gate — DONE (`4766d0f`, 2026-07-14)
 
-- Per-surface, per-file explicit consent naming each product/file (no one-keypress fan to six vendors);
-  narrow the default to the Claude surface, broader rows behind their own opt-in line.
-- `cmd/add.sh`: add the `agsec_in_agent_session` awareness (mirror `setup.sh:318`) — an in-session warn +
-  route value entry to a real terminal (the gate absent since W1's descope; the corporate panel wants it).
+`agsec_discovery_plan` → the install prompt NAMES each present/non-managed/writable file + PREVIEWS the
+block before writing (informed consent, not a blind one-keypress fan-out); `AGENT_SECRETS_BIN` pinned so
+preview == write. `cmd/add.sh` gains an in-session guardrail NOTE (not a refusal — `add` is argv-safe, so
+the scriptable pipe path stays). +1 lock. (Kept all broader rows in the default plan rather than
+demoting to separate opt-in lines — the NAMED+PREVIEWED consent already resolves the "blind fan-out"
+concern; per-surface opt-out toggles would be over-fitting for the default.)
 
-## HC5 — IT managed-policy fragment + SECURITY.md — EXPANDED
+## HC5 — IT managed-policy fragment + SECURITY.md — DONE (`d803eb3`, 2026-07-14)
 
-- Ship `docs/` (or `share/`) a copy-paste managed-settings fragment (`claudeMd` + `permissions.deny
-  .env*`) for IT to deploy via Jamf/Intune — documented, NOT auto-written.
-- SECURITY.md: an "MCP not shipped by default" subsection (the CVEs + the "expected"/unpatched config→exec
-  primitive) so the ABSENCE reads as a deliberate, documented security decision; document the discovery
-  threat model (advisory, bidirectional, names-only shrinks-not-removes, managed-tier for invariants).
+`docs/enterprise-deployment.md`: the deference model + a copy-paste `managed-settings.json` fragment
+(`permissions.deny .env*` + `claudeMd`) for Jamf/Intune. `SECURITY.md`: a "machine-wide discovery —
+advisory, and why MCP is not shipped" section (advisory-not-invariant, abs-path/self-guard/integrity
+mitigations, managed deference; MCP-drop anchored on CurXecute CVE-2025-54135 + MCPoison CVE-2025-54136
++ vendor "expected"). `AGENTS.md` rule 2 hardened (never a literal). README links both.
+
+**Phase C COMPLETE.** All five hardening waves landed + pushed to origin/main. 211 tests green,
+shellcheck clean.
 
 ## HC residual risks (carry forward, from the panel)
 - Local-tamper defense is fundamentally limited (an attacker controlling PATH/binary controls a

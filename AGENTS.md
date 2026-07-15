@@ -14,8 +14,11 @@ either.
 
 1. **Never print, echo, or log a secret value.** Not to stdout, not to a file, not into your own
    transcript. `list` and `doctor` are safe because they only ever emit *names* and status.
-2. **Pass secret values via STDIN, never on argv.** argv is world-readable in the process table.
-   ✅ `printf '%s' "$VALUE" | agent-secrets add NAME` ❌ `agent-secrets add NAME "$VALUE"`
+2. **Pass secret values via STDIN from an EXISTING variable/file — never on argv, never as a literal you
+   type.** argv is world-readable in the process table; and a literal placed in the command lands
+   verbatim in your transcript (the exact leak this tool prevents). Only pipe a value ALREADY in the
+   environment or a file — otherwise ask the USER to run `agent-secrets add NAME` in a real terminal.
+   ✅ `printf '%s' "$EXISTING_VAR" | agent-secrets add NAME`  ❌ `agent-secrets add NAME "$VALUE"` (argv)  ❌ `printf '%s' "sk-literal…" | agent-secrets add NAME` (literal → transcript)
 3. **To use a secret, inject it — don't read it.** `agent-secrets run -- <cmd>` puts the values in the
    child process's environment for that run only. Prefer this over ever materializing a value.
 4. **Gate on `doctor`'s exit code.** `0` = no failing checks, `1` = at least one ✗. Parse
