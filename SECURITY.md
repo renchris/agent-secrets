@@ -47,6 +47,47 @@ and returned to Claude Code's `apiKeyHelper` on demand — and never to a termin
   legitimately needs — nor a client that ignores `HTTPS_PROXY` and opens a raw socket. This is why
   detection (the canary) is paired with the bound.
 
+## Machine-wide agent discovery — advisory, and why MCP is not shipped
+
+The installer can (opt-in) write a short **advisory** rules block into the machine-wide instruction
+files coding agents read (`~/.claude/CLAUDE.md` for Claude Code + VS Code Copilot; the tool's own file
+for Codex/Gemini/Zed/Cline). Treat this honestly:
+
+- **It is advisory, never the guarantee.** The rules *make an agent aware* of `agent-secrets`; prose
+  adherence is probabilistic, not enforced. The **encrypted store + prompt-locked Keychain custody are
+  the sole security invariant** — the discovery file is a defense-in-depth affordance.
+- **An instruction file is not inert data.** It is latent instructions a capable agent executes at the
+  user's full privilege, and it is **bidirectional** — an attacker who can write as you can also author
+  hostile standing orders. Mitigations shipped: every block is **abs-path-pinned** (an agent invokes the
+  real binary, not a `PATH` impostor), carries a **self-guard** (inert if synced to a machine without the
+  tool), and an invisible **version+integrity marker** so `agent-secrets doctor` flags a **tampered** or
+  hidden-Unicode-laced block (a `bad` row that flips the exit code), distinct from a benign version
+  **stale**. Writes are opt-in, tty-only (never in a `curl | bash` pipe), per-file consented (each file
+  named + previewed), and reversible.
+- **Managed fleets:** on an org/MDM-managed machine the installer **defers** and writes nothing — the
+  machine-wide invariant belongs in the managed-policy tier your IT deploys. See
+  [docs/enterprise-deployment.md](docs/enterprise-deployment.md).
+
+### MCP is intentionally NOT shipped by default
+
+`agent-secrets` ships **no MCP server** in the one-command install — a deliberate security decision, not
+an omission:
+
+- **Config-time registration is itself the RCE primitive.** Registering *any* command in an MCP client
+  config (`~/.cursor/mcp.json`, VS Code `mcp.json`) maps directly to subprocess execution regardless of
+  what the server returns — so a "names-only" server does not shrink the surface that matters. Proven
+  live by **CurXecute (CVE-2025-54135)** — prompt-injection writes `mcp.json` and executes before you can
+  reject — and **MCPoison (CVE-2025-54136)** — trust is bound to the server *name*, not its contents, so
+  an approved entry can be swapped for a malicious payload and silently re-executed. The vendor treats
+  the config→exec mapping as *expected*, so it is a permanent architectural property, not a patchable bug.
+- **Additional surfaces:** a persistent stdio server is a long-lived process EDR/allowlisting flags; and
+  settings-sync/git propagation of the command reference plants a pre-approved, hijackable entry on other
+  machines. The gain (file-automated Cursor discovery) is already covered advisorily by the clipboard
+  path. The trade is wrong under lockdown.
+
+If an org wants an agent-secrets MCP surface, treat it as a **governed, allowlisted** server deployed
+deliberately — never a default.
+
 ## Detection: the in-store canary
 
 The store seeds one plausibly-named **decoy** secret. It ships **INERT** — it provides breach

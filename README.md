@@ -344,7 +344,8 @@ User Rules. For the brew-less `gh` / `az` setup recipes and the token ladder, se
 ## More
 
 - **[AGENTS.md](AGENTS.md)** · **[llms.txt](llms.txt)** — agent-facing usage guide + large language model (LLM) link index
-- **[SECURITY.md](SECURITY.md)** — threat model, the honest ceiling, reporting a vulnerability
+- **[SECURITY.md](SECURITY.md)** — threat model, the honest ceiling, the discovery/MCP posture, reporting a vulnerability
+- **[docs/enterprise-deployment.md](docs/enterprise-deployment.md)** — managed-fleet (Jamf/Intune) deployment: the installer defers to org policy; the managed-settings fragment IT deploys
 - **[docs/POST_INSTALL.md](docs/POST_INSTALL.md)** — brew-less `gh` / `az` setup + the token ladder (also `agent-secrets help onboarding`)
 - **[docs/FAQ.md](docs/FAQ.md)** — "I don't code", store backup, the Dock-Cursor rule, corporate installs, Touch ID
 - Regenerate the demo: `scripts/record-demo.sh` (Charm [VHS](https://github.com/charmbracelet/vhs))
