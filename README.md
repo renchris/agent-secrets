@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/renchris/agent-secrets/actions/workflows/ci.yml/badge.svg)](https://github.com/renchris/agent-secrets/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-d4af37?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.0-58a6ff?style=flat-square)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.1.1-58a6ff?style=flat-square)](VERSION)
 [![Tests](https://img.shields.io/badge/bats-passing-3fb950?style=flat-square)](tests)
 [![Security](https://img.shields.io/badge/values-names--only-3fb950?style=flat-square)](SECURITY.md)
 [![Crypto](https://img.shields.io/badge/crypto-sops%20%2B%20age-d4af37?style=flat-square)](https://github.com/getsops/sops)
@@ -57,7 +57,7 @@ agent transcript.
 
 ```sh
 # 1 · install — from anywhere (no sudo, no Homebrew; a coding-agent session is fine)
-bash -c "$(curl -fsLS https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.0/install.sh)"
+bash -c "$(curl -fsLS https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.1/install.sh)"
 
 # 2 · setup — in Terminal.app: mint your key, add your first secret, wire your tools
 agent-secrets setup
@@ -85,7 +85,7 @@ touching your store.
 **Prefer to read it first?** A co-equal path:
 
 ```sh
-curl -fsLSO …/v0.1.0/install.sh
+curl -fsLSO …/v0.1.1/install.sh
 less install.sh     # read every line
 bash install.sh
 ```

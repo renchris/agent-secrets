@@ -56,7 +56,7 @@ installs it into the System keychain) system `curl` validates the inspected TLS 
 `CURL_CA_BUNDLE=/path/to/corp-ca.pem` only if it is not.
 
 **Internal mirror / air-gapped (no public egress):** mirror the release assets (`install.sh` +
-`agent-secrets-v0.1.0.tar.gz` + `.sha256`, under a `releases/download/v0.1.0/` path) onto your
+`agent-secrets-v0.1.1.tar.gz` + `.sha256`, under a `releases/download/v0.1.1/` path) onto your
 internal Git / Artifactory / Nexus, fetch `install.sh` from there, and point it back at the mirror.
 To also mirror the toolchain, host the `age` / `sops` / `gum` / `jq` release assets under the same
 `<org>/<repo>/releases/download/<tag>/` layout and set `AGENT_SECRETS_DEPS_BASE_URL`:

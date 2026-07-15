@@ -99,8 +99,8 @@ _load_manifest() {
 # --- RT7: a pre-existing ~/bin that is a FILE is refused before any mutation ---------
 @test "RT7: install preflight refuses a regular file at a target dir with no residue" {
   local MIRROR; MIRROR="$(mktemp -d)"
-  ( cd "$REPO_ROOT" && git archive --prefix="agent-secrets-v0.1.0/" HEAD -o "$MIRROR/agent-secrets-v0.1.0.tar.gz" )
-  printf '%s  agent-secrets-v0.1.0.tar.gz\n' "$(shasum -a 256 "$MIRROR/agent-secrets-v0.1.0.tar.gz" | awk '{print $1}')" > "$MIRROR/agent-secrets-v0.1.0.tar.gz.sha256"
+  ( cd "$REPO_ROOT" && git archive --prefix="agent-secrets-v0.1.1/" HEAD -o "$MIRROR/agent-secrets-v0.1.1.tar.gz" )
+  printf '%s  agent-secrets-v0.1.1.tar.gz\n' "$(shasum -a 256 "$MIRROR/agent-secrets-v0.1.1.tar.gz" | awk '{print $1}')" > "$MIRROR/agent-secrets-v0.1.1.tar.gz.sha256"
   printf 'i am a file\n' > "$AGENT_SECRETS_HOME/bin"                    # ~/bin is a regular FILE
   run env AGSEC_MOCK_DL_DIR="$MIRROR" AGENT_SECRETS_BASE_URL="https://mirror.example" \
     bash -c "bash '$REPO_ROOT/install.sh' </dev/null"

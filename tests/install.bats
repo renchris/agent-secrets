@@ -7,7 +7,7 @@ load test_helper
 # Build a real runtime tarball into a mock "mirror" dir the curl mock serves (AGSEC_MOCK_DL_DIR).
 # Exports: TAG, PKG (basename), MIRROR (dir). SHA of the built tarball → $BUILT_SHA.
 _build_mirror() {
-  TAG="v0.1.0"; PKG="agent-secrets-${TAG}.tar.gz"
+  TAG="v0.1.1"; PKG="agent-secrets-${TAG}.tar.gz"
   MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/agsec-mirror.XXXXXX")"
   ( cd "$REPO_ROOT" && git archive --prefix="agent-secrets-${TAG}/" HEAD -o "$MIRROR/$PKG" )
   BUILT_SHA="$(shasum -a 256 "$MIRROR/$PKG" | awk '{print $1}')"

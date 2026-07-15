@@ -25,7 +25,7 @@ if [ -z "${AGSEC_REEXECED:-}" ] && { [ -z "${BASH_VERSION:-}" ] || shopt -qo pos
   # curl-pipe case ($0 is "sh", no file): re-fetch from the pinned raw-git channel and hand to bash.
   # Capture first so a failed re-fetch fails LOUD — `bash -c "$(curl…)"` inline would silently run an
   # empty program (exit 0) on a network error, a no-op masquerading as success.
-  _agsec_tag="v0.1.0"; _agsec_repo="renchris/agent-secrets"
+  _agsec_tag="v0.1.1"; _agsec_repo="renchris/agent-secrets"
   _agsec_self_url="${AGENT_SECRETS_INSTALL_URL:-https://raw.githubusercontent.com/${_agsec_repo}/${_agsec_tag}/install.sh}"
   _agsec_src="$(curl -fsSL "$_agsec_self_url")" || _agsec_src=""
   [ -n "$_agsec_src" ] || { printf 'ERROR: could not re-fetch install.sh to re-exec under bash. Re-run the README one-liner with bash (not sh) — it curl-pipes this URL: %s\n' "$_agsec_self_url" >&2; exit 1; }
@@ -39,7 +39,7 @@ main() {
   # The tag is PINNED — never `main` (a moving ref is an unreviewed-code RCE). Repo-jacking guard:
   # if this project is ever renamed, the OLD GitHub name MUST be retained (a freed name can be
   # re-registered by an attacker and would serve this exact URL).
-  local PINNED_TAG="v0.1.0"
+  local PINNED_TAG="v0.1.1"
   local REPO="renchris/agent-secrets"   # keep the old name reserved forever on any future rename
   local BASE_URL="${AGENT_SECRETS_BASE_URL:-https://github.com/${REPO}}"
   # EXPECTED_SHA256 is BAKED IN at release-tag time by the release runbook (README "Cut a release").

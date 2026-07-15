@@ -28,8 +28,8 @@ agsec_help_spec() {
 	exit	0	success
 	exit	1	runtime error (see the message; names-only)
 	exit	2	usage error / unknown command / reserved verb
-	seealso	https://github.com/renchris/agent-secrets/blob/v0.1.0/AGENTS.md	agent-facing usage guide (read this first if you are an agent)
-	seealso	https://github.com/renchris/agent-secrets/blob/v0.1.0/SECURITY.md	threat model + the honest ceiling
+	seealso	https://github.com/renchris/agent-secrets/blob/v0.1.1/AGENTS.md	agent-facing usage guide (read this first if you are an agent)
+	seealso	https://github.com/renchris/agent-secrets/blob/v0.1.1/SECURITY.md	threat model + the honest ceiling
 setup	synopsis	agent-secrets setup [--restore|--keychain]
 setup	summary	One-time onboarding wizard: generate your key, add your first secret, wire your tools.
 setup	desc	Idempotent — safe to re-run; detects an existing install and never mints a second key. Screens: preflight → key ceremony (Keychain + file fallback + recovery leg) → first secret → wire wrappers/apiKeyHelper → health check → done. --restore recovers on a new machine: paste your saved age key to re-establish custody over a restored store copy (verifies decryption; never mints a new key). --keychain re-runs ONLY the Keychain populate step: macOS Sequoia's security(1) takes the key via an interactive /dev/tty paste, so a non-interactive first run leaves custody on the 0600-file fallback (doctor: "degraded (file custody)") — run this once in a real terminal to restore prompt-free Keychain custody. Refuses to run inside an agent session (transcripts are secret-bearing) unless AGENT_SECRETS_UNATTENDED=1.
