@@ -54,11 +54,31 @@ _row() {
   if [ "$SUMMARY" = 1 ] && [ "$st" != bad ] && [ "$tier" != core ]; then
     SUMMARY_HIDDEN=$((SUMMARY_HIDDEN + 1)); return 0
   fi
-  case "$st" in
-    ok)   agsec_ok   "[$cat] $name${detail:+ — $detail}" ;;
-    attn) agsec_attn "[$cat] $name${detail:+ — $detail}" ;;
-    bad)  agsec_bad  "[$cat] $name${detail:+ — $detail}" ;;
-  esac
+  # 80-column legibility (F5): word-wrap long rows, continuations indented under the text column.
+  # Presentation ONLY — the JSON branch above already returned with the unwrapped detail, and the
+  # wrap threshold leaves 2 columns for the status glyph prefix.
+  local line="[$cat] $name${detail:+ — $detail}"
+  if [ "${#line}" -le 78 ]; then
+    case "$st" in
+      ok)   agsec_ok   "$line" ;;
+      attn) agsec_attn "$line" ;;
+      bad)  agsec_bad  "$line" ;;
+    esac
+    return 0
+  fi
+  local _first=1 _chunk
+  printf '%s\n' "$line" | fold -s -w 76 | { while IFS= read -r _chunk; do
+    if [ "$_first" = 1 ]; then
+      case "$st" in
+        ok)   agsec_ok   "$_chunk" ;;
+        attn) agsec_attn "$_chunk" ;;
+        bad)  agsec_bad  "$_chunk" ;;
+      esac
+      _first=0
+    else
+      printf '    %s\n' "$_chunk"
+    fi
+  done; }
 }
 
 # Guarded value capture — contains a die-stub/absent-lib `exit` inside a subshell so doctor

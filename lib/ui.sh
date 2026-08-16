@@ -46,7 +46,7 @@ ui_menu() {
 # (caller pipes it onward, e.g. `ui_read_secret "…" | store_add NAME`). Echoes nothing to the tty.
 ui_read_secret() {
   local prompt="${1:-Value}" val
-  printf '%s%s%s\n' "$C_DIM" "  (you won't see anything as you type or paste — that's on purpose; Cmd-V pastes here)" "$C_RESET" >&2
+  printf '%s%s%s\n' "$C_DIM" "  (nothing appears as you type or paste — that's on purpose; Cmd-V works)" "$C_RESET" >&2
   printf '%s: ' "$prompt" >&2
   IFS= read -rs val || true
   printf '\n' >&2

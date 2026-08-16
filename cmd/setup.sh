@@ -26,7 +26,8 @@ _preflight() {
   ui_say "Recommended order (prefer a CLI login over a raw token in the store):"
   ui_say "  1. gh auth login     — GitHub (also enables: agent-secrets backup)"
   ui_say "  2. az login          — Azure"
-  ui_say "  3. agent-secrets add — only for keys that must live in env (e.g. ANTHROPIC_API_KEY)"
+  ui_say "  3. agent-secrets add — only for keys that must live in env"
+  ui_say "     (e.g. ANTHROPIC_API_KEY)"
   ui_say "  Install recipes for gh/az (brew-less):  agent-secrets help onboarding"
 }
 
@@ -237,8 +238,9 @@ _first_secret() {
 # own alert. Value via STDIN/ui_read_secret — names-only. Skipped in UNATTENDED (tests keep the decoy).
 _arm_canary() {
   [ -n "$UNATTENDED" ] && return 0
-  ui_say "The breach canary ($AGENT_SECRETS_CANARY_NAME) ships as an INERT decoy — it detects a"
-  ui_say "whole-store sweep only once you arm it with a real tripwire token."
+  ui_say "The breach canary ($AGENT_SECRETS_CANARY_NAME) ships as an"
+  ui_say "INERT decoy — it detects a whole-store sweep only once you arm it"
+  ui_say "with a real tripwire token."
   if _confirm "Arm it now? (paste a token you minted at canarytokens.org, or skip)" n; then
     # Same forgiving ladder as the first secret (F3): an empty paste re-prompts then skips —
     # it must never abort the wizard at [4/7].
@@ -246,7 +248,8 @@ _arm_canary() {
       ui_ok "canary armed — a whole-store sweep now trips your alert"
     fi
   else
-    ui_say "Skipped — arm later with:  agent-secrets add $AGENT_SECRETS_CANARY_NAME  (doctor will remind you)."
+    ui_say "Skipped — arm later (doctor will remind you) with:"
+    ui_say "  agent-secrets add $AGENT_SECRETS_CANARY_NAME"
   fi
 }
 
@@ -303,12 +306,16 @@ _wire_tools() {
       ui_ok "wired apiKeyHelper into settings.json (reversible)"
     else
       rm -f "$sj.new"
-      ui_warn "could not wire apiKeyHelper — $sj is not valid JSON (fix it, then re-run: agent-secrets setup)"
+      ui_warn "could not wire apiKeyHelper — not valid JSON:"
+      ui_say  "  $sj"
+      ui_say  "  Fix it, then re-run:  agent-secrets setup"
     fi
   else
-    ui_warn "jq missing — skipped wiring apiKeyHelper into settings.json; install jq (the installer vendors it), then re-run: agent-secrets setup"
+    ui_warn "jq missing — skipped wiring apiKeyHelper into settings.json."
+    ui_say  "  Install jq (the installer vendors it), then re-run:"
+    ui_say  "  agent-secrets setup"
   fi
-  ui_say "The Dock Cursor stays secret-free on purpose — use 'cursor-agent' for agent work."
+  ui_say "The Dock Cursor stays secret-free — use 'cursor-agent' for agent work."
 }
 
 _done_screen() {
@@ -317,20 +324,21 @@ _done_screen() {
   ui_say "  agent-secrets add <NAME>    — add a secret (value never shown)"
   ui_say "  agent-secrets run -- <cmd>  — run a command with secrets injected"
   ui_say "  agent-secrets doctor        — health check"
-  ui_say "Off-machine backup: run  agent-secrets backup  (doctor tracks whether you have one)."
+  ui_say "Off-machine backup:  agent-secrets backup   (doctor tracks it)."
   # Custody hint lands HERE because this is the moment the user can act on it: on macOS Sequoia the
   # wizard's Keychain paste is skipped in any non-interactive pass, leaving file custody in effect.
   case "$(kc_status 2>/dev/null || true)" in
     degraded*)
       ui_say ""
-      ui_say "Your key runs on the 0600-file fallback (fully supported). Restore prompt-free"
-      ui_say "Keychain custody anytime, in a real terminal:  agent-secrets setup --keychain" ;;
+      ui_say "Your key runs on the 0600-file fallback (fully supported). Get"
+      ui_say "prompt-free Keychain custody anytime, in a real terminal:"
+      ui_say "  agent-secrets setup --keychain" ;;
   esac
   # Next steps: gh/az are deliberately NOT vendored (different lifecycle) — point at the self-contained
   # in-product recipes so a user who needs GitHub/Azure isn't left hunting blog posts. `help onboarding`
   # is the SSOT (docs/ is not shipped in the tarball); POST_INSTALL.md is the web copy. (P0-1)
   ui_say ""
-  ui_say "Next steps — GitHub / Azure / more keys (brew-less recipes + the token ladder):"
+  ui_say "Next steps — GitHub / Azure / more keys (brew-less recipes):"
   ui_say "  agent-secrets help onboarding"
   # Cursor has no stable file-based global-rules path, so this is the one manual step left; hand the user
   # the exact text AND (P0-2) put it on the clipboard so it's a single paste, not a retype. Claude Code is
@@ -396,11 +404,17 @@ _kc_populate() {
 _kc_offer() {
   [ -n "$UNATTENDED" ] && return 0
   [ "$(kc_status 2>/dev/null || echo missing)" = primary ] && return 0
-  if _confirm "Populate your login Keychain now for prompt-free reads? (paste your key once)" y; then
+  if _confirm "Populate your login Keychain now for prompt-free reads?" y; then
     if _kc_populate; then ui_ok "Keychain custody — primary (prompt-free reads)"
-    else ui_warn "the Keychain write didn't take on this macOS — file custody remains (fully supported); enable it later in Terminal.app: agent-secrets setup --keychain"; fi
+    else
+      ui_warn "the Keychain write didn't take on this macOS — file custody"
+      ui_say  "  remains (fully supported). Enable it later, in Terminal.app:"
+      ui_say  "  agent-secrets setup --keychain"
+    fi
   else
-    ui_say "Declined — running on the 0600 file fallback (fully supported). Enable prompt-free Keychain custody anytime: agent-secrets setup --keychain"
+    ui_say "Declined — running on the 0600 file fallback (fully supported)."
+    ui_say "Enable prompt-free Keychain custody anytime:"
+    ui_say "  agent-secrets setup --keychain"
   fi
 }
 
