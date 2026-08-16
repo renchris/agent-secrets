@@ -362,8 +362,20 @@ _kc_populate() {
       # Scrub the private key off the clipboard on ANY exit — a ^C at the macOS double-prompt would
       # otherwise leave it there for the next paste/clipboard-history reader.
       trap 'printf "" | pbcopy 2>/dev/null || true' EXIT
-      pbcopy <"$kf"; ui_say "Your key is on the clipboard — paste it at the hidden prompt (macOS asks twice)."
-    else ui_say "Paste your age PRIVATE key (from your password manager) at the hidden prompt (macOS asks twice)."; fi
+      pbcopy <"$kf"
+      ui_say "Your key is on the clipboard. macOS now asks for it TWICE, at a"
+    else
+      # Post-rebuild the password manager holds the RECOVERY key; the PRIMARY lives in the file.
+      ui_say "Copy your PRIMARY key line (AGE-SECRET-KEY-…) from:"
+      ui_say "  $kf"
+      ui_say "macOS then asks for it TWICE, at a"
+    fi
+    # The affordance the first run lacked (F4): security(1)'s prompt echoes nothing and moves no
+    # cursor, so it reads as a hang — the author's live question was "where is this hidden prompt".
+    ui_say "prompt that looks exactly like this and shows NOTHING as you paste:"
+    ui_say "  password data for new item:"
+    ui_say "That blankness is normal. Cmd-V, press Enter — then once more when"
+    ui_say "it re-asks."
   fi
   local wrote=1
   if security add-generic-password -U -a "${USER:-agent}" -s "$AGENT_SECRETS_KC_SERVICE" -w 2>/dev/null; then
