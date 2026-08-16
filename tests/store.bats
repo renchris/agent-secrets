@@ -109,9 +109,21 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
 
 @test "add rejects an EMPTY value (fail-closed — the curl|bash empty-secret bug)" {
   setup_store
-  run bash -c "printf '' | bash '$REPO_ROOT/bin/agent-secrets' add EMPTY_ONE"
+  # Pin the NON-agent diagnosis: the bats harness may itself run inside an agent session, which
+  # would otherwise route to the F7 in-session message below.
+  run bash -c "printf '' | env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash '$REPO_ROOT/bin/agent-secrets' add EMPTY_ONE"
   [ "$status" -eq 2 ]
   [[ "$output" == *"NON-EMPTY"* ]] || return 1
   run agsec list
   [[ "$output" != *"EMPTY_ONE"* ]] || return 1     # never stored
+}
+
+@test "F7: the empty-STDIN refusal inside an AGENT session names the real remedy (a real terminal), still exit 2" {
+  setup_store
+  run bash -c "printf '' | env CLAUDECODE=1 bash '$REPO_ROOT/bin/agent-secrets' add EMPTY_TWO"
+  [ "$status" -eq 2 ]                              # the refusal GATING is unchanged (F7 is copy-only)
+  [[ "$output" == *"real terminal"* ]] || return 1                 # the remedy is in the LOUD line
+  [[ "$output" == *"EXISTING variable"* ]] || return 1             # the safe piping path is named
+  run agsec list
+  [[ "$output" != *"EMPTY_TWO"* ]] || return 1     # never stored
 }

@@ -82,6 +82,12 @@ store_add() {
   # placeholder + receive both pipe non-empty values, so this rejects only the accidental-empty case.
   if [ -z "$value" ]; then
     unset value
+    # Inside an agent session the LOUD line must carry the real remedy (F7): pre-fix, "got end of
+    # input" dominated while the actual fix — a real terminal, or piping from an EXISTING variable —
+    # sat in add.sh's quiet note:. Same refusal, same exit code; only the diagnosis changed.
+    if agsec_in_agent_session; then
+      agsec_die "no value arrived on STDIN — this agent session has no usable TTY for a hidden prompt. Ask the USER to run 'agent-secrets add $name' in a real terminal, or pipe from an EXISTING variable/file (never a literal in the command)." 2
+    fi
     # The feedback failure: a user pasted `printf '%s' "$YOUR_REAL_ANTHROPIC_KEY" | agent-secrets add …`
     # verbatim; the unset placeholder made stdin empty. Name the docs-literal cause AND the hidden-prompt
     # escape hatch (no pipe) — never just "got end of input", which reads as a plumbing bug.
