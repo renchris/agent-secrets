@@ -39,11 +39,16 @@ _key_ceremony() {
   # fell through to `age-keygen -o`, which REFUSES to overwrite the existing key (exit 1); the
   # `2>/dev/null` hid the error and `set -e` aborted the wizard silently → permanent onboarding lockout.
   if [ -s "$kf" ]; then
-    # NOTE: do NOT sweep a lingering recovery.key here. The go-forward strand case is covered by the
-    # EXIT trap below; sweeping on every re-onboard would delete a recovery key a user DELIBERATELY kept
-    # (declined the "saved it offline?" confirm, which leaves it with a "delete it yourself" warning).
+    # NOTE: do NOT sweep a lingering recovery.key here. A recovery.key on disk means a previous
+    # run's handoff never VERIFIED (interrupt, or the user kept it) — deleting it would destroy a
+    # possibly-unsaved private key (the F2 loss). Instead, resume the verified handoff below.
     [ -s "$pf" ] || age-keygen -y "$kf" >"$pf"      # re-derive the public recipient when it's absent
-    ui_ok "key already exists — not minting a second one"; kc_write_selector; store_init; return 0
+    ui_ok "key already exists — not minting a second one"; kc_write_selector; store_init
+    if [ -z "$UNATTENDED" ] && [ -s "$cfg/recovery.key" ]; then
+      _two_key_model
+      _recovery_handoff "$cfg/recovery.key"
+    fi
+    return 0
   fi
   if [ -f "$kf" ]; then rm -f "$kf"; fi             # clear a 0-byte/partial key from an interrupted mint (age-keygen -o is O_EXCL)
   # Strand guard: a store already present + no key = a restore scenario. Minting a NEW key here would
@@ -56,36 +61,99 @@ _key_ceremony() {
   # Same O_EXCL hardening as the primary key above: clear a stale/partial recovery.key so age-keygen -o
   # (which REFUSES to overwrite) can recreate it, and drop 2>/dev/null so a real keygen failure surfaces
   # instead of silently aborting the wizard under set -e (the exact wedge the primary key mint had).
-  local rec="$cfg/recovery.key" rec_keep=0; [ -f "$rec" ] && rm -f "$rec"
-  # Strand + clipboard guard: an interrupt anywhere in the ceremony below — ^C at the macOS Keychain
-  # double-prompt, SIGTERM, or a set -e/agsec_die death — must never leave the recovery PRIVATE key on
-  # disk OR the primary key on the clipboard. A single EXIT trap covers all three on bash 3.2 (verified);
-  # %q-bake the path since the local is out of scope when the trap fires during unwind (project memory).
-  # shellcheck disable=SC2064  # expand-NOW via the pre-built %q string is DELIBERATE (see above)
-  trap "rm -f $(printf '%q' "$rec") 2>/dev/null; command -v pbcopy >/dev/null 2>&1 && printf '' | pbcopy 2>/dev/null || true" EXIT
+  local rec="$cfg/recovery.key"; [ -f "$rec" ] && rm -f "$rec"   # clear a stale partial (primary absent ⇒ no live handoff pending)
+  # Clipboard guard: an interrupt anywhere in the ceremony below — ^C at the macOS Keychain
+  # double-prompt, SIGTERM, or a set -e/agsec_die death — must never leave key material on the
+  # clipboard. The recovery PRIVATE key deliberately STAYS on disk on an interrupt (0600, beside
+  # age.key): the pre-rebuild trap deleted it, which destroyed a possibly-unsaved key (F2's loss
+  # class); now the next setup run resumes the verified handoff, and doctor reminds meanwhile.
+  trap "command -v pbcopy >/dev/null 2>&1 && printf '' | pbcopy 2>/dev/null || true" EXIT
   age-keygen -o "$rec"; age-keygen -y "$rec" >"$cfg/recovery.pub"
   kc_write_selector
-  ui_ok "generated your key + a recovery key (the store encrypts to both)"
+  ui_ok "generated your two keys (the store encrypts to both)"
   if [ -z "$UNATTENDED" ]; then
-    if agsec_have pbcopy; then pbcopy <"$(agsec_age_key_file)"; ui_say "Your PRIVATE key is on the clipboard — paste it into your password manager now."; fi
-    _confirm "Saved it to your password manager?" y || ui_warn "save it before continuing — it's the only way to recover your secrets"
-    ui_say "Paste back your PUBLIC key (age1...) from the note to confirm you saved it:"
-    local pb; IFS= read -r pb || true
-    if [ "$pb" = "$(cat "$(agsec_age_pub_file)")" ]; then ui_ok "verified"; else ui_warn "no match — the real check is the restore drill later"; fi
-    # Deliver the RECOVERY key (the store encrypts to recovery.pub, so the user MUST hold its private
-    # half — without this the second recipient is permanently unusable). Mirror the primary-key handoff:
-    # clipboard → password manager, then a confirm. (Login-Keychain custody is populated AFTER the whole
-    # ceremony by _kc_offer — a clean, read-back-verified re-offer that reads the key fresh from the 0600
-    # file. Deferring it here means the ceremony never silently degrades custody, and by the time we scrub
-    # the clipboard below it holds only the recovery key.)
-    if agsec_have pbcopy; then pbcopy <"$rec"; ui_say "Your RECOVERY key is now on the clipboard — save it offline (password manager or a printed sheet)."
-    else ui_say "Copy $rec to offline/printed storage now — it is removed once you confirm."; fi
-    _confirm "Saved your RECOVERY key offline?" y || { rec_keep=1; ui_warn "recovery.key left at $rec — save it offline, then delete the file yourself"; }
-    agsec_have pbcopy && printf '' | pbcopy    # scrub the recovery key off the clipboard
+    # The PRIMARY key needs NO save ceremony: it lives on this Mac (0600 file; Keychain via the
+    # offer after this ceremony) and the RECOVERY key covers the dead-Mac case. Pre-rebuild, the
+    # primary ALSO transited the clipboard "for your password manager" plus a public-key echo-back
+    # that verified nothing — two prompts deleted, one real verification below instead (F1/F2).
+    _two_key_model
+    _recovery_handoff "$rec"
+  else
+    rm -f "$rec"       # UNATTENDED (tests/CI, fake store): no interactive handoff; keep recovery.pub only
   fi
-  [ "$rec_keep" -eq 1 ] || rm -f "$rec"        # remove the on-disk recovery key unless the user explicitly asked to keep it
-  trap - EXIT                                  # deliberate cleanup done — disarm the strand/clipboard guard
+  trap - EXIT                                  # ceremony done — disarm the clipboard guard
   store_init
+}
+
+# The two-key mental model, stated BEFORE the user is asked to act on it (F6). One job each.
+_two_key_model() {
+  ui_say ""
+  ui_say "You now have two keys, one job each:"
+  ui_say "  PRIMARY  — decrypts day-to-day. Lives ON this Mac (file + Keychain)."
+  ui_say "             Nothing for you to save; it dies with this Mac."
+  ui_say "  RECOVERY — your way back in when this Mac is gone. Only useful OFF"
+  ui_say "             this Mac (password manager / printed sheet), paired with"
+  ui_say "             an off-machine store copy:  agent-secrets backup"
+}
+
+# RECOVERY-key handoff (F1+F2 rebuild). Invariants:
+#   * The 0600 file at $1 is the AUTHORITATIVE copy and stays on disk until the user PROVES the
+#     offline copy — so a screenshot, a stray Cmd-C, or an interrupt can never destroy the only
+#     copy (the measured first-run loss). The clipboard is a CONVENIENCE copy, re-issuable at will.
+#   * Deletion fires ONLY on a verified paste-back. Every verification read happens with a
+#     freshly-SCRUBBED clipboard, so a match proves the key came from somewhere durable (the
+#     password manager), not from the copy this wizard just issued — unlike the old public-key
+#     echo-back, which verified nothing (F2).
+#   * Two empty entries = keep the file and move on (doctor carries the reminder row). Names-only:
+#     the key transits pbcopy and a hidden read; it is never echoed, logged, or put in argv.
+_recovery_handoff() {
+  local rec="$1" line try pasted was_empty
+  line="$(grep -m1 '^AGE-SECRET-KEY-' "$rec" 2>/dev/null)" || true
+  if [ -z "$line" ]; then ui_warn "recovery.key unreadable at $rec — leaving it in place"; return 0; fi
+  ui_say ""
+  ui_say "Save the RECOVERY key in your password manager (or on paper) NOW."
+  if agsec_have pbcopy; then
+    printf '%s' "$line" | pbcopy
+    ui_say "It is on the clipboard. It also stays in a file on disk until you"
+    ui_say "prove it is saved — so losing the clipboard costs nothing."
+  else
+    ui_say "Copy the AGE-SECRET-KEY line from this file (kept until you prove"
+    ui_say "it is saved):"
+    ui_say "  $rec"
+  fi
+  for try in 1 2; do
+    agsec_have pbcopy && printf '' | pbcopy    # scrub: the paste-back must come from the SAVED copy
+    ui_say ""
+    ui_say "Clipboard cleared. Prove the save: copy the key from your password"
+    ui_say "manager entry (not this screen) and paste it below."
+    pasted="$(ui_read_secret 'RECOVERY key (from where you saved it)')"
+    was_empty=0; [ -n "$pasted" ] || was_empty=1
+    if [ "$pasted" = "$line" ]; then
+      unset pasted
+      ui_ok "recovery key verified saved — removing the on-disk copy (offline is its home)"
+      rm -f "$rec"
+      return 0
+    fi
+    unset pasted
+    if [ "$try" -eq 1 ]; then
+      if [ "$was_empty" -eq 1 ]; then ui_warn "nothing was pasted."; else ui_warn "that didn't match."; fi
+      if agsec_have pbcopy; then
+        printf '%s' "$line" | pbcopy
+        ui_say "  The key is back on the clipboard — save it in the password"
+        ui_say "  manager now, then prove it once more. (Enter again keeps the"
+        ui_say "  file on disk instead.)"
+      else
+        ui_say "  Copy it again from  $rec"
+        ui_say "  save it, then prove it once more. (Enter again keeps the file.)"
+      fi
+    fi
+  done
+  agsec_have pbcopy && printf '' | pbcopy      # scrub — the file remains the retrievable copy
+  ui_warn "not verified — keeping the recovery key ON DISK at:"
+  ui_say  "  $rec"
+  ui_say  "  Save it offline, then delete the file (doctor will remind you):"
+  ui_say  "  rm $rec"
+  return 0
 }
 
 # Interactive value entry with a forgiving ladder (F3): an EMPTY entry explains the likely
@@ -389,7 +457,7 @@ main() {
     partial) ui_say "A previous setup was interrupted — continuing (idempotent; your key is kept)." ;;
   esac
   ui_step 2 7 "Preflight";        _preflight;      _state preflight
-  ui_step 3 7 "Your one key";     _key_ceremony;   _kc_offer;   _state key
+  ui_step 3 7 "Your keys";        _key_ceremony;   _kc_offer;   _state key
   ui_step 4 7 "Your first secret"
   # Guarded (F3): the first-secret screen is OPTIONAL onboarding — no failure here may strand
   # screens 5–7 (wrappers, apiKeyHelper, settings.json), which are what make the install work.
