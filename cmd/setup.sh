@@ -88,6 +88,32 @@ _key_ceremony() {
   store_init
 }
 
+# Interactive value entry with a forgiving ladder (F3): an EMPTY entry explains the likely
+# cause (an empty/scrubbed clipboard — setup scrubs it after key steps, so the Cmd-V the
+# wizard itself taught two screens earlier can paste nothing) and re-prompts ONCE; a second
+# empty entry SKIPS the secret (store it later via `add`) instead of aborting; a store_add
+# refusal (fail-closed stays) warns and continues. Screen [4/7] must always reach [5/7].
+# rc: 0 = stored · 1 = not stored (already explained). Value stays in-process (names-only).
+_read_secret_store() {
+  local name="$1" prompt="${2:-Value for $1}" val
+  val="$(ui_read_secret "$prompt")"
+  if [ -z "$val" ]; then
+    ui_warn "nothing was entered. If you pasted: the clipboard may be empty —"
+    ui_say  "  setup scrubs it after key steps. Copy the value again and paste"
+    ui_say  "  here, or press Enter once more to skip this secret."
+    val="$(ui_read_secret "$prompt")"
+  fi
+  if [ -z "$val" ]; then
+    ui_warn "skipped — store it anytime:  agent-secrets add $name"
+    return 1
+  fi
+  if printf '%s' "$val" | store_add "$name"; then unset val; return 0; fi
+  unset val
+  ui_warn "could not store $name (see the error above) — setup continues;"
+  ui_say  "  store it later with:  agent-secrets add $name"
+  return 1
+}
+
 _first_secret() {
   local name val
   if [ -n "$UNATTENDED" ]; then
@@ -108,12 +134,34 @@ _first_secret() {
       val="$AGENT_SECRETS_UNATTENDED_PLACEHOLDER"
     fi
     [ -n "$val" ] || val="$AGENT_SECRETS_UNATTENDED_PLACEHOLDER"   # never feed store_add an empty value (it fail-closes)
-    printf '%s' "$val" | store_add "$name"; unset val; ui_ok "stored $name"; return 0
+    # Explicit die (not bare set -e) so an UNATTENDED seed failure stays a hard CI failure even
+    # when the caller runs this screen inside an errexit-suppressed guard (see main).
+    printf '%s' "$val" | store_add "$name" || agsec_die "unattended seed failed for $name — see the error above"
+    unset val; ui_ok "stored $name"; return 0
   fi
-  name="$(ui_menu 'Which secret first?' ANTHROPIC_API_KEY OPENAI_API_KEY 'custom')"
-  if [ "$name" = custom ]; then printf 'name: ' >&2; IFS= read -r name || true; fi
-  ui_read_secret "Value for $name" | store_add "$name"
-  ui_ok "stored $name (value never shown)"
+  name="$(ui_menu 'Which secret first? (you can finish setup without one)' ANTHROPIC_API_KEY OPENAI_API_KEY 'custom' 'skip for now')"
+  case "$name" in
+    'skip for now') ui_say "Skipped — store one anytime:  agent-secrets add <NAME>"; return 0 ;;
+  esac
+  if [ "$name" = custom ]; then
+    # Validate the name HERE with a re-prompt — pre-fix, a bad name reached store_add, whose
+    # die aborted the whole wizard at [4/7] (the F3 failure class). EOF (Ctrl-D) skips.
+    while :; do
+      printf 'name: ' >&2
+      if ! IFS= read -r name; then
+        ui_warn "no name received — skipping; store one anytime:  agent-secrets add <NAME>"
+        return 0
+      fi
+      case "$name" in
+        '') ui_warn "enter a name (or Ctrl-D to skip this secret)" ;;
+        [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*)
+          ui_warn "invalid name '$name' — letters, digits, underscore only"
+          ui_say  "  (must start with a letter or _), e.g. CODA_API_TOKEN" ;;
+        *) break ;;
+      esac
+    done
+  fi
+  if _read_secret_store "$name" "Value for $name"; then ui_ok "stored $name (value never shown)"; fi
 }
 
 # Offer to ARM the breach canary. Until armed it is an inert decoy; arming = replacing the placeholder
@@ -124,8 +172,11 @@ _arm_canary() {
   ui_say "The breach canary ($AGENT_SECRETS_CANARY_NAME) ships as an INERT decoy — it detects a"
   ui_say "whole-store sweep only once you arm it with a real tripwire token."
   if _confirm "Arm it now? (paste a token you minted at canarytokens.org, or skip)" n; then
-    ui_read_secret "Paste your canary/tripwire token" | store_add "$AGENT_SECRETS_CANARY_NAME"
-    ui_ok "canary armed — a whole-store sweep now trips your alert"
+    # Same forgiving ladder as the first secret (F3): an empty paste re-prompts then skips —
+    # it must never abort the wizard at [4/7].
+    if _read_secret_store "$AGENT_SECRETS_CANARY_NAME" "Paste your canary/tripwire token"; then
+      ui_ok "canary armed — a whole-store sweep now trips your alert"
+    fi
   else
     ui_say "Skipped — arm later with:  agent-secrets add $AGENT_SECRETS_CANARY_NAME  (doctor will remind you)."
   fi
@@ -339,11 +390,20 @@ main() {
   esac
   ui_step 2 7 "Preflight";        _preflight;      _state preflight
   ui_step 3 7 "Your one key";     _key_ceremony;   _kc_offer;   _state key
-  ui_step 4 7 "Your first secret";_first_secret;   _arm_canary; _state secret
+  ui_step 4 7 "Your first secret"
+  # Guarded (F3): the first-secret screen is OPTIONAL onboarding — no failure here may strand
+  # screens 5–7 (wrappers, apiKeyHelper, settings.json), which are what make the install work.
+  # The || also suppresses errexit inside, so an unforeseen refusal degrades to a warn + skip.
+  # UNATTENDED seed failures still hard-die inside _first_secret (explicit agsec_die).
+  _first_secret || ui_warn "first secret not stored — add one anytime:  agent-secrets add <NAME>"
+  _arm_canary   || ui_warn "canary not armed — arm anytime:  agent-secrets add $AGENT_SECRETS_CANARY_NAME"
+  _state secret
   ui_step 5 7 "Wire your tools";  _wire_tools;     _state wired
   # --summary so the wizard ends on core custody/toolchain/store/injection status instead of ~7 aspirational
   # ⚠ (canary/backup/discovery/hygiene/…) that read as "broken" though exit is 0. Full report: `doctor`.
   ui_step 6 7 "Health check";     bash "$AGENT_SECRETS_CMD/doctor.sh" --summary || true
   ui_step 7 7 "Done";             _done_screen;    _state 'done'
 }
-main "$@"
+# Execute-only guard: `bash cmd/setup.sh` (the dispatcher) runs the wizard; SOURCING this file
+# (the bats regression tests) only loads the screen functions for direct, deterministic testing.
+case "${BASH_SOURCE[0]}" in "$0") main "$@" ;; esac
