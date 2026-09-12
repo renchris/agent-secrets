@@ -203,11 +203,19 @@ when no toolchain is installed) and treats any copy outside `/usr/bin` as real b
 than as usable. Five locks in `tests/one_command.bats`, including a precondition asserting that
 `agsec_have git` says yes while `agsec_have_devtool git` says no.
 
+### Target platform — Apple silicon (operator ruling, 2026-09-12)
+
+**Intel (`x86_64`) is out of scope, not an open gap.** Asked whether the fresh-macOS affirmation
+held, the operator ruled: *"you can presume its mac chip."* The verification above was performed on
+arm64, and that is the platform the claim covers.
+
+`deps.sh` keeps its pinned `x86_64` digests and the `deps_arch` mapping — they cost nothing, and
+removing them would break an Intel user for no gain — but no Intel Mac has executed a fetched
+binary, and this document does not assert that it works. If Intel ever becomes a target, that run is
+the thing to do; it is not a defect to chase now.
+
 ### What is NOT verified
 
-* **Intel (`x86_64`).** This Mac is arm64. `deps.sh` carries pinned `x86_64` digests and the arch
-  mapping, and `tests/install.bats` covers the mirror path, but no Intel Mac executed the fetched
-  binaries. Unknown, not asserted.
 * **The GitHub release-asset hop.** `v0.1.2` is unpublished, so the tool tarball came from a local
   `file://` mirror. That exercises the same curl + `shasum` + layout-guard code the production URL
   uses, and `age`/`sops`/`jq` *were* fetched over the real network from GitHub releases — but the
