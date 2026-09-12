@@ -55,10 +55,32 @@ questions; the installer chains straight into the setup wizard, which mints your
 first secret, and wires your tools:
 
 ```sh
-bash -c "$(curl -fsLS https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.2/install.sh)"
+curl -fsSL https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.2/install.sh -o /tmp/agent-secrets-install.sh && bash /tmp/agent-secrets-install.sh
 ```
 
-`curl … | bash` works identically — setup reads its prompts from your terminal, not from the pipe.
+<details>
+<summary>Why not the shorter <code>bash -c "$(curl …)"</code> form?</summary>
+
+Because it reports success when it did nothing. If the download fails for any reason — a flaky
+network, a proxy, a typo in the tag — the command substitution yields an empty string, `bash -c ""`
+runs an empty program, and **the shell exits 0**. Measured against a deliberately wrong tag:
+
+```
+$ bash -c "$(curl -fsLS .../v9.9.9/install.sh)"   ;  echo $?
+curl: (56) The requested URL returned error: 404
+0                                                     # ← "success"
+
+$ curl -fsSL .../v9.9.9/install.sh -o /tmp/x.sh && bash /tmp/x.sh   ;  echo $?
+curl: (56) The requested URL returned error: 404
+56                                                    # ← the truth
+```
+
+The form above short-circuits on a failed download, leaves the script where you can read it, and
+costs you nothing. `curl … | bash` has the same silent-success flaw and is not recommended either —
+though if you use it anyway, setup still works: it reads its prompts from your terminal, not from
+the pipe.
+
+</details>
 
 **There is exactly one case where it is two commands, and it is deliberate: a coding-agent session.**
 Run the same line inside Cursor or Claude Code and the tool installs completely, then stops before
@@ -102,7 +124,7 @@ touching your store.
 **Prefer to read it first?** A co-equal path:
 
 ```sh
-curl -fsLSO …/v0.1.2/install.sh
+curl -fsSLO …/v0.1.2/install.sh
 less install.sh     # read every line
 bash install.sh
 ```
