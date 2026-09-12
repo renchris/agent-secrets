@@ -25,7 +25,7 @@ if [ -z "${AGSEC_REEXECED:-}" ] && { [ -z "${BASH_VERSION:-}" ] || shopt -qo pos
   # curl-pipe case ($0 is "sh", no file): re-fetch from the pinned raw-git channel and hand to bash.
   # Capture first so a failed re-fetch fails LOUD — `bash -c "$(curl…)"` inline would silently run an
   # empty program (exit 0) on a network error, a no-op masquerading as success.
-  _agsec_tag="v0.1.1"; _agsec_repo="renchris/agent-secrets"
+  _agsec_tag="v0.1.2"; _agsec_repo="renchris/agent-secrets"
   _agsec_self_url="${AGENT_SECRETS_INSTALL_URL:-https://raw.githubusercontent.com/${_agsec_repo}/${_agsec_tag}/install.sh}"
   _agsec_src="$(curl -fsSL "$_agsec_self_url")" || _agsec_src=""
   [ -n "$_agsec_src" ] || { printf 'ERROR: could not re-fetch install.sh to re-exec under bash. Re-run the README one-liner with bash (not sh) — it curl-pipes this URL: %s\n' "$_agsec_self_url" >&2; exit 1; }
@@ -39,7 +39,7 @@ main() {
   # The tag is PINNED — never `main` (a moving ref is an unreviewed-code RCE). Repo-jacking guard:
   # if this project is ever renamed, the OLD GitHub name MUST be retained (a freed name can be
   # re-registered by an attacker and would serve this exact URL).
-  local PINNED_TAG="v0.1.1"
+  local PINNED_TAG="v0.1.2"
   local REPO="renchris/agent-secrets"   # keep the old name reserved forever on any future rename
   local BASE_URL="${AGENT_SECRETS_BASE_URL:-https://github.com/${REPO}}"
   # EXPECTED_SHA256 is BAKED IN at release-tag time by the release runbook (README "Cut a release").
@@ -83,11 +83,37 @@ main() {
   _die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
   _run()  { if [ "$DRY_RUN" -eq 1 ]; then _step "$*"; else _step "$*"; "$@"; fi; }
 
+  # Is this a coding-agent session? Inlined (common.sh is not sourced until after unpack) and kept
+  # identical in intent to agsec_in_agent_session — a transcript-bearing session must never be
+  # prompted for, or handed, secret material.
+  _agent_session() {
+    [ -n "${CLAUDECODE:-}" ] && return 0
+    [ -n "${CLAUDE_CODE:-}" ] && return 0
+    [ -n "${CURSOR_AGENT:-}" ] && return 0
+    [ -n "${CURSOR_TRACE_ID:-}" ] && return 0
+    case "${TERM_PROGRAM:-}" in *[Cc]ursor*) return 0 ;; esac
+    return 1
+  }
+
+  # `curl … | bash` binds stdin to the PIPE, so every `[ -t 0 ]` gate reads "no human here" while a
+  # real terminal sits in front of the user — which is how the most widely-known install idiom
+  # silently degraded into a two-command flow. Rebind stdin to the controlling terminal so the one
+  # command stays one command. NEVER inside an agent session: there /dev/tty is the agent's own pty
+  # and its transcript is secret-bearing, so that case still defers to a real terminal (below).
+  _attach_tty() {
+    [ -t 0 ] && return 0
+    _agent_session && return 1
+    ( exec 3</dev/tty; [ -t 3 ] ) 2>/dev/null || return 1
+    exec 0</dev/tty || return 1
+    [ -t 0 ]
+  }
+  _attach_tty || true
+
   # --- the plan (rendered identically for consent + dry-run) -------------------
   _render_plan() {
     _say ""
     _say "agent-secrets installer — this will:"
-    _say "  • ensure age, sops, gum, jq (reuse yours · Homebrew if present · else pinned, SHA-256-verified downloads — no sudo)"
+    _say "  • ensure age, sops, jq (reuse yours · Homebrew if present · else pinned, SHA-256-verified downloads — no sudo)"
     _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG, SHA-256 verified)"
     _say "  • symlink the command + wrappers into $BIN_DIR   (agent-secrets, claude-agent, cursor-agent, apiKeyHelper)"
     _say "  • add a marker-delimited PATH block to $RC_FILE${BASH_RC_FILE:+ (and $BASH_RC_FILE — your login shell is bash)}"
@@ -121,7 +147,11 @@ main() {
       printf '[Enter] continue · Ctrl-C stop: ' >&2; read -r reply || reply=""
     fi
   else
-    _say "(non-interactive stdin — proceeding with the plan above; run in a terminal to review step by step)"
+    if _agent_session; then
+      _say "(coding-agent session — proceeding with the plan above; the key ceremony defers to a real terminal)"
+    else
+      _say "(no terminal on stdin — proceeding with the plan above)"
+    fi
   fi
 
   # --- preflight: a regular file (or dangling symlink) where we need a directory --------------------
@@ -138,7 +168,7 @@ main() {
   done
 
   # --- toolchain: resolved AFTER unpack, from the tool's own lib/deps.sh -----------------------------
-  # (This USED to `brew install age sops gum jq` behind a sudo-gated Homebrew bootstrap — the #1
+  # (This USED to `brew install age sops jq` behind a sudo-gated Homebrew bootstrap — the #1
   #  corporate blocker in ONE_COMMAND_INSTALL_FEEDBACK.md. deps_ensure below now resolves each tool
   #  NO-SUDO: reuse a PATH copy → Homebrew if already present → else a pinned, SHA-256-verified static
   #  binary. It lives in lib/deps.sh, so it can only run once the tarball is unpacked — hence the move.)
@@ -277,7 +307,9 @@ main() {
   # Pin AGENT_SECRETS_BIN to the PATH command so the preview and the write share one abs-path (the
   # rendered rules reference THIS binary, not a PATH impostor).
   AGENT_SECRETS_BIN="$BIN_DIR/agent-secrets"; export AGENT_SECRETS_BIN
+  local DISCOVERY_OFFERED=0
   if [ -t 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+    DISCOVERY_OFFERED=1
     local _plan; _plan="$(agsec_discovery_plan)"
     if [ -z "$_plan" ]; then
       _say "  → no writable agent surfaces detected (or all are org/MDM-managed) — machine-wide discovery skipped"
@@ -314,26 +346,35 @@ main() {
   # read EOF at the hidden prompts and silently store an EMPTY first secret. UNATTENDED (tests/CI) still
   # runs it with fake values.
   if { agsec_in_agent_session || [ ! -t 0 ]; } && [ -z "${AGENT_SECRETS_UNATTENDED:-}" ]; then
-    _say "${C_GREEN}✓${C_RESET} agent-secrets is installed — one step left."
+    # ONE command, on its own line, with the ONE reason it could not run here. The previous version
+    # of this screen offered BOTH possible causes ("a coding-agent session, or a non-interactive
+    # install") though the code knows which, and always claimed the machine-wide discovery prompt
+    # had been skipped — false whenever it ran and the user answered it. Both are fixed here.
+    _say "${C_GREEN}✓${C_RESET} agent-secrets is installed. ${C_BOLD}One command left.${C_RESET}"
     _say ""
-    _say "The key ceremony was ${C_BOLD}not${C_RESET} run here (a coding-agent session, or a non-interactive"
-    _say "install with no terminal) on purpose: it mints your encryption key and takes your first"
-    _say "secret, which must not land in a transcript or be read from a dead pipe. Finish it in a ${C_BOLD}real terminal${C_RESET}:"
+    _say "Open Terminal.app (or iTerm) and run:"
     _say ""
-    _say "    ${C_BOLD}1.${C_RESET} open Terminal.app (or iTerm) — a new window picks up your PATH"
-    _say "    ${C_BOLD}2.${C_RESET} run:  ${C_BOLD}agent-secrets setup${C_RESET}"
+    _say "    ${C_BOLD}agent-secrets setup${C_RESET}"
     _say ""
-    _say "       (if the command isn't found yet, use the full path:"
-    _say "        ${BIN_DIR}/agent-secrets setup)"
+    if agsec_in_agent_session; then
+      _say "Not here, because this is a coding-agent session: setup mints your"
+      _say "encryption key and takes your first secret, and an agent transcript"
+      _say "is stored in plain text. Those must never meet."
+    else
+      _say "Not here, because no terminal is attached to this install, and the"
+      _say "wizard's hidden prompts would read end-of-input and store nothing."
+    fi
     _say ""
-    _say "    ${C_BOLD}3.${C_RESET} then, for GitHub / Azure / API keys (brew-less recipes + the token ladder):"
-    _say "        ${C_BOLD}agent-secrets help onboarding${C_RESET}"
+    _say "If the command is not found, that terminal predates the install."
+    _say "Open a new window, or run it by full path:"
+    _say "    ${BIN_DIR}/agent-secrets setup"
+    if [ "$DISCOVERY_OFFERED" -eq 0 ]; then
+      _say ""
+      _say "Skipped here: the opt-in that makes every coding agent on this Mac"
+      _say "aware of agent-secrets. Re-run this installer in a terminal to get it."
+    fi
     _say ""
-    _say "Optional: this piped install skipped the opt-in prompt that adds machine-wide"
-    _say "agent discovery to ~/.claude/CLAUDE.md — re-run the installer in that same"
-    _say "terminal if you want it (safe: the install is idempotent)."
-    _say ""
-    _say "Then you're done. Undo everything anytime with:  agent-secrets uninstall"
+    _say "Undo everything, anytime:  agent-secrets uninstall"
     return 0
   fi
   _say "Installed. Launching the setup wizard…"

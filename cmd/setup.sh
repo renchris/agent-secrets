@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# cmd/setup.sh — onboarding wizard. Screens 1–7 (installer owns screen-0 consent).
+# cmd/setup.sh — onboarding wizard. Six screens, numbered 1..6 from the wizard's OWN first
+# screen (the installer's consent gate is the installer's, not step 1 of this).
 # Interactive by default; AGENT_SECRETS_UNATTENDED=1 runs it non-interactively with fake values for
 # tests (accepts defaults, file custody, skips the clipboard/paste steps). Idempotent:
 # re-running never mints a second key. Names-only.
@@ -57,7 +58,17 @@ _key_ceremony() {
   if [ -s "$(agsec_store_file)" ]; then
     agsec_die "a store exists at $(agsec_store_file) but there is no key to decrypt it — run: agent-secrets setup --restore (paste your saved age key). Minting a new key would strand it."
   fi
-  age-keygen -o "$kf"; chmod 600 "$kf"              # NO 2>/dev/null — a real keygen failure must surface, not silently abort
+  # _keygen suppresses age-keygen's "Public key: age1…" stderr banner on SUCCESS (two unlabelled
+  # key lines printed before any explanation read as something the user must write down) while
+  # replaying the FULL stderr on failure — the reason the old code refused a bare 2>/dev/null.
+  _keygen() {
+    local out
+    if ! out="$(age-keygen -o "$1" 2>&1)"; then
+      printf '%s\n' "$out" >&2
+      agsec_die "could not generate a key at $1 — see the error above"
+    fi
+  }
+  _keygen "$kf"; chmod 600 "$kf"
   age-keygen -y "$kf" >"$pf"
   # Same O_EXCL hardening as the primary key above: clear a stale/partial recovery.key so age-keygen -o
   # (which REFUSES to overwrite) can recreate it, and drop 2>/dev/null so a real keygen failure surfaces
@@ -69,7 +80,7 @@ _key_ceremony() {
   # age.key): the pre-rebuild trap deleted it, which destroyed a possibly-unsaved key (F2's loss
   # class); now the next setup run resumes the verified handoff, and doctor reminds meanwhile.
   trap "command -v pbcopy >/dev/null 2>&1 && printf '' | pbcopy 2>/dev/null || true" EXIT
-  age-keygen -o "$rec"; age-keygen -y "$rec" >"$cfg/recovery.pub"
+  _keygen "$rec"; age-keygen -y "$rec" >"$cfg/recovery.pub"
   kc_write_selector
   ui_ok "generated your two keys (the store encrypts to both)"
   if [ -z "$UNATTENDED" ]; then
@@ -112,15 +123,32 @@ _recovery_handoff() {
   line="$(grep -m1 '^AGE-SECRET-KEY-' "$rec" 2>/dev/null)" || true
   if [ -z "$line" ]; then ui_warn "recovery.key unreadable at $rec — leaving it in place"; return 0; fi
   ui_say ""
-  ui_say "Save the RECOVERY key in your password manager (or on paper) NOW."
+  ui_say "Your RECOVERY key is in a 0600 file on this Mac right now."
+  ui_say "That is safe today. It is not safe against this Mac dying."
+  ui_say "So: save one copy off this Mac — password manager, or paper."
+  ui_say ""
+  # An OPT-IN gate, default yes. Before this, the wizard demanded a verified paste-back from a
+  # password manager the first-time user had not opened yet, so the common path was two hidden
+  # prompts they could only fail, ending in a warning. Declining is now a first-class answer that
+  # changes nothing about safety: the file stays, and doctor carries the reminder either way.
+  if ! _confirm "Save it off this Mac now? (n = later, the file stays put)" y; then
+    ui_say ""
+    ui_say "Later it is — nothing is lost. The key stays in this file:"
+    ui_say "  $rec"
+    ui_say "Save it off this Mac when you can; doctor will keep reminding you."
+    return 0
+  fi
   if agsec_have pbcopy; then
     printf '%s' "$line" | pbcopy
-    ui_say "It is on the clipboard. It also stays in a file on disk until you"
-    ui_say "prove it is saved — so losing the clipboard costs nothing."
+    ui_say ""
+    ui_say "It is on your clipboard now — paste it where you keep it."
+    ui_say "The file above stays until you prove the save, so losing the"
+    ui_say "clipboard costs you nothing."
   else
-    ui_say "Copy the AGE-SECRET-KEY line from this file (kept until you prove"
-    ui_say "it is saved):"
+    ui_say ""
+    ui_say "Copy the AGE-SECRET-KEY line out of this file:"
     ui_say "  $rec"
+    ui_say "It stays there until you prove the save."
   fi
   for try in 1 2; do
     agsec_have pbcopy && printf '' | pbcopy    # scrub: the paste-back must come from the SAVED copy
@@ -140,20 +168,21 @@ _recovery_handoff() {
       if [ "$was_empty" -eq 1 ]; then ui_warn "nothing was pasted."; else ui_warn "that didn't match."; fi
       if agsec_have pbcopy; then
         printf '%s' "$line" | pbcopy
-        ui_say "  The key is back on the clipboard — save it in the password"
-        ui_say "  manager now, then prove it once more. (Enter again keeps the"
-        ui_say "  file on disk instead.)"
+        ui_say "  It is back on your clipboard. Save it, then paste it once more."
+        ui_say "  Press Enter on its own to stop and keep the file instead."
       else
-        ui_say "  Copy it again from  $rec"
-        ui_say "  save it, then prove it once more. (Enter again keeps the file.)"
+        ui_say "  Copy it again from the file above, save it, then paste once more."
+        ui_say "  Press Enter on its own to stop and keep the file instead."
       fi
     fi
   done
   agsec_have pbcopy && printf '' | pbcopy      # scrub — the file remains the retrievable copy
-  ui_warn "not verified — keeping the recovery key ON DISK at:"
-  ui_say  "  $rec"
-  ui_say  "  Save it offline, then delete the file (doctor will remind you):"
-  ui_say  "  rm $rec"
+  ui_say ""
+  ui_say "Not verified, so the key stays where it is safe — this file:"
+  ui_say "  $rec"
+  ui_say "Once it really is saved off this Mac, delete that file:"
+  ui_say "  rm $rec"
+  ui_say "No rush. doctor will remind you until it is gone."
   return 0
 }
 
@@ -241,7 +270,7 @@ _arm_canary() {
   ui_say "The breach canary ($AGENT_SECRETS_CANARY_NAME) ships as an"
   ui_say "INERT decoy — it detects a whole-store sweep only once you arm it"
   ui_say "with a real tripwire token."
-  if _confirm "Arm it now? (paste a token you minted at canarytokens.org, or skip)" n; then
+  if _confirm "Arm it now? (paste a canarytokens.org token, or skip)" n; then
     # Same forgiving ladder as the first secret (F3): an empty paste re-prompts then skips —
     # it must never abort the wizard at [4/7].
     if _read_secret_store "$AGENT_SECRETS_CANARY_NAME" "Paste your canary/tripwire token"; then
@@ -343,12 +372,17 @@ _done_screen() {
   # Cursor has no stable file-based global-rules path, so this is the one manual step left; hand the user
   # the exact text AND (P0-2) put it on the clipboard so it's a single paste, not a retype. Claude Code is
   # covered by the installer's opt-in ~/.claude/CLAUDE.md block. Single source: agsec_agent_rules (no drift).
+  # The rule lines are 90-110 columns and are meant to be PASTED, so printing them breaks an
+  # 80-column terminal and wrapping them would corrupt the paste. When the clipboard is available
+  # we put them there and say so; only a machine without pbcopy sees the raw block.
   ui_say ""
-  ui_say "Cursor users — paste these once into Cursor Settings → Rules → User Rules"
-  ui_say "(Claude Code is covered by the installer's opt-in ~/.claude/CLAUDE.md block):"
-  agsec_agent_rules | while IFS= read -r _rule; do ui_say "  $_rule"; done
   if agsec_have pbcopy && agsec_agent_rules | pbcopy 2>/dev/null; then
-    ui_ok "…and copied to your clipboard — just paste into Cursor's User Rules"
+    ui_say "Using Cursor? Its agent rules are on your clipboard now."
+    ui_say "Paste them into: Cursor Settings → Rules → User Rules."
+    ui_say "(Claude Code is already covered by the ~/.claude/CLAUDE.md block.)"
+  else
+    ui_say "Using Cursor? Paste these into Settings → Rules → User Rules:"
+    agsec_agent_rules | while IFS= read -r _rule; do ui_say "  $_rule"; done
   fi
   ui_say ""
   ui_say "Docs: https://github.com/renchris/agent-secrets"
@@ -470,8 +504,11 @@ main() {
   # The wizard reads secrets from hidden prompts on STDIN; with no terminal it would silently read EOF
   # and store an empty first secret (the `curl … | bash` failure). Hard-refuse instead — the installer
   # defers the ceremony to a real terminal, and UNATTENDED tests use fake values.
+  # A human who ran `curl … | bash` has stdin on the PIPE while a real terminal sits in front of
+  # them. Rebind to it rather than refusing — that is what makes the one-liner ONE command. The
+  # agent-session refusal above has already run, so this can never attach an agent's own pty.
   if [ -z "$UNATTENDED" ] && [ ! -t 0 ]; then
-    agsec_die "setup is an interactive ceremony but stdin is not a terminal — run 'agent-secrets setup' in a real terminal (or AGENT_SECRETS_UNATTENDED=1 for a fake-value test run)"
+    agsec_attach_tty || agsec_die "setup is an interactive ceremony but there is no terminal to run it on — open Terminal.app and run 'agent-secrets setup' (or AGENT_SECRETS_UNATTENDED=1 for a fake-value test run)"
   fi
   ui_title "agent-secrets setup"
   case "$(restore_returning_user_check)" in
@@ -482,9 +519,9 @@ main() {
       if _confirm "Run a health check instead of re-onboarding?" y; then _wire_tools; exec bash "$AGENT_SECRETS_CMD/doctor.sh"; fi ;;
     partial) ui_say "A previous setup was interrupted — continuing (idempotent; your key is kept)." ;;
   esac
-  ui_step 2 7 "Preflight";        _preflight;      _state preflight
-  ui_step 3 7 "Your keys";        _key_ceremony;   _kc_offer;   _state key
-  ui_step 4 7 "Your first secret"
+  ui_step 1 6 "Preflight";        _preflight;      _state preflight
+  ui_step 2 6 "Your keys";        _key_ceremony;   _kc_offer;   _state key
+  ui_step 3 6 "Your first secret"
   # Guarded (F3): the first-secret screen is OPTIONAL onboarding — no failure here may strand
   # screens 5–7 (wrappers, apiKeyHelper, settings.json), which are what make the install work.
   # The || also suppresses errexit inside, so an unforeseen refusal degrades to a warn + skip.
@@ -492,11 +529,11 @@ main() {
   _first_secret || ui_warn "first secret not stored — add one anytime:  agent-secrets add <NAME>"
   _arm_canary   || ui_warn "canary not armed — arm anytime:  agent-secrets add $AGENT_SECRETS_CANARY_NAME"
   _state secret
-  ui_step 5 7 "Wire your tools";  _wire_tools;     _state wired
+  ui_step 4 6 "Wire your tools";  _wire_tools;     _state wired
   # --summary so the wizard ends on core custody/toolchain/store/injection status instead of ~7 aspirational
   # ⚠ (canary/backup/discovery/hygiene/…) that read as "broken" though exit is 0. Full report: `doctor`.
-  ui_step 6 7 "Health check";     bash "$AGENT_SECRETS_CMD/doctor.sh" --summary || true
-  ui_step 7 7 "Done";             _done_screen;    _state 'done'
+  ui_step 5 6 "Health check";     bash "$AGENT_SECRETS_CMD/doctor.sh" --summary || true
+  ui_step 6 6 "Done";             _done_screen;    _state 'done'
 }
 # Execute-only guard: `bash cmd/setup.sh` (the dispatcher) runs the wizard; SOURCING this file
 # (the bats regression tests) only loads the screen functions for direct, deterministic testing.
