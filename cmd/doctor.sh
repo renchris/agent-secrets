@@ -36,6 +36,24 @@ JSON_ROWS=()
 
 _js() { local s=${1//\\/\\\\}; printf '%s' "${s//\"/\\\"}"; }  # minimal JSON string escape
 
+# Wrap at SPACES ONLY. A token wider than $1 is emitted on its own line, whole — never split.
+_wrap_words() {
+  awk -v w="${1:-76}" '{
+    line = ""
+    n = split($0, t, " ")
+    for (i = 1; i <= n; i++) {
+      if (line == "")                                 { line = t[i] }
+      else if (length(line) + 1 + length(t[i]) <= w)  { line = line " " t[i] }
+      else                                            { print line; line = t[i] }
+    }
+    if (line != "") print line
+  }'
+}
+
+# The ONE runnable thing that clears a row, on its own line, never wrapped — so it survives a
+# drag-copy at any terminal width. Silent when the row has no action.
+_row_cmd() { [ -n "${1:-}" ] && printf '    → %s\n' "$1"; return 0; }
+
 # Emit one check result.  Args: category status(ok|attn|bad) name [detail] [tier(core|optional)]
 # — names-only. `tier` (default core) drives --summary presentation ONLY: a healthy fresh install
 # raises ~7 aspirational `attn` rows (canary/backup/discovery/hygiene/maintenance/supply-chain) that
@@ -43,11 +61,13 @@ _js() { local s=${1//\\/\\\\}; printf '%s' "${s//\"/\\\"}"; }  # minimal JSON st
 # ends on core custody/toolchain/store/injection status. It NEVER changes the exit code (had_bad is set
 # before any display filter) and NEVER filters JSON (agents parse the full manifest) — presentation only.
 _row() {
-  local cat=$1 st=$2 name=$3 detail=${4:-} tier=${5:-core}
+  local cat=$1 st=$2 name=$3 detail=${4:-} tier=${5:-core} cmd=${6:-}
   if [ "$st" = bad ]; then had_bad=1; fi
   if [ "$FORMAT" = json ]; then
+    # JSON keeps the historical single-field shape: the command is appended to detail, so an agent
+    # parsing the manifest sees exactly what it saw before this split existed.
     JSON_ROWS+=("$(printf '{"category":"%s","status":"%s","check":"%s","detail":"%s"}' \
-      "$cat" "$st" "$(_js "$name")" "$(_js "$detail")")")
+      "$cat" "$st" "$(_js "$name")" "$(_js "${detail}${cmd:+ — run: $cmd}")")")
     return 0
   fi
   # --summary text filter: keep every ✗ and every core row; hide non-bad optional rows (count them).
@@ -57,6 +77,11 @@ _row() {
   # 80-column legibility (F5): word-wrap long rows, continuations indented under the text column.
   # Presentation ONLY — the JSON branch above already returned with the unwrapped detail, and the
   # wrap threshold leaves 2 columns for the status glyph prefix.
+  #
+  # `fold -s` was the wrapper here and it SPLITS A TOKEN that is longer than the width — a 116-column
+  # store path came out across three lines, mid-word, so it could not be drag-copied (the thing a
+  # path is FOR). _wrap_words breaks at spaces only and emits an over-long token whole, letting the
+  # terminal soft-wrap it, which keeps a drag-copy intact and reflows on resize.
   local line="[$cat] $name${detail:+ — $detail}"
   if [ "${#line}" -le 78 ]; then
     case "$st" in
@@ -64,10 +89,11 @@ _row() {
       attn) agsec_attn "$line" ;;
       bad)  agsec_bad  "$line" ;;
     esac
+    _row_cmd "$cmd"
     return 0
   fi
   local _first=1 _chunk
-  printf '%s\n' "$line" | fold -s -w 76 | { while IFS= read -r _chunk; do
+  printf '%s\n' "$line" | _wrap_words 76 | { while IFS= read -r _chunk; do
     if [ "$_first" = 1 ]; then
       case "$st" in
         ok)   agsec_ok   "$_chunk" ;;
@@ -79,6 +105,7 @@ _row() {
       printf '    %s\n' "$_chunk"
     fi
   done; }
+  _row_cmd "$cmd"
 }
 
 # Guarded value capture — contains a die-stub/absent-lib `exit` inside a subshell so doctor
@@ -96,7 +123,7 @@ check_custody() {
   if _try st kc_status; then
     case "$st" in
       primary)   _row custody ok   "keychain custody" "primary" ;;
-      degraded*) _row custody attn "keychain custody" "degraded (file custody) — restore prompt-free Keychain reads: agent-secrets setup --keychain" ;;
+      degraded*) _row custody attn "keychain custody" "file custody (works, not cached by macOS)" core "agent-secrets setup --keychain" ;;
       missing)   _row custody bad  "keychain custody" "missing" ;;
       *)         _row custody attn "keychain custody" "unknown state" ;;
     esac
@@ -108,7 +135,11 @@ check_custody() {
   # interrupted or declined ceremony (a hard kill the EXIT trap couldn't catch, or a user who deferred
   # saving it). Warn so it gets moved offline and deleted — names/paths only, never the key.
   if [ -f "$(agsec_config_dir)/recovery.key" ]; then
-    _row custody attn "recovery key on disk" "move it offline (password manager) then delete it: rm $(agsec_config_dir)/recovery.key"
+    # The old detail told the user to `rm` a 116-column path that the wrapper then broke across
+    # three lines — unpastable, and an `rm` is a poor thing to hand a first-time user anyway.
+    # `setup` already RESUMES this exact handoff (_key_ceremony's idempotent branch) and deletes the
+    # file itself on a verified paste-back, so the action is one short, safe command.
+    _row custody attn "recovery key on disk" "not yet saved off this Mac" core "agent-secrets setup"
   fi
 }
 
@@ -134,8 +165,6 @@ check_toolchain() {  # age + sops present, and sops NEW ENOUGH for SOPS_AGE_KEY_
   else
     _row toolchain bad "sops" "missing — re-run the installer (or install sops >= $DEPS_SOPS_MIN)"
   fi
-  if agsec_have gum; then _row toolchain ok "gum" "present" optional
-  else _row toolchain attn "gum" "absent (optional — plain-text UI is used)" optional; fi
 }
 
 _scan_rotate() {  # manifest.toml rotate_by scan — names + days only, never values
@@ -170,7 +199,7 @@ check_store() {
     # Armed-canary status: comparing against the known placeholder constant leaks nothing. Both states
     # are `optional` — an unarmed decoy is a deliberate default, not a defect (P1-4: mark "(optional)").
     if [ "$v" = "$AGENT_SECRETS_CANARY_PLACEHOLDER" ]; then
-      _row store attn "canary" "INERT decoy (optional) — no breach detection until armed (agent-secrets add $AGENT_SECRETS_CANARY_NAME)" optional
+      _row store attn "canary" "INERT decoy (optional) — no breach detection until armed" optional "agent-secrets add $AGENT_SECRETS_CANARY_NAME"
     else
       _row store ok "canary" "armed" optional
     fi
@@ -185,7 +214,7 @@ check_store() {
   # _try so an absent ANTHROPIC_API_KEY (the common case) is simply skipped.
   local pv
   if _try pv store_extract ANTHROPIC_API_KEY && [ "$pv" = "$AGENT_SECRETS_UNATTENDED_PLACEHOLDER" ]; then
-    _row store attn "ANTHROPIC_API_KEY" "holds the unattended TEST placeholder — replace it: agent-secrets add ANTHROPIC_API_KEY"
+    _row store attn "ANTHROPIC_API_KEY" "holds the unattended TEST placeholder — replace it" core "agent-secrets add ANTHROPIC_API_KEY"
   fi
   pv=""
   _scan_rotate
@@ -215,7 +244,7 @@ check_injection() {
     helper="$(jq -r '.apiKeyHelper // empty' "$sj" 2>/dev/null || true)"
     if [ "$helper" = "$akh" ]; then _row injection ok "settings.json apiKeyHelper" "wired"
     elif [ -n "$helper" ]; then _row injection attn "settings.json apiKeyHelper" "points at a different helper (kept — your edit)"
-    else _row injection bad "settings.json apiKeyHelper" "not wired — run: agent-secrets setup"; fi
+    else _row injection bad "settings.json apiKeyHelper" "not wired" core "agent-secrets setup"; fi
   else
     _row injection attn "settings.json apiKeyHelper" "settings.json/jq unavailable"
   fi
@@ -359,7 +388,7 @@ run_checks
 # --summary footer: reassure that the hidden rows are optional hardening, not failures, and name the
 # one command that shows them. Only when something was actually hidden; same stream as the rows.
 if [ "$SUMMARY" = 1 ] && [ "$FORMAT" = text ] && [ "$SUMMARY_HIDDEN" -gt 0 ]; then
-  printf '%s+%d optional hardening check(s) hidden — full report: agent-secrets doctor%s\n' \
+  printf '%s+%d optional check(s) hidden — full report: agent-secrets doctor%s\n' \
     "$C_DIM" "$SUMMARY_HIDDEN" "$C_RESET"
 fi
 if [ "$FORMAT" = json ]; then

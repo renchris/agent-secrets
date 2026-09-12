@@ -1,10 +1,14 @@
 # shellcheck shell=bash
-# lib/deps.sh — no-sudo dependency resolver for age / sops / gum / jq.
+# lib/deps.sh — no-sudo dependency resolver for age / sops / jq.
+# gum was resolved here until 2026-09-11. It is gone: lib/ui.sh no longer uses it (its
+# full-screen widget dropped our declared defaults, truncated prompts on resize, and blocked on
+# terminal capability queries — docs/plans/ONE_COMMAND_SETUP_V2.md B3/B4), so fetching it was a
+# download on the install critical path that bought nothing.
 # Sourced by install.sh AFTER lib/common.sh. Names-only (never handles a secret value).
 #
 # WHY this exists: the original installer required Homebrew, whose bootstrap needs an interactive
 # `sudo` password — the #1 blocker on a fresh/brew-less corporate Mac (ONE_COMMAND_INSTALL_FEEDBACK.md).
-# age/sops/gum/jq are each a single static binary, so we resolve each WITHOUT sudo, in this order:
+# age/sops/jq are each a single static binary, so we resolve each WITHOUT sudo, in this order:
 #   1. already on PATH and version-adequate  → use it (fastest; respects a managed toolchain)
 #   2. Homebrew present (no install of brew itself) → `brew install <tool>` (still no sudo)
 #   3. else → download a PINNED, SHA-256-verified static binary into <install>/vendor/bin
@@ -32,7 +36,6 @@ DEPS_SOPS_MIN="3.10.0"
 # --- pinned release coordinates (bump = re-pin the sibling SHA) ------------------
 DEPS_AGE_VER="v1.3.1"
 DEPS_SOPS_VER="v3.13.2"
-DEPS_GUM_VER="v0.17.0"
 DEPS_JQ_VER="jq-1.8.2"
 
 # Source host — overridable for an internal mirror / air-gapped install (mirror the release assets
@@ -49,7 +52,7 @@ _deps_vendor_bin() {
 }
 
 # --- arch (Rosetta-proof) -------------------------------------------------------
-# Canonical: arm64 | amd64. Per-tool asset tokens differ (gum spells Intel "x86_64") — mapped in fetchers.
+# Canonical: arm64 | amd64. Per-tool asset tokens differ — mapped in each fetcher.
 deps_arch() {
   if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ]; then printf 'arm64\n'; return; fi
   case "$(uname -m 2>/dev/null)" in arm64|aarch64) printf 'arm64\n' ;; *) printf 'amd64\n' ;; esac
@@ -84,7 +87,6 @@ _deps_ok() {
     age)  agsec_have age && agsec_have age-keygen ;;
     sops) deps_sops_ok ;;
     jq)   agsec_have jq ;;
-    gum)  agsec_have gum ;;
     *)    return 1 ;;
   esac
 }
@@ -158,25 +160,10 @@ deps_fetch_jq() {   # raw binary (arch token amd64, like age/sops)
   _deps_finalize "$vbin/jq"
 }
 
-deps_fetch_gum() {   # tar.gz → binary at gum_<ver>_Darwin_<token>/gum (Intel token is x86_64)
-  local arch tok sha ver url vbin tmp; arch="$(deps_arch)"; vbin="$(_deps_vendor_bin)"; mkdir -p "$vbin"
-  ver="${DEPS_GUM_VER#v}"                       # gum asset names drop the leading v (0.17.0)
-  case "$arch" in
-    arm64) tok="arm64"; sha="e2a4b8596efa05821d8c58d0c1afbcd7ad1699ba69c689cc3ff23a4a99c8b237" ;;
-    *)     tok="x86_64"; sha="cd66576aeebe6cd19c771863c7e8d696e0e1d5387d1e7075666baa67c2052e53" ;;
-  esac
-  url="$(_deps_base)/charmbracelet/gum/releases/download/${DEPS_GUM_VER}/gum_${ver}_Darwin_${tok}.tar.gz"
-  tmp="$(mktemp -d)" || return 1
-  _deps_download_verify "$url" "$sha" "$tmp/gum.tgz" || { rm -rf "$tmp"; return 1; }
-  tar -xzf "$tmp/gum.tgz" -C "$tmp" 2>/dev/null || { rm -rf "$tmp"; return 1; }
-  cp "$tmp/gum_${ver}_Darwin_${tok}/gum" "$vbin/gum" || { rm -rf "$tmp"; return 1; }
-  rm -rf "$tmp"; _deps_finalize "$vbin/gum"
-}
-
 # --- orchestration --------------------------------------------------------------
 # _deps_resolve TOOL required|optional FETCH_FN — PATH → brew → pinned download; die (required) or
-# warn (optional) if all three miss. gum is optional (ui.sh has a plain fallback; secret input always
-# uses builtin read -s). Homebrew is skipped when AGENT_SECRETS_DEPS_NO_BREW is set (force the pinned path).
+# warn (optional) if all three miss. Homebrew is skipped when AGENT_SECRETS_DEPS_NO_BREW is set
+# (force the pinned path). Every tool below is now REQUIRED — the optional tier has no members.
 _deps_resolve() {
   local tool="$1" need="$2" fetch="$3"
   if _deps_ok "$tool"; then agsec_note "  $tool: using $(command -v "$tool")"; return 0; fi
@@ -207,9 +194,8 @@ _deps_resolve() {
 deps_ensure() {
   local vbin; vbin="$(_deps_vendor_bin)"
   case ":$PATH:" in *":$vbin:"*) : ;; *) PATH="$vbin:$PATH"; export PATH ;; esac
-  agsec_log "Ensuring toolchain (age, sops, gum, jq) — no sudo, no Homebrew required:"
+  agsec_log "Ensuring toolchain (age, sops, jq) — no sudo, no Homebrew required:"
   _deps_resolve age  required deps_fetch_age
   _deps_resolve sops required deps_fetch_sops
   _deps_resolve jq   required deps_fetch_jq
-  _deps_resolve gum  optional deps_fetch_gum
 }
