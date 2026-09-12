@@ -17,7 +17,7 @@ load test_helper
   [[ "$output" != *"[supply-chain]"* ]] || return 1
   [[ "$output" != *"[maintenance]"* ]] || return 1
   # and the footer names how to see them
-  [[ "$output" == *"optional hardening check(s) hidden"* ]] || return 1
+  [[ "$output" == *"optional check(s) hidden"* ]] || return 1
 }
 
 @test "doctor --summary shows fewer attn than the full report (the 'feels broken' fix)" {
@@ -118,7 +118,11 @@ load test_helper
   run env PATH="$capdir:$PATH" bash -c "printf '%s' seedval | AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup"
   [ "$status" -eq 0 ]
   [[ "$output" == *"help onboarding"* ]] || return 1                # next-steps pointer
-  [[ "$output" == *"copied to your clipboard"* ]] || return 1       # the clipboard action happened
+  [[ "$output" == *"on your clipboard"* ]] || return 1              # the clipboard action happened
+  # The rule lines are 90-110 columns and meant to be PASTED, so the done screen no longer PRINTS
+  # them when the clipboard took them — printing broke an 80-column terminal and wrapping them
+  # would have corrupted the paste.
+  [[ "$output" != *"NEVER write a secret to a .env"* ]] || return 1
   grep -qF "agent-secrets run -- <cmd>" "$AGENT_SECRETS_HOME/clip.txt"   # the rules actually landed there
 }
 

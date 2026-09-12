@@ -75,17 +75,18 @@ _mint_rec() {
 @test "F2: a WRONG paste-back keeps recovery.key on disk — the delete needs verified proof (the loss lock)" {
   _mint_rec >/dev/null
   # Pre-rebuild, a bare default-y confirm deleted the file with zero verification.
-  run _wiz 'AGE-SECRET-KEY-1WRONGWRONGWRONG\nAGE-SECRET-KEY-1WRONGAGAIN\n' \
+  # 'y' clears the opt-in gate ("Save it off this Mac now?"), then two wrong pastes.
+  run _wiz 'y\nAGE-SECRET-KEY-1WRONGWRONGWRONG\nAGE-SECRET-KEY-1WRONGAGAIN\n' \
       _recovery_handoff "$AGENT_SECRETS_HOME/.config/secrets/recovery.key"
   [ "$status" -eq 0 ]
   [ -f "$AGENT_SECRETS_HOME/.config/secrets/recovery.key" ]        # NOT deleted
-  [[ "$output" == *"keeping the recovery key ON DISK"* ]] || return 1
+  [[ "$output" == *"the key stays where it is safe"* ]] || return 1
   [[ "$output" == *"didn't match"* ]] || return 1
 }
 
 @test "F2: two EMPTY entries keep recovery.key on disk (skip is safe, never destructive)" {
   _mint_rec >/dev/null
-  run _wiz '\n\n' _recovery_handoff "$AGENT_SECRETS_HOME/.config/secrets/recovery.key"
+  run _wiz 'y\n\n\n' _recovery_handoff "$AGENT_SECRETS_HOME/.config/secrets/recovery.key"
   [ "$status" -eq 0 ]
   [ -f "$AGENT_SECRETS_HOME/.config/secrets/recovery.key" ]
   [[ "$output" == *"nothing was pasted"* ]] || return 1
@@ -93,11 +94,20 @@ _mint_rec() {
 
 @test "F2: a VERIFIED paste-back deletes the on-disk copy (and never echoes the key)" {
   local keyline; keyline="$(_mint_rec)"
-  run _wiz "${keyline}\n" _recovery_handoff "$AGENT_SECRETS_HOME/.config/secrets/recovery.key"
+  run _wiz "y\n${keyline}\n" _recovery_handoff "$AGENT_SECRETS_HOME/.config/secrets/recovery.key"
   [ "$status" -eq 0 ]
   [ ! -f "$AGENT_SECRETS_HOME/.config/secrets/recovery.key" ]      # verified ⇒ removed
   [[ "$output" == *"verified saved"* ]] || return 1
   [[ "$output" != *"$keyline"* ]] || return 1                      # names-only: key never surfaced
+}
+
+@test "recovery: declining the offer is a first-class answer — file kept, no failure tone, no prompts" {
+  _mint_rec >/dev/null
+  run _wiz 'n\n' _recovery_handoff "$AGENT_SECRETS_HOME/.config/secrets/recovery.key"
+  [ "$status" -eq 0 ]
+  [ -f "$AGENT_SECRETS_HOME/.config/secrets/recovery.key" ]        # kept, untouched
+  [[ "$output" == *"Later it is"* ]] || return 1
+  [[ "$output" != *"from where you saved it"* ]] || return 1       # the paste ceremony never ran
 }
 
 # ---- End-to-end: the full interactive wizard on a real PTY (expect) ----------------------------
@@ -105,7 +115,7 @@ _mint_rec() {
 # suite can never cover, and the one that failed in the field. NOTE: always answer 'n' to the
 # Keychain offer here — the mock `security -w` reads stdin to EOF and would swallow the script.
 
-@test "E2E: the author's failed first-run now reaches [7/7] — empty pastes everywhere, nothing aborts, nothing destroyed" {
+@test "E2E: the author's failed first-run now reaches [6/6] — empty pastes everywhere, nothing aborts, nothing destroyed" {
   command -v expect >/dev/null 2>&1 || skip "expect not available"
   cat >"$AGENT_SECRETS_HOME/drive.exp" <<'EOF'
 set timeout 30
@@ -117,10 +127,11 @@ expect_after { timeout { puts "\nDESYNC-TIMEOUT"; exit 90 } eof { puts "\nEARLY-
 # `sleep 1` before answering any HIDDEN prompt: bash's `read -s` termios switch FLUSHES queued
 # input, so an answer sent in the µs between prompt-print and read-start is silently discarded
 # (measured — the race hung the wizard at the second prove-read).
+expect "Save it off this Mac now?" { send "y\r" }
 expect "RECOVERY key (from where you saved it)" { sleep 1; send "\r" }
 expect "RECOVERY key (from where you saved it)" { sleep 1; send "\r" }
 expect "Populate your login Keychain" { send "n\r" }
-expect -ex {choose [1-4]:} { send "3\r" }
+expect -ex {choose [1-4, Enter = 1]:} { send "3\r" }
 expect "name:" { send "CODA_API_TOKEN\r" }
 expect "Value for CODA_API_TOKEN" { sleep 1; send "\r" }
 expect "Value for CODA_API_TOKEN" { sleep 1; send "\r" }
@@ -131,29 +142,30 @@ exit [lindex $result 3]
 EOF
   run expect "$AGENT_SECRETS_HOME/drive.exp"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"You're set up"* ]] || return 1                                # [7/7] reached
+  [[ "$output" == *"You're set up"* ]] || return 1                                # [6/6] reached
   [ -f "$AGENT_SECRETS_HOME/.config/secrets/recovery.key" ]                       # unverified ⇒ KEPT (F2)
   [ -L "$AGENT_SECRETS_HOME/bin/claude-agent" ]                                   # screen 5 ran
   [ -L "$AGENT_SECRETS_HOME/bin/apiKeyHelper" ]
   grep -q done "$AGENT_SECRETS_HOME/.local/state/agent-secrets/wizard-state.json" # wizard state: done
 }
 
-@test "E2E: happy path — verified recovery paste-back + a stored first secret, to [7/7]" {
+@test "E2E: happy path — verified recovery paste-back + a stored first secret, to [6/6]" {
   command -v expect >/dev/null 2>&1 || skip "expect not available"
   cat >"$AGENT_SECRETS_HOME/drive.exp" <<'EOF'
 set timeout 30
 spawn env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash $env(REPO_ROOT)/bin/agent-secrets setup
 # See the sibling test for why expect_after comes AFTER spawn and hidden prompts get `sleep 1`.
 expect_after { timeout { puts "\nDESYNC-TIMEOUT"; exit 90 } eof { puts "\nEARLY-EOF"; exit 91 } }
-expect "password manager (or on paper) NOW."
+expect "Save it off this Mac now?"
 # The test's "password manager": read the key line from the on-disk file the wizard just minted.
 set fh [open "$env(AGENT_SECRETS_HOME)/.config/secrets/recovery.key" r]
 set keyline ""
 while {[gets $fh l] >= 0} { if {[string match AGE-SECRET-KEY-* $l]} { set keyline $l } }
 close $fh
+send "y\r"
 expect "RECOVERY key (from where you saved it)" { sleep 1; send -- "$keyline\r" }
 expect "Populate your login Keychain" { send "n\r" }
-expect -ex {choose [1-4]:} { send "1\r" }
+expect -ex {choose [1-4, Enter = 1]:} { send "1\r" }
 expect "Value for ANTHROPIC_API_KEY" { sleep 1; send "e2e-val-regression\r" }
 expect "Arm it now?" { send "n\r" }
 expect eof { }

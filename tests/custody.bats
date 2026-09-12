@@ -19,9 +19,15 @@ load test_helper
   export AGENT_SECRETS_MOCK_KC_FAIL=1
   run kc_status
   [ "$output" = "degraded (file custody)" ]
-  # doctor must report degraded, NOT a hard failure that blocks.
+  # doctor must report this as an ATTENTION row naming file custody — never a hard failure that
+  # blocks. (The row's wording dropped the word "degraded" on 2026-09-11: file custody is a fully
+  # supported mode, and "degraded" read as breakage on a healthy first run. kc_status's own vocabulary,
+  # asserted above, is unchanged — this is presentation.)
   run agsec doctor
-  [[ "$output" == *"degraded (file custody)"* ]] || return 1
+  [[ "$output" == *"keychain custody"* ]] || return 1
+  [[ "$output" == *"file custody"* ]] || return 1
+  [[ "$output" == *"⚠"* ]] || return 1
+  [[ "$output" != *"✗ [custody] keychain custody"* ]] || return 1
 }
 
 @test "keychain-smoke: passes when the mock yields the key, fails cleanly when it doesn't" {

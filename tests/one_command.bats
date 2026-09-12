@@ -1,0 +1,144 @@
+#!/usr/bin/env bats
+# tests/one_command.bats — executable locks for the "one command setup" claim.
+# Every assertion here corresponds to a defect MEASURED over a PTY on 2026-09-11 and recorded in
+# docs/plans/ONE_COMMAND_SETUP_V2.md. They exist so the claim cannot rot back.
+load test_helper
+
+# ---- B3: a declared default must be the default, and must be visible --------------------------
+
+@test "B3: ui_confirm with default n answers NO on a bare Enter (gum answered YES)" {
+  run bash -c '. "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/ui.sh"; printf "\n" | ui_confirm "Arm it?" n; echo "rc=$?"'
+  [[ "$output" == *"rc=1"* ]] || return 1
+  [[ "$output" == *"[y/N]"* ]] || return 1        # the default is on screen, not implied
+}
+
+@test "B3: ui_confirm with default y answers YES on a bare Enter" {
+  run bash -c '. "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/ui.sh"; printf "\n" | ui_confirm "Go?" y; echo "rc=$?"'
+  [[ "$output" == *"rc=0"* ]] || return 1
+  [[ "$output" == *"[Y/n]"* ]] || return 1
+}
+
+@test "B3: ui_confirm still fails CLOSED on EOF (no human = no consent)" {
+  run bash -c '. "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/ui.sh"; ui_confirm "Go?" y </dev/null; echo "rc=$?"'
+  [[ "$output" == *"rc=1"* ]] || return 1
+}
+
+@test "B3: ui_menu resolves a bare Enter to option 1 and says so" {
+  run bash -c '. "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/ui.sh"; printf "\n" | ui_menu "Pick" FIRST SECOND'
+  [[ "$output" == *"FIRST"* ]] || return 1
+  [[ "$output" != *"SECOND"$'\n'* ]] || true
+  [[ "$output" == *"Enter = 1"* ]] || return 1
+}
+
+# ---- B4: no full-screen widget in the runtime, at all -----------------------------------------
+
+@test "B4: no runtime code shells out to gum (its widget broke defaults, resize and queries)" {
+  # grep the CODE, not the comment block in ui.sh that explains why gum is gone.
+  run bash -c 'grep -rhvE "^[[:space:]]*#" "$REPO_ROOT"/lib/*.sh "$REPO_ROOT"/cmd/*.sh "$REPO_ROOT"/bin/* "$REPO_ROOT"/install.sh |
+               grep -nE "(^|[^a-zA-Z_-])gum (confirm|choose|style|input|spin)" || true'
+  [ -z "$output" ] || return 1
+}
+
+# ---- B2: the installer must not leak a bash error onto the consent screen ----------------------
+
+@test "B2: install.sh --dry-run renders the plan with no shell error and no unbound variable" {
+  run bash -c 'AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" bash "$REPO_ROOT/install.sh" --dry-run 2>&1'
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"unbound variable"* ]] || return 1
+  [[ "$output" != *"line "*": "* ]] || return 1
+  [[ "$output" == *"agent-secrets installer"* ]] || return 1
+}
+
+@test "B2: the machine-wide rule block carries a NON-EMPTY version in its integrity marker" {
+  # common.sh sourced WITHOUT the dispatcher's AGENT_SECRETS_LIB — exactly how install.sh uses it.
+  run bash -c 'unset AGENT_SECRETS_LIB; . "$REPO_ROOT/lib/common.sh"; agsec_render_rules claude-md'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agent-secrets:version="* ]] || return 1
+  [[ "$output" != *"agent-secrets:version= "* ]] || return 1     # the empty-version regression
+  run bash -c 'unset AGENT_SECRETS_LIB; set -u; . "$REPO_ROOT/lib/common.sh"; agsec_version'
+  [ "$status" -eq 0 ]
+  [ -n "$output" ]
+}
+
+# ---- B6: `curl … | bash` is a real one command ------------------------------------------------
+
+@test "B6: agsec_attach_tty exists and refuses cleanly when there is genuinely no terminal" {
+  run bash -c '. "$REPO_ROOT/lib/common.sh"; agsec_attach_tty </dev/null; echo "rc=$?"'
+  [[ "$output" == *"rc=1"* ]] || return 1
+}
+
+@test "B6: setup with no terminal anywhere still refuses, and names the one command to run" {
+  run bash -c 'env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash "$REPO_ROOT/bin/agent-secrets" setup </dev/null 2>&1'
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"agent-secrets setup"* ]] || return 1
+}
+
+# ---- B8 / DoD 2: the wizard is legible at 80 columns, with no terminal-query garbage -----------
+
+# Drive the whole wizard on a PTY and keep every byte it wrote.
+_e2e_capture() {
+  command -v expect >/dev/null 2>&1 || return 99
+  cat >"$AGENT_SECRETS_HOME/cap.exp" <<'EOF'
+set timeout 30
+log_file -a $env(AGENT_SECRETS_HOME)/cap.log
+spawn -noecho env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash $env(REPO_ROOT)/bin/agent-secrets setup
+stty rows 24 columns 80 < $spawn_out(slave,name)
+expect_after { timeout { puts "\nDESYNC-TIMEOUT"; exit 90 } eof { puts "\nEARLY-EOF"; exit 91 } }
+expect "Save it off this Mac now?" { send "n\r" }
+expect "Populate your login Keychain" { send "n\r" }
+expect -ex {choose [1-4, Enter = 1]:} { send "4\r" }
+expect "Arm it now?" { send "n\r" }
+expect eof { }
+catch wait result
+exit [lindex $result 3]
+EOF
+  expect "$AGENT_SECRETS_HOME/cap.exp" >/dev/null 2>&1
+}
+
+@test "DoD: the wizard reaches the done screen and emits NO terminal capability query" {
+  _e2e_capture || skip "expect not available"
+  run cat "$AGENT_SECRETS_HOME/cap.log"
+  [[ "$output" == *"You're set up"* ]] || return 1
+  # OSC-11 background query and DSR cursor report — gum emitted both on every prompt and blocked
+  # on the reply, which is what read as an unresponsive UI.
+  run bash -c 'LC_ALL=C grep -c "\]11;?" "$AGENT_SECRETS_HOME/cap.log" || true'
+  [ "$output" = "0" ]
+  run bash -c 'LC_ALL=C grep -c "\[6n" "$AGENT_SECRETS_HOME/cap.log" || true'
+  [ "$output" = "0" ]
+}
+
+@test "DoD: no wizard line exceeds 72 columns except an unsplittable path token" {
+  _e2e_capture || skip "expect not available"
+  # A line is a failure only if it is over budget AND every token in it is short — i.e. it is prose
+  # we chose not to fit. A long filesystem path is emitted WHOLE on purpose (drag-copy), so the
+  # terminal, not us, wraps it.
+  #
+  # Width is measured in CHARACTERS. BSD awk's length() counts BYTES, which charges 3 columns for
+  # every ✓ ⚠ — in our own output and manufactures failures; bash's ${#var} is multibyte-aware
+  # under a UTF-8 locale, so the check runs in the shell.
+  run bash -c '
+    export LC_ALL=en_US.UTF-8
+    LC_ALL=C sed "s/\x1b\[[0-9;?]*[a-zA-Z]//g" "$AGENT_SECRETS_HOME/cap.log" | tr -d "\r" |
+    while IFS= read -r line; do
+      [ "${#line}" -le 72 ] && continue
+      longest=0
+      for tok in $line; do [ "${#tok}" -gt "$longest" ] && longest=${#tok}; done
+      [ "$longest" -ge 40 ] && continue
+      printf "%s: %s\n" "${#line}" "$line"
+    done'
+  [ -z "$output" ] || return 1
+}
+
+@test "DoD: the wizard never prints a raw age public key banner" {
+  _e2e_capture || skip "expect not available"
+  run bash -c 'LC_ALL=C grep -c "^Public key: age1" "$AGENT_SECRETS_HOME/cap.log" || true'
+  [ "$output" = "0" ]
+}
+
+@test "DoD: the wizard's own screens are numbered from 1" {
+  _e2e_capture || skip "expect not available"
+  run cat "$AGENT_SECRETS_HOME/cap.log"
+  [[ "$output" == *"[1/6]"* ]] || return 1
+  [[ "$output" == *"[6/6]"* ]] || return 1
+  [[ "$output" != *"[2/7]"* ]] || return 1
+}

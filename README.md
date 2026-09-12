@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/renchris/agent-secrets/actions/workflows/ci.yml/badge.svg)](https://github.com/renchris/agent-secrets/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-d4af37?style=flat-square)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.1.1-58a6ff?style=flat-square)](VERSION)
+[![Version](https://img.shields.io/badge/version-0.1.2-58a6ff?style=flat-square)](VERSION)
 [![Tests](https://img.shields.io/badge/bats-passing-3fb950?style=flat-square)](tests)
 [![Security](https://img.shields.io/badge/values-names--only-3fb950?style=flat-square)](SECURITY.md)
 [![Crypto](https://img.shields.io/badge/crypto-sops%20%2B%20age-d4af37?style=flat-square)](https://github.com/getsops/sops)
@@ -50,21 +50,38 @@ leans on that first.
 
 ## Install + setup
 
-Two commands, honestly. **Install** puts everything in place and can run from anywhere — even from
-inside a coding-agent session. **Setup** is the human key ceremony — it mints your encryption key
-and takes your first secret, so it runs in a real terminal (Terminal.app / iTerm), never in an
-agent transcript.
+**In a terminal, it is one command.** Paste this into Terminal.app or iTerm and answer a handful of
+questions; the installer chains straight into the setup wizard, which mints your key, takes your
+first secret, and wires your tools:
 
 ```sh
-# 1 · install — from anywhere (no sudo, no Homebrew; a coding-agent session is fine)
-bash -c "$(curl -fsLS https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.1/install.sh)"
-
-# 2 · setup — in Terminal.app: mint your key, add your first secret, wire your tools
-agent-secrets setup
+bash -c "$(curl -fsLS https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.2/install.sh)"
 ```
 
-In a normal terminal the installer chains straight into setup, so it feels like one command; from
-inside an agent session it installs everything, then defers setup on purpose (see the callout below).
+`curl … | bash` works identically — setup reads its prompts from your terminal, not from the pipe.
+
+**There is exactly one case where it is two commands, and it is deliberate: a coding-agent session.**
+Run the same line inside Cursor or Claude Code and the tool installs completely, then stops before
+the key ceremony and tells you to run `agent-secrets setup` in a real terminal. Minting your
+encryption key and typing your first secret inside an agent session would write both into a
+plaintext transcript, which is the exact thing this tool exists to prevent.
+
+<details>
+<summary>What the wizard asks you (six screens, and every default is safe)</summary>
+
+| Screen | What it wants | Press Enter and you get |
+|---|---|---|
+| 1 · Preflight | nothing | a FileVault / toolchain readout |
+| 2 · Your keys | *save your recovery key off this Mac now?* | yes — or `n` to defer it with no loss |
+| 2 · Your keys | *put the key in your login Keychain?* | yes — prompt-free reads afterwards |
+| 3 · First secret | which secret to store first | `ANTHROPIC_API_KEY` (or pick 4 to skip) |
+| 3 · First secret | *arm the breach canary?* | **no** — it is opt-in |
+| 4–6 | nothing | wrappers, `apiKeyHelper`, health check, done |
+
+Nothing here is irreversible, and nothing is destroyed on a wrong answer: the recovery key is only
+deleted from disk after you paste it back from wherever you saved it.
+
+</details>
 
 <table>
 <tr>
@@ -85,7 +102,7 @@ touching your store.
 **Prefer to read it first?** A co-equal path:
 
 ```sh
-curl -fsLSO …/v0.1.1/install.sh
+curl -fsLSO …/v0.1.2/install.sh
 less install.sh     # read every line
 bash install.sh
 ```
@@ -96,10 +113,10 @@ The installer is function-guarded and pins a SHA-256–verified release.
 </tr>
 </table>
 
-**Exactly what it changes on your Mac:** ensures `age`, `sops`, `gum`, `jq` **without `sudo` and
+**Exactly what it changes on your Mac:** ensures `age`, `sops`, `jq` **without `sudo` and
 without requiring Homebrew** — it reuses any you already have, uses Homebrew only if it's already
 installed, and otherwise downloads pinned, SHA-256-verified static binaries into
-`~/.agent-secrets/vendor/` (~70 MB for all four — the price of the no-`sudo` guarantee; removed by
+`~/.agent-secrets/vendor/` (~60 MB for all three — the price of the no-`sudo` guarantee; removed by
 uninstall); the `agent-secrets` command plus the `claude-agent`, `cursor-agent`, and
 `apiKeyHelper` wrappers in `~/bin`; an encrypted store at `~/.config/secrets/`; your age key in the
 login Keychain (with a `0600` file fallback); one `PATH` line in `~/.zshenv`; a weekly `launchd`
@@ -109,9 +126,9 @@ per-tool file for any other agent CLI present). Every change is recorded in
 `install-manifest.json` and reversed by `agent-secrets uninstall` — all removable in one command.
 
 > **Running this from inside a coding agent (Cursor / Claude Code)?** The installer finishes the file
-> setup (exit 0) and then **defers step 2** — minting your key and taking your first secret would land
-> them in the agent's transcript. It prints one instruction: open **Terminal.app** and run
-> `agent-secrets setup`. Everything else is already done.
+> setup (exit 0) and then **stops before the key ceremony** — minting your key and taking your first
+> secret would land them in the agent's transcript. It prints one instruction: open **Terminal.app**
+> and run `agent-secrets setup`. Everything else is already done.
 
 > **Behind a corporate firewall or air-gapped?** No Homebrew and no `sudo` are needed — the toolchain
 > comes from pinned GitHub-release binaries. If `raw.githubusercontent.com` is blocked, install from an
