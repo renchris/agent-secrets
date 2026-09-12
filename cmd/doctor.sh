@@ -254,12 +254,16 @@ check_backup() {  # is an off-machine second copy configured? (makes disaster re
   local marker; marker="$(agsec_config_dir)/backup-repo"
   if [ -f "$marker" ] && [ -s "$marker" ]; then
     _row backup ok "off-machine backup" "configured ($(cat "$marker"))" optional
+  elif ! agsec_have_devtool git; then
+    # backup stages the ciphertext in a git repo. On a Mac without Apple's developer tools,
+    # /usr/bin/git is an inert stub that only offers to install them, so name the real first link.
+    _row backup attn "off-machine backup" "none — needs git: run 'xcode-select --install' once, then agent-secrets backup" optional "xcode-select --install"
   elif agsec_have gh; then
-    _row backup attn "off-machine backup" "none — run: gh auth login (if needed), then agent-secrets backup (or keep a copy of ~/.config/secrets/ somewhere safe)" optional
+    _row backup attn "off-machine backup" "none — run gh auth login if needed, then back up" optional "agent-secrets backup"
   else
     # backup's prerequisite chain is gh → gh auth login → backup. Name the missing first link and where
     # the brew-less install recipe lives (P1-5) instead of a bare "run: agent-secrets backup" that dies.
-    _row backup attn "off-machine backup" "none — needs gh: install it (agent-secrets help onboarding), then gh auth login, then agent-secrets backup (or keep a copy of ~/.config/secrets/ safe)" optional
+    _row backup attn "off-machine backup" "none — needs gh first (install recipe below), then gh auth login" optional "agent-secrets help onboarding"
   fi
 }
 
@@ -267,10 +271,13 @@ check_onboarding() {  # service-readiness triage: the external CLIs the user con
   # ALL rows are `optional` tier → hidden by --summary (they are next-steps, never failures) but shown
   # in the full report, so `doctor` doubles as a "what's left to set up" view alongside `help onboarding`
   # (which carries the brew-less install recipes). az in particular is checked nowhere else.
-  if agsec_have gh; then _row onboarding ok "gh (GitHub CLI)" "installed — run 'gh auth login' to enable backup" optional
-  else _row onboarding attn "gh (GitHub CLI)" "not installed (optional; enables agent-secrets backup) — recipe: agent-secrets help onboarding" optional; fi
-  if agsec_have az; then _row onboarding ok "az (Azure CLI)" "installed — run 'az login' to authenticate" optional
-  else _row onboarding attn "az (Azure CLI)" "not installed (optional) — brew-less recipe: agent-secrets help onboarding" optional; fi
+  if agsec_have gh; then _row onboarding ok "gh (GitHub CLI)" "installed" optional "gh auth login"
+  else _row onboarding attn "gh (GitHub CLI)" "not installed (optional; enables backup)" optional "agent-secrets help onboarding"; fi
+  if agsec_have az; then _row onboarding ok "az (Azure CLI)" "installed" optional "az login"
+  else _row onboarding attn "az (Azure CLI)" "not installed (optional)" optional "agent-secrets help onboarding"; fi
+  # git is a genuine prerequisite for `backup`, and on a stock Mac `command -v git` lies about it.
+  if agsec_have_devtool git; then _row onboarding ok "git" "usable" optional
+  else _row onboarding attn "git" "placeholder only — Apple's developer tools are not installed" optional "xcode-select --install"; fi
 }
 
 check_discovery() {  # machine-wide agent-discovery surfaces (ADVISORY — makes agents AWARE, not enforced)

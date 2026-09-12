@@ -142,3 +142,65 @@ EOF
   [[ "$output" == *"[6/6]"* ]] || return 1
   [[ "$output" != *"[2/7]"* ]] || return 1
 }
+
+# ---- Fresh macOS: the Xcode-CLT stub problem ---------------------------------------------------
+# macOS ships inert stubs at /usr/bin for git/python3/clang/make/swift/lldb — byte-identical
+# (sha256 7f30f076…, 118864 bytes) and embedding "com.apple.dt.xcode_select.tool-shim". Without the
+# developer tools installed they still EXIST, so `command -v git` succeeds and the first real call
+# posts a GUI dialog. A fresh Mac is the default Mac, so this is the common case, not the exotic one.
+
+# Simulate "no developer tools": a fake xcode-select that fails. The PATH is rebuilt so that `git`
+# resolves to the real /usr/bin STUB (as it does on any Mac) while age/sops/jq still come from
+# wherever this machine keeps them — otherwise the probe is never exercised, because a developer box
+# resolves git to Homebrew, which is real by definition.
+_fresh_mac_path() {
+  local d="$AGENT_SECRETS_HOME/nodev"; mkdir -p "$d"
+  printf '#!/bin/sh\nexit 2\n' >"$d/xcode-select"; chmod +x "$d/xcode-select"
+  local tools; tools="$(dirname "$(command -v age)")"
+  printf '%s\n' "$d:$BATS_TEST_DIRNAME/mocks:/usr/bin:/bin:/usr/sbin:/sbin:$tools"
+}
+
+@test "fresh-mac: agsec_have_devtool REJECTS a /usr/bin stub when the developer tools are absent" {
+  local p; p="$(_fresh_mac_path)"
+  # precondition: git really does resolve to the stub in this simulated environment
+  run env PATH="$p" bash -c 'command -v git'
+  [ "$output" = "/usr/bin/git" ]
+  run env PATH="$p" bash -c '. "$REPO_ROOT/lib/common.sh"; agsec_have_devtool git; echo "rc=$?"'
+  [[ "$output" == *"rc=1"* ]] || return 1
+  # plain agsec_have still says yes — that IS the bug this probe exists to cover
+  run env PATH="$p" bash -c '. "$REPO_ROOT/lib/common.sh"; agsec_have git; echo "rc=$?"'
+  [[ "$output" == *"rc=0"* ]] || return 1
+}
+
+@test "fresh-mac: agsec_have_devtool ACCEPTS the same stub once the developer tools ARE present" {
+  local d="$AGENT_SECRETS_HOME/yesdev"; mkdir -p "$d"
+  printf '#!/bin/sh\necho /Library/Developer/CommandLineTools\n' >"$d/xcode-select"; chmod +x "$d/xcode-select"
+  run env PATH="$d:/usr/bin:/bin" bash -c '. "$REPO_ROOT/lib/common.sh"; agsec_have_devtool git; echo "rc=$?"'
+  [[ "$output" == *"rc=0"* ]] || return 1
+}
+
+@test "fresh-mac: a copy OUTSIDE /usr/bin is real by definition — no probe, no rejection" {
+  local p; p="$(_fresh_mac_path)"
+  local d="$AGENT_SECRETS_HOME/nodev"
+  printf '#!/bin/sh\necho ok\n' >"$d/git"; chmod +x "$d/git"   # shadows the stub; xcode-select still fails
+  run env PATH="$p" bash -c '. "$REPO_ROOT/lib/common.sh"; agsec_have_devtool git; echo "rc=$?"'
+  [[ "$output" == *"rc=0"* ]] || return 1
+}
+
+@test "fresh-mac: backup refuses with the one command that fixes it, instead of popping a dialog" {
+  setup_store
+  local p; p="$(_fresh_mac_path)"
+  local d="$AGENT_SECRETS_HOME/nodev"
+  printf '#!/bin/sh\nexit 0\n' >"$d/gh"; chmod +x "$d/gh"   # gh present, so git is the missing link
+  run env PATH="$p" bash "$REPO_ROOT/bin/agent-secrets" backup </dev/null
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"xcode-select --install"* ]] || return 1
+}
+
+@test "fresh-mac: doctor names git as a placeholder rather than reporting it usable" {
+  setup_store
+  local p; p="$(_fresh_mac_path)"
+  run env PATH="$p" bash "$REPO_ROOT/bin/agent-secrets" doctor
+  [[ "$output" == *"placeholder only"* ]] || return 1
+  [[ "$output" == *"xcode-select --install"* ]] || return 1
+}

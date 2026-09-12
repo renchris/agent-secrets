@@ -152,6 +152,14 @@ per-tool file for any other agent CLI present). Every change is recorded in
 > secret would land them in the agent's transcript. It prints one instruction: open **Terminal.app**
 > and run `agent-secrets setup`. Everything else is already done.
 
+> **Brand-new Mac?** Verified on a stock macOS PATH with no Homebrew, no Node, no Python, no
+> iTerm2 and no oh-my-zsh: the whole tool runs under the system `/bin/bash` 3.2, every command it
+> needs (`curl`, `tar`, `shasum`, `awk`, `security`, `launchctl`, `pbcopy`, `fdesetup`) ships with
+> macOS, and `age`/`sops`/`jq` are downloaded as pinned, signed, quarantine-free binaries.
+> **Apple's Xcode command line tools are not required** to install or to set up — only
+> `agent-secrets backup` needs `git`, and if it is missing the tool says
+> `xcode-select --install` instead of popping a dialog at you.
+
 > **Behind a corporate firewall or air-gapped?** No Homebrew and no `sudo` are needed — the toolchain
 > comes from pinned GitHub-release binaries. If `raw.githubusercontent.com` is blocked, install from an
 > internal mirror: `AGENT_SECRETS_BASE_URL=<mirror> bash install.sh`, and mirror the dependency binaries

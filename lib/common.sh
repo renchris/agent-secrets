@@ -103,6 +103,28 @@ agsec_digest() { shasum -a 256 2>/dev/null | awk '{print "sha256:"substr($1,1,12
 
 # --- Guards ---------------------------------------------------------------------
 agsec_have()    { command -v "$1" >/dev/null 2>&1; }
+
+# agsec_have is NOT a safe test for a developer tool on macOS. The system ships INERT STUBS at
+# /usr/bin for git, python3, clang, make, swift, lldb and friends — verified byte-identical
+# (sha256 7f30f076…, 118864 bytes each) and embedding "com.apple.dt.xcode_select.tool-shim". On a
+# Mac WITHOUT the Xcode Command Line Tools those stubs still exist, so `command -v git` SUCCEEDS,
+# and then the first real invocation posts a GUI "install the developer tools" dialog and exits
+# non-zero — a blocking modal in the middle of a terminal command.
+#
+# `xcode-select -p` is the honest probe: it is a real binary (not a stub), it never shows a dialog,
+# and it fails exactly when no toolchain is installed. A copy of the tool OUTSIDE /usr/bin
+# (Homebrew, etc.) is real by definition and needs no probe.
+agsec_have_devtool() {
+  agsec_have "$1" || return 1
+  case "$(command -v "$1")" in
+    /usr/bin/*) xcode-select -p >/dev/null 2>&1 || return 1 ;;
+  esac
+  return 0
+}
+agsec_require_devtool() {
+  agsec_have_devtool "$1" && return 0
+  agsec_die "$1 is not usable on this Mac. macOS ships a placeholder at /usr/bin/$1 that only offers to install Apple's developer tools. Install them once with:  xcode-select --install"
+}
 agsec_require() { agsec_have "$1" || agsec_die "required command not found: $1 — run: agent-secrets doctor"; }
 
 # True iff PATH1 is a readable CONTROLLING TERMINAL — the share/receive agent-exfil boundary. `( : <

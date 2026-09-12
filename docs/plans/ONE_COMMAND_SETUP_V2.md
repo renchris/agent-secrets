@@ -160,3 +160,65 @@ Real `install.sh` against a local release mirror built from `HEAD`, one PTY, 80�
    for 26 days because no tag was cut. A fix on `main` behind a pinned installer is a fix nobody has.
    The version bump is now covered by a test (`tests/install.bats` derives its TAG from `VERSION`),
    but nothing yet asserts that the pinned tag actually exists. That gap is real and unclosed.
+
+---
+
+## Fresh-macOS verification (2026-09-11)
+
+**Question asked:** does this work on a Mac with no Xcode, no Homebrew, no Python, no Node, no
+iTerm2, no oh-my-zsh?
+
+**Method.** The installer was run over a PTY with `PATH=/usr/bin:/bin:/usr/sbin:/sbin` and Homebrew
+variables unset — so `brew`, `age`, `sops`, `node` and every Homebrew/fnm/pyenv tool were genuinely
+invisible — into an empty synthetic `$HOME`. `security` and `pbcopy` stayed mocked so the real login
+Keychain and clipboard were untouched; both were then verified separately against the real binaries.
+
+**Result: the install and the wizard completed, 6 user actions, `[1/6]` → `[6/6]`, no failures.**
+
+| Surface | On a stock Mac | Verdict |
+|---|---|---|
+| shell | `/bin/bash` **3.2.57** | the entire tool ran under it — no re-exec, no bash 4 idiom |
+| `curl` `tar` `awk` `sed` `grep` `stty` `mktemp` `launchctl` `security` `pbcopy` `fdesetup` | present | ✓ |
+| `shasum` (the integrity gate) | a **Perl script**; `/usr/bin/perl` is a real binary, not a stub | ✓ (Apple has deprecated Perl — a future macOS removing it breaks the digest check) |
+| `age`, `sops` | absent | **downloaded**: arm64, ad-hoc *linker-signed*, **no `com.apple.quarantine`** (curl does not set it), executed — no Gatekeeper prompt, no `killed: 9` |
+| `jq` | present from macOS 15 (`jq-1.7.1-apple`); absent ≤ 14 | both paths verified; the fetch returns a signed, quarantine-free arm64 jq 1.8.2 |
+| Homebrew / Node / Python / oh-my-zsh / iTerm2 | absent | never consulted |
+| `~/.zshenv` | does not exist | created, `0600`, marker-delimited |
+| a coding agent to teach | none installed | correctly reports "no writable agent surfaces detected" and skips |
+| login Keychain | real `security` | the no-argv `-w` path prompts `password data for new item:` then `retype password for new item:` and writes — **exactly the text the wizard tells the user to expect** (F4). Verified with a throwaway service name, then deleted. |
+
+### The defect this question exposed — `command -v` lies about developer tools
+
+macOS ships **inert stubs** at `/usr/bin` for `git`, `python3`, `clang`, `make`, `swift` and `lldb`.
+Measured: all six are the same 118,864-byte binary (`sha256 7f30f076…`) embedding
+`com.apple.dt.xcode_select.tool-shim`. On a Mac without Apple's developer tools they still **exist**,
+so `command -v git` **succeeds**, and the first real call posts a GUI installer dialog and exits
+non-zero.
+
+The install and the wizard never call a shimmed tool — that was checked line by line and is clean.
+But `cmd/backup.sh` ran `agsec_require git`, which on a fresh Mac passes and then pops that dialog.
+Fixed: `agsec_have_devtool()` probes `xcode-select -p` (a real binary, never a dialog, fails exactly
+when no toolchain is installed) and treats any copy outside `/usr/bin` as real by definition.
+`backup` now refuses with `xcode-select --install`, and `doctor` reports git as a placeholder rather
+than as usable. Five locks in `tests/one_command.bats`, including a precondition asserting that
+`agsec_have git` says yes while `agsec_have_devtool git` says no.
+
+### What is NOT verified
+
+* **Intel (`x86_64`).** This Mac is arm64. `deps.sh` carries pinned `x86_64` digests and the arch
+  mapping, and `tests/install.bats` covers the mirror path, but no Intel Mac executed the fetched
+  binaries. Unknown, not asserted.
+* **The GitHub release-asset hop.** `v0.1.2` is unpublished, so the tool tarball came from a local
+  `file://` mirror. That exercises the same curl + `shasum` + layout-guard code the production URL
+  uses, and `age`/`sops`/`jq` *were* fetched over the real network from GitHub releases — but the
+  tool's own asset download is not proven until the release exists.
+* **macOS versions other than 15.7.9**, and any machine under MDM/managed-policy (the installer
+  defers on those by design; the defer path is covered by `tests/discovery.bats`, not by a live run).
+
+### Known limitation, not fixed here
+
+`AGENT_SECRETS_KC_SERVICE` is the fixed string `agent-age-key`, and the login Keychain is not
+`$HOME`-scoped. A second install on the same Mac — or a test run that does not mock `security` —
+would `-U` (update) over the existing entry. Harmless for one user with one install, which is the
+documented model, but it means the Keychain leg cannot be exercised in place without clobbering a
+real key. That is why the PTY runs mock `security` and the real prompt was proven separately.

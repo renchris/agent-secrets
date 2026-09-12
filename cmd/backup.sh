@@ -24,7 +24,7 @@ done
 # backup's prerequisite chain is gh → gh auth login → backup. A bare agsec_require gh points at doctor;
 # name the actual next step and where the brew-less install recipe lives (P1-5) so the user isn't stuck.
 agsec_have gh || agsec_die "backup needs the GitHub CLI (gh), which isn't installed. Install it (brew-less recipe): agent-secrets help onboarding — then run 'gh auth login', then re-run: agent-secrets backup"
-agsec_require git
+agsec_require_devtool git
 
 # Drop OUR OWN egress loopback proxy BEFORE the first gh network call (gh auth status hits GitHub —
 # through our allowlist proxy it would be refused unless github.com is allowlisted, killing backup with
