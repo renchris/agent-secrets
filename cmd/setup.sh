@@ -135,7 +135,8 @@ _recovery_handoff() {
     ui_say ""
     ui_say "Later it is — nothing is lost. The key stays in this file:"
     ui_say "  $rec"
-    ui_say "Save it off this Mac when you can; doctor will keep reminding you."
+    ui_say "When you have, run setup again to prove it and clear the file:"
+    ui_say "  agent-secrets setup"
     return 0
   fi
   if agsec_have pbcopy; then
@@ -180,9 +181,9 @@ _recovery_handoff() {
   ui_say ""
   ui_say "Not verified, so the key stays where it is safe — this file:"
   ui_say "  $rec"
-  ui_say "Once it really is saved off this Mac, delete that file:"
-  ui_say "  rm $rec"
-  ui_say "No rush. doctor will remind you until it is gone."
+  ui_say "Once it really is saved, run setup again to prove it and clear"
+  ui_say "the file — no rush, and doctor will remind you meanwhile:"
+  ui_say "  agent-secrets setup"
   return 0
 }
 
@@ -354,15 +355,9 @@ _done_screen() {
   ui_say "  agent-secrets run -- <cmd>  — run a command with secrets injected"
   ui_say "  agent-secrets doctor        — health check"
   ui_say "Off-machine backup:  agent-secrets backup   (doctor tracks it)."
-  # Custody hint lands HERE because this is the moment the user can act on it: on macOS Sequoia the
-  # wizard's Keychain paste is skipped in any non-interactive pass, leaving file custody in effect.
-  case "$(kc_status 2>/dev/null || true)" in
-    degraded*)
-      ui_say ""
-      ui_say "Your key runs on the 0600-file fallback (fully supported). Get"
-      ui_say "prompt-free Keychain custody anytime, in a real terminal:"
-      ui_say "  agent-secrets setup --keychain" ;;
-  esac
+  # No custody hint here. Screen [5/6]'s health check prints that row — with its own runnable
+  # command — one screen above, and _kc_offer printed it again on decline. Saying it a third time
+  # is noise, not handholding.
   # Next steps: gh/az are deliberately NOT vendored (different lifecycle) — point at the self-contained
   # in-product recipes so a user who needs GitHub/Azure isn't left hunting blog posts. `help onboarding`
   # is the SSOT (docs/ is not shipped in the tarball); POST_INSTALL.md is the web copy. (P0-1)

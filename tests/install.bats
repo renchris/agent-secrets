@@ -7,7 +7,10 @@ load test_helper
 # Build a real runtime tarball into a mock "mirror" dir the curl mock serves (AGSEC_MOCK_DL_DIR).
 # Exports: TAG, PKG (basename), MIRROR (dir). SHA of the built tarball → $BUILT_SHA.
 _build_mirror() {
-  TAG="v0.1.1"; PKG="agent-secrets-${TAG}.tar.gz"
+  # Derived from VERSION, never hardcoded: install.sh's PINNED_TAG tracks VERSION, so a pinned
+  # literal here silently serves the wrong filename from the mock mirror the moment the version is
+  # bumped — which is exactly how five install tests went red on the 0.1.1 -> 0.1.2 bump.
+  TAG="v$(cat "$REPO_ROOT/VERSION")"; PKG="agent-secrets-${TAG}.tar.gz"
   MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/agsec-mirror.XXXXXX")"
   ( cd "$REPO_ROOT" && git archive --prefix="agent-secrets-${TAG}/" HEAD -o "$MIRROR/$PKG" )
   BUILT_SHA="$(shasum -a 256 "$MIRROR/$PKG" | awk '{print $1}')"
