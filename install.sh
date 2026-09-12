@@ -48,7 +48,7 @@ main() {
   # It is empty on `main` (unreleased): the default production URL then REFUSES to install (a same-origin
   # .sha256 is no defense against a swapped asset); only a dev/mirror (AGENT_SECRETS_BASE_URL) falls back
   # to the sibling .sha256 for transport integrity. See the SHA-256 gate below.
-  local EXPECTED_SHA256=""
+  local EXPECTED_SHA256="84ce52fee015a3db8ff7665185d545237bdcc831adbbe2e409dba1a208c6021e"
 
   local HOME_DIR="${AGENT_SECRETS_HOME:-$HOME}"
   local INSTALL_DIR="$HOME_DIR/.agent-secrets"
