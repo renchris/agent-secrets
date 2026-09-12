@@ -19,14 +19,19 @@ set -o pipefail 2>/dev/null || true
 # AND all three wrappers — so those binaries are found at runtime WITHOUT editing bin/. common.sh is at
 # <root>/lib/common.sh, so vendor/bin is a sibling of lib/. Idempotent; only prepends when it exists
 # (a Homebrew/PATH toolchain never creates it, so this is a no-op for the classic install).
-_agsec_root="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")/.." >/dev/null 2>&1 && pwd)"
-if [ -n "${_agsec_root:-}" ] && [ -d "$_agsec_root/vendor/bin" ]; then
+# AGSEC_SELF_ROOT is the install root resolved from THIS file's own location. It is kept (not
+# unset) because it is the ONLY root available to a caller that sources common.sh directly without
+# going through the dispatcher — install.sh does exactly that, and under `set -u` a bare
+# ${AGENT_SECRETS_LIB} reference there aborted with "unbound variable" mid-way through the consent
+# preview, AND blanked the version field of every rule block it wrote (doctor could then never
+# match the marker). See agsec_root() below.
+AGSEC_SELF_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")/.." >/dev/null 2>&1 && pwd)"
+if [ -n "${AGSEC_SELF_ROOT:-}" ] && [ -d "$AGSEC_SELF_ROOT/vendor/bin" ]; then
   case ":$PATH:" in
-    *":$_agsec_root/vendor/bin:"*) : ;;
-    *) PATH="$_agsec_root/vendor/bin:$PATH"; export PATH ;;
+    *":$AGSEC_SELF_ROOT/vendor/bin:"*) : ;;
+    *) PATH="$AGSEC_SELF_ROOT/vendor/bin:$PATH"; export PATH ;;
   esac
 fi
-unset _agsec_root
 
 # Disable sops's online "is this the latest?" update-check. By default `sops --version` calls
 # api.github.com with NO client timeout, so on a locked-down corporate network (the exact target — the
@@ -36,7 +41,7 @@ unset _agsec_root
 # checked anyway. Unknown to an ancient sops → harmlessly ignored. Exported so child sops calls inherit it.
 export SOPS_DISABLE_VERSION_CHECK=1
 
-AGENT_SECRETS_VERSION="0.1.1"
+AGENT_SECRETS_VERSION="0.1.2"
 AGENT_SECRETS_KC_SERVICE="agent-age-key"              # Keychain service: the bootstrap age key (uninstall purges this EXACT service)
 AGENT_SECRETS_CANARY_NAME="AWS_BACKUP_ACCESS_KEY_ID"  # in-store canary (plausible name)
 # The canary ships as this INERT decoy value — it provides breach detection only after the operator
@@ -137,6 +142,31 @@ agsec_in_agent_session() {
   return 1
 }
 
+# --- Interactive stdin recovery (`curl … | bash`) --------------------------------
+# A human running the README one-liner as `curl … | bash` has stdin bound to the PIPE, not the
+# terminal — so every `[ -t 0 ]` gate reads "no human here" while a real terminal sits right in
+# front of them. That is how the single most widely-known install idiom degraded into a two-command
+# flow, and how a hidden prompt could read EOF and store an empty value.
+#
+# agsec_have_tty: is there a real controlling terminal we could prompt on, regardless of stdin?
+# agsec_attach_tty: rebind THIS shell's stdin to it, once, and report success.
+#
+# SECURITY: this is deliberately NOT a bypass of the agent-session refusal. An agent session's
+# /dev/tty is the agent's own pty and its transcript is secret-bearing, so callers MUST check
+# agsec_in_agent_session FIRST and refuse — attaching is only ever for a human at a real terminal.
+# The test seam mirrors agsec_src_is_tty's: honored only on a SYNTHETIC store, which holds no real
+# secret, so it can never weaken the production path.
+agsec_have_tty() {
+  [ -t 0 ] && return 0
+  agsec_src_is_tty /dev/tty
+}
+agsec_attach_tty() {
+  [ -t 0 ] && return 0
+  agsec_src_is_tty /dev/tty || return 1
+  exec 0</dev/tty || return 1
+  [ -t 0 ]
+}
+
 # umask for secret-bearing writes: owner-only (0600 files, 0700 dirs).
 agsec_secure_umask() { umask 077; }
 
@@ -146,13 +176,20 @@ agsec_secure_umask() { umask 077; }
 # shellcheck disable=SC2153  # AGENT_SECRETS_LIB is set by the dispatcher; not a misspelling of _BIN
 agsec_bin_path() {
   if [ -n "${AGENT_SECRETS_BIN:-}" ]; then printf '%s\n' "$AGENT_SECRETS_BIN"; return 0; fi
-  printf '%s\n' "${AGENT_SECRETS_LIB%/lib}/bin/agent-secrets"
+  printf '%s\n' "$(agsec_root)/bin/agent-secrets"
 }
 
 # Tool version, for staleness detection of an installed rule block (embedded in the block's integrity
 # marker; doctor compares it to this). Best-effort; "0" if the VERSION file is unreadable.
-# shellcheck disable=SC2153  # AGENT_SECRETS_LIB is dispatcher-set
-agsec_version() { cat "${AGENT_SECRETS_LIB%/lib}/VERSION" 2>/dev/null || printf '0'; }
+# The install root. AGENT_SECRETS_LIB (dispatcher-set) wins; otherwise fall back to the root this
+# file resolved from at load time. Both references are :--guarded so `set -u` in a caller can never
+# turn a missing variable into a fatal "unbound variable" — the failure mode B2 documented.
+# shellcheck disable=SC2153  # AGENT_SECRETS_LIB is dispatcher-set; not a misspelling
+agsec_root() {
+  if [ -n "${AGENT_SECRETS_LIB:-}" ]; then printf '%s\n' "${AGENT_SECRETS_LIB%/lib}"; return 0; fi
+  printf '%s\n' "${AGSEC_SELF_ROOT:-}"
+}
+agsec_version() { cat "$(agsec_root)/VERSION" 2>/dev/null || printf '0'; }
 
 # The four golden rules — the SINGLE source of rule DATA, rendered per surface so the wording can never
 # drift. <bin> = the command an agent should invoke: bare `agent-secrets` for a user-PASTED surface
