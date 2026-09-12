@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: landed — release gated on the operator
 ---
 
 # One-command setup — the claim, measured and repaired
@@ -110,3 +110,53 @@ lines, and a manual Cursor paste.
 4. `curl … | bash` in a real terminal completes the ceremony; an agent session still refuses.
 5. The deferral names the one cause that applies and prints nothing false.
 6. `bats tests/` green, `shellcheck` clean, and the PTY harness is committed so the claim cannot rot.
+
+---
+
+## Status log
+
+- **2026-09-11** — Dry run performed against the **published** one-liner and against `main`, over a
+  PTY at 80×24, `security`/`pbcopy` mocked, synthetic `AGENT_SECRETS_HOME`. B1–B8 above are all
+  from those runs; none is hypothetical.
+- **2026-09-11** — **B2–B8 fixed and landed**, five commits:
+  `8933250` (B2/B6 foundation: `agsec_root()`, `agsec_have_tty`/`agsec_attach_tty`) ·
+  `2a58301` (B3/B4: gum removed from `ui.sh`, `deps.sh`, `doctor.sh`; per-row commands;
+  token-safe wrapping) · `6abbdc4` (B5/B6/B7/B8: `/dev/tty` attach, honest deferral, opt-in
+  recovery save, 1-based screens, keygen banner, done screen) · `657dbcb` (locks + README +
+  version) · `f3e8c57` (the `rm` footgun and a triplicated hint).
+  **Gate: 236 bats pass / 0 fail · shellcheck exit 0.**
+
+### The result, measured the same way the defects were
+
+Real `install.sh` against a local release mirror built from `HEAD`, one PTY, 80×24:
+
+| | before | after |
+|---|---|---|
+| user actions, minimum path | 8 + a password-manager round trip | **7** |
+| reaches the done screen | no (v0.1.1 aborts at `[4/7]`) | **yes** |
+| shell errors on screen | 2 (`unbound variable`) | **0** |
+| terminal-query garbage (`]11;?\`) | on every prompt | **0** |
+| lines over 72 columns | 3 | **0** (paths excepted, deliberately whole) |
+| resize 80→46 mid-flow | question truncated mid-word | **no damage** |
+| defaults that do what they say | canary inverted (Enter armed it) | **all** |
+
+### Durable learnings
+
+1. **A hard wrap is a promise you cannot keep.** F5 fixed narrow terminals by wrapping prose to 80
+   columns. That freezes the line: broken at 46 *and* at 120, and no emulator can reflow it. One
+   short logical line per message is better at every width, and it is the only form that survives a
+   resize. `fold -s` compounds it by splitting an over-long token, which is how a store path became
+   unpastable — the one thing a path is for.
+2. **A widget that owns the terminal owns every failure mode in it.** gum cost a silently inverted
+   default, a truncating resize, two blocking capability queries and a vendored binary — to render a
+   Yes/No. The measured cost of an interactive dependency is paid on every prompt, forever; the
+   benefit was cosmetic.
+3. **`[ -t 0 ]` answers "is stdin a terminal", which is not the question.** The question is "is there
+   a human here", and under `curl … | bash` those differ. Conflating them turned the best-known
+   install idiom into a two-command flow and risked storing an empty secret from a dead pipe.
+   `/dev/tty` is the answer — and it is NOT a loosening, because the agent-session refusal is a
+   separate condition checked first.
+4. **Shipping is part of the fix.** The F1–F7 rebuild was correct, tested, landed — and unreachable
+   for 26 days because no tag was cut. A fix on `main` behind a pinned installer is a fix nobody has.
+   The version bump is now covered by a test (`tests/install.bats` derives its TAG from `VERSION`),
+   but nothing yet asserts that the pinned tag actually exists. That gap is real and unclosed.
