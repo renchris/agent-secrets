@@ -1,5 +1,5 @@
 ---
-status: landed — release gated on the operator
+status: complete
 ---
 
 # One-command setup — the claim, measured and repaired
@@ -214,12 +214,38 @@ removing them would break an Intel user for no gain — but no Intel Mac has exe
 binary, and this document does not assert that it works. If Intel ever becomes a target, that run is
 the thing to do; it is not a defect to chase now.
 
+### v0.1.2 released, and the published one-liner verified against it (2026-09-12)
+
+`v0.1.2` is cut: tag `eebef4474`, release assets uploaded, `install.sh` served at the tag carrying
+`EXPECTED_SHA256="84ce52fe…"`, which matches the published tarball byte for byte.
+
+The last unverified hop is now closed. The **exact README one-liner** — no mirror, no
+`AGENT_SECRETS_BASE_URL`, no overrides — was run over a PTY on a stock
+`PATH=/usr/bin:/bin:/usr/sbin:/sbin`:
+
+```
+Downloading v0.1.2…            SHA-256 verified.
+age: fetching pinned, SHA-256-verified binary (no sudo)…
+sops: fetching pinned, SHA-256-verified binary (no sudo)…
+jq: using /usr/bin/jq
+[1/6] … [6/6]                  ### ONE-LINER EXIT=0 ###
+```
+
+6 user actions, 0 shell errors, 0 terminal-query bytes, `agent-secrets 0.1.2` installed, and the
+store it produced decrypts and lists. **The claim in the README is now a measured fact about the
+software a stranger downloads.**
+
+### The release script had the same defect the installer did
+
+The first `release.sh v0.1.2` run was launched from a non-interactive shell. Its `[y/N]` read EOF,
+`|| a=''` treated the absence of an answer as **no**, the tag move was skipped, the script did all
+the remaining work anyway, and it died at the very end with a digest-mismatch error naming the wrong
+cause. Fixed the same way as `setup`: attach `/dev/tty` when there is one, refuse on the FIRST screen
+when there is not, and treat EOF as a hard stop rather than a silent "no". There is still no
+unattended mode, deliberately.
+
 ### What is NOT verified
 
-* **The GitHub release-asset hop.** `v0.1.2` is unpublished, so the tool tarball came from a local
-  `file://` mirror. That exercises the same curl + `shasum` + layout-guard code the production URL
-  uses, and `age`/`sops`/`jq` *were* fetched over the real network from GitHub releases — but the
-  tool's own asset download is not proven until the release exists.
 * **macOS versions other than 15.7.9**, and any machine under MDM/managed-policy (the installer
   defers on those by design; the defer path is covered by `tests/discovery.bats`, not by a live run).
 

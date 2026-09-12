@@ -22,7 +22,28 @@ trap 'rm -rf "$WORK"' EXIT
 
 _say() { printf '%s\n' "$*" >&2; }
 _die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-_confirm() { local a; printf '%s [y/N]: ' "$1" >&2; read -r a || a=''; case "$a" in [yY]*) return 0 ;; *) return 1 ;; esac; }
+# The confirms below are the human gate on an irreversible publish, so an ANSWER is required — the
+# absence of one is not a "no". Measured 2026-09-12: launched from a non-interactive shell (an
+# agent's command runner, CI, a `!` prompt), stdin is not a terminal, `read` returned EOF instantly,
+# the old `|| a=''` took that as N, the tag move was skipped, the script did all the remaining work
+# anyway and then died at the very end with a digest-mismatch error that named the wrong cause.
+# Distinguish the two: a real "n" declines, EOF is a hard stop that says what to do about it.
+_confirm() {
+  local a
+  printf '%s [y/N]: ' "$1" >&2
+  if ! read -r a; then
+    printf '\n' >&2
+    _die "nothing on stdin to answer with — this publish needs a human at a terminal. Run it in Terminal.app (it deliberately has no unattended mode)."
+  fi
+  case "$a" in [yY]*) return 0 ;; *) return 1 ;; esac
+}
+
+# `curl … | bash`-style launches and agent command runners leave stdin on a pipe while a real
+# terminal sits right there. Attach it, so the confirms below have something to read.
+if [ ! -t 0 ]; then ( exec 3</dev/tty; [ -t 3 ] ) 2>/dev/null && exec 0</dev/tty; fi
+# Fail on the FIRST screen, not after archiving and baking: if there is no way to confirm, nothing
+# below can be published, and doing the work first only buys a confusing error at the end.
+[ -t 0 ] || _die "no terminal on stdin — this release needs a human to confirm the tag move and the publish. Run it in Terminal.app."
 
 command -v gh   >/dev/null 2>&1 || _die "gh not found (brew install gh) — needed for the release step"
 command -v shasum >/dev/null 2>&1 || _die "shasum not found"
