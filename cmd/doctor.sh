@@ -227,11 +227,21 @@ check_injection() {
     elif [ -e "$bd/$w" ]; then _row injection attn "wrapper" "$w not executable"
     else _row injection bad "wrapper" "$w missing"; fi
   done
+  # Is ANTHROPIC_API_KEY in the store at all? (names-only: store_has greps a NAME.) Everything about
+  # the helper hinges on it: Claude Code ranks apiKeyHelper ABOVE its own login and treats an empty
+  # helper as a hard auth failure (lib/wire.sh), so with NO key stored the correct state is "helper
+  # present, NOT wired, Claude Code on its own login" — an ⚠ next-step, never a ✗. With the key
+  # stored, an empty helper or an unwired settings.json IS broken.
+  local have_key=0; _guard store_has ANTHROPIC_API_KEY && have_key=1
   akh="$bd/apiKeyHelper"
   if [ -x "$akh" ]; then
-    if _try out "$akh" && [ -n "$out" ]; then _row injection ok "apiKeyHelper" "returns credential"
-    else _row injection bad "apiKeyHelper" "empty output"; fi
-    out=""
+    if [ "$have_key" = 1 ]; then
+      if _try out "$akh" && [ -n "$out" ]; then _row injection ok "apiKeyHelper" "returns credential"
+      else _row injection bad "apiKeyHelper" "empty output"; fi
+      out=""
+    else
+      _row injection attn "apiKeyHelper" "no ANTHROPIC_API_KEY stored (optional) — Claude Code uses its own login until you add one" optional "agent-secrets add ANTHROPIC_API_KEY"
+    fi
   else
     _row injection bad "apiKeyHelper" "missing"
   fi
@@ -242,11 +252,16 @@ check_injection() {
   local sj helper; sj="$(agsec_home)/.claude/settings.json"
   if agsec_have jq && [ -f "$sj" ]; then
     helper="$(jq -r '.apiKeyHelper // empty' "$sj" 2>/dev/null || true)"
-    if [ "$helper" = "$akh" ]; then _row injection ok "settings.json apiKeyHelper" "wired"
+    if [ "$helper" = "$akh" ]; then
+      if [ "$have_key" = 1 ]; then _row injection ok "settings.json apiKeyHelper" "wired"
+      else _row injection bad "settings.json apiKeyHelper" "wired but no ANTHROPIC_API_KEY stored — Claude Code auth will FAIL (empty helper); store the key or unwire" core "agent-secrets add ANTHROPIC_API_KEY"; fi
     elif [ -n "$helper" ]; then _row injection attn "settings.json apiKeyHelper" "points at a different helper (kept — your edit)"
-    else _row injection bad "settings.json apiKeyHelper" "not wired" core "agent-secrets setup"; fi
-  else
+    elif [ "$have_key" = 1 ]; then _row injection bad "settings.json apiKeyHelper" "not wired" core "agent-secrets setup"
+    else _row injection attn "settings.json apiKeyHelper" "not wired — nothing to wire until ANTHROPIC_API_KEY is stored (add wires it)" optional "agent-secrets add ANTHROPIC_API_KEY"; fi
+  elif [ "$have_key" = 1 ]; then
     _row injection attn "settings.json apiKeyHelper" "settings.json/jq unavailable"
+  else
+    _row injection attn "settings.json apiKeyHelper" "not wired — nothing to wire until ANTHROPIC_API_KEY is stored (add wires it)" optional "agent-secrets add ANTHROPIC_API_KEY"
   fi
 }
 

@@ -32,3 +32,15 @@ else
   store_add "$name"          # value already on the pipe
 fi
 agsec_ok "stored $name (value never shown or logged)"
+
+# Storing ANTHROPIC_API_KEY is what makes the Claude Code apiKeyHelper safe to wire (lib/wire.sh: a
+# wired helper with nothing to print breaks Claude Code's auth), so setup leaves it unwired until now
+# and THIS is the moment to complete the wiring — same reversible, manifest-recorded edit. Idempotent;
+# a missing wrapper (setup never ran its wire screen) is explained by the function, never fatal.
+if [ "$name" = ANTHROPIC_API_KEY ]; then
+  # shellcheck source=lib/manifest.sh
+  . "$AGENT_SECRETS_LIB/manifest.sh"
+  # shellcheck source=lib/wire.sh
+  . "$AGENT_SECRETS_LIB/wire.sh"
+  agsec_wire_apikeyhelper || true
+fi

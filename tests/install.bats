@@ -4,6 +4,22 @@
 # synthetic-HOME + mocked (curl/brew/launchctl/security/osascript) — no network, no real Keychain.
 load test_helper
 
+# The release file set, from the WORKING TREE: tracked + untracked-not-ignored paths minus every path
+# that is `export-ignore` itself or sits under an `export-ignore` directory. One check-attr call.
+_tree_files() {
+  local files ign
+  files="$(git ls-files -co --exclude-standard)"
+  # The ignore set travels as ONE '|'-joined string: BSD awk rejects a newline inside a -v value.
+  ign="$(printf '%s\n' "$files" \
+        | awk -F/ '{ p=""; for (i = 1; i < NF; i++) { p = p $i "/"; print p }; print $0 }' | sort -u \
+        | git check-attr --stdin export-ignore | awk -F': ' '$3 == "set" { print $1 }' | tr '\n' '|')"
+  printf '%s\n' "$files" | awk -v ign="$ign" '
+    BEGIN { n = split(ign, a, "|"); for (i = 1; i <= n; i++) if (a[i] != "") I[a[i]] = 1 }
+    { keep = ($0 in I) ? 0 : 1; p = ""; nf = split($0, s, "/")
+      for (i = 1; i < nf; i++) { p = p s[i] "/"; if (p in I) keep = 0 }
+      if (keep) print }'
+}
+
 # Build a real runtime tarball into a mock "mirror" dir the curl mock serves (AGSEC_MOCK_DL_DIR).
 # Exports: TAG, PKG (basename), MIRROR (dir). SHA of the built tarball → $BUILT_SHA.
 _build_mirror() {
@@ -12,7 +28,15 @@ _build_mirror() {
   # bumped — which is exactly how five install tests went red on the 0.1.1 -> 0.1.2 bump.
   TAG="v$(cat "$REPO_ROOT/VERSION")"; PKG="agent-secrets-${TAG}.tar.gz"
   MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/agsec-mirror.XXXXXX")"
-  ( cd "$REPO_ROOT" && git archive --prefix="agent-secrets-${TAG}/" HEAD -o "$MIRROR/$PKG" )
+  # Archive the WORKING TREE, not HEAD. `git archive HEAD` meant every install test silently exercised
+  # the PREVIOUS commit's setup.sh — a suite that goes green on code you have not committed yet is
+  # measuring the wrong thing (and a new lib file was invisible until committed). Same file set the
+  # release cuts: tracked + untracked-not-ignored, minus every `export-ignore` path in .gitattributes,
+  # under the single prefix dir install.sh's layout guard requires.
+  # A directory pattern (`tests/ export-ignore`) is matched by check-attr only against the DIRECTORY
+  # path with its trailing slash, never against the files inside — so every ancestor dir is checked
+  # in the same single call and a file under an ignored ancestor is dropped.
+  ( cd "$REPO_ROOT" && _tree_files | tar -czf "$MIRROR/$PKG" -s "|^|agent-secrets-${TAG}/|" -T - )
   BUILT_SHA="$(shasum -a 256 "$MIRROR/$PKG" | awk '{print $1}')"
   printf '%s  %s\n' "$BUILT_SHA" "$PKG" >"$MIRROR/$PKG.sha256"
   export AGSEC_MOCK_DL_DIR="$MIRROR" TAG PKG MIRROR BUILT_SHA
@@ -83,20 +107,53 @@ teardown() {
   [ -f "$AGENT_SECRETS_HOME/.local/state/agent-secrets/install-manifest.json" ]  # manifest_init ran
 }
 
-@test "install in an agent session with CLOSED stdin defers the key ceremony, exit 0 (feedback BLOCKER #2)" {
+@test "install in an agent session with CLOSED stdin completes a HEADLESS setup, exit 0 — no human step left" {
   _build_mirror
   local baked="$MIRROR/install.sh"
   sed "s/EXPECTED_SHA256=\"[a-f0-9]*\"/EXPECTED_SHA256=\"$BUILT_SHA\"/" "$REPO_ROOT/install.sh" >"$baked"
-  # A real Cursor/Claude-Code session has NON-tty stdin (often /dev/null). The feedback saw "Installed."
-  # then exit 1; a naive fix still aborts at the consent `read` (EOF under set -e) before the deferral.
-  # With no stdin piped, the tool install must SUCCEED (exit 0) and route the human to a real terminal.
+  mkdir -p "$AGENT_SECRETS_HOME/.claude"                        # a Claude Code machine → discovery gates in
+  # A real Cursor/Claude-Code session has NON-tty stdin (often /dev/null). This used to install the
+  # tool and then print "open Terminal.app and run agent-secrets setup" — the agent had to hand the
+  # human a command (docs/plans/AGENT_ENTRYPOINT_HEADLESS.md M1). Now the ONE command finishes: real
+  # keys, Keychain (mock) custody, store, wrappers, discovery — and nothing secret in the output.
   run bash -c "CLAUDECODE=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked' </dev/null"
   [ "$status" -eq 0 ]
-  [[ "$output" == *"real terminal"* ]] || return 1
-  [[ "$output" == *"agent-secrets setup"* ]] || return 1
+  [[ "$output" != *"real terminal"* ]] || return 1               # the deferral screen is gone
+  [[ "$output" != *"Open Terminal.app"* ]] || return 1
+  [[ "$output" == *"headless"* ]] || return 1
+  [[ "$output" == *"You're set up"* ]] || return 1
+  [[ "$output" != *"AGE-SECRET-KEY"* ]] || return 1              # names-only: no key material printed
   [ -f "$AGENT_SECRETS_HOME/.agent-secrets/lib/common.sh" ]     # tool unpacked
   [ -L "$AGENT_SECRETS_HOME/bin/agent-secrets" ]                # wired onto PATH
-  [ ! -f "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]    # key ceremony correctly SKIPPED
+  [ -f "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]      # the key ceremony RAN
+  [ -s "$AGENT_SECRETS_HOME/.config/secrets/age.key" ]
+  [ -s "$AGENT_SECRETS_HOME/.config/secrets/recovery.key" ]     # kept on disk (0600) — never deleted unverified
+  grep -q "agent-secrets" "$AGENT_SECRETS_HOME/.claude/CLAUDE.md"   # discovery written by default
+  grep -q done "$AGENT_SECRETS_HOME/.local/state/agent-secrets/wizard-state.json"
+  # The installed tool is USABLE from the same session by full path, and doctor gates green.
+  run env AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" "$AGENT_SECRETS_HOME/bin/agent-secrets" doctor
+  [ "$status" -eq 0 ]
+}
+
+@test "install --headless --import-env seeds the store from the environment; --no-discovery writes no rules file" {
+  _build_mirror
+  local baked="$MIRROR/install.sh"
+  sed "s/EXPECTED_SHA256=\"[a-f0-9]*\"/EXPECTED_SHA256=\"$BUILT_SHA\"/" "$REPO_ROOT/install.sh" >"$baked"
+  mkdir -p "$AGENT_SECRETS_HOME/.claude"
+  run bash -c "SEEDED_TOKEN=env-seed-install-3c1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked' --headless --import-env SEEDED_TOKEN --no-discovery </dev/null"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"imported SEEDED_TOKEN"* ]] || return 1
+  [[ "$output" != *"env-seed-install-3c1"* ]] || return 1        # the value never surfaces
+  [ ! -f "$AGENT_SECRETS_HOME/.claude/CLAUDE.md" ]               # --no-discovery honored
+  run env AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" "$AGENT_SECRETS_HOME/bin/agent-secrets" list
+  [[ "$output" == *"SEEDED_TOKEN"* ]] || return 1
+}
+
+@test "install --dry-run renders the headless plan when there is no tty (no deferral sentence anywhere)" {
+  run bash -c "AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$REPO_ROOT/install.sh' --dry-run </dev/null"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"setup --headless"* ]] || return 1
+  [[ "$output" != *"real terminal"* ]] || return 1
 }
 
 @test "a required-dependency failure removes the unpacked tool — no unrecorded residue (cleanup trap)" {

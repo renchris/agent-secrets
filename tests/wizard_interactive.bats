@@ -54,13 +54,9 @@ setup_file() { :; }
   [[ "$output" == *"stored GOOD_NAME"* ]] || return 1
 }
 
-@test "F3: an empty canary-token paste skips the arming — never aborts [4/7]" {
-  setup_store
-  run _wiz 'y\n\n\n' _arm_canary
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"skipped"* ]] || return 1
-  [[ "$output" != *"ERROR"* ]] || return 1
-}
+# (The canary-arming prompt was removed from the wizard on 2026-09-17 — a default-`no` keystroke
+# almost every first run spent on Enter. Arming is `agent-secrets add <canary NAME>`, which doctor
+# names; the F3 ladder it shared with the first secret is still locked by the tests above.)
 
 # ---- F2: no destructive delete on an unverified assertion --------------------------------------
 
@@ -112,8 +108,9 @@ _mint_rec() {
 
 # ---- End-to-end: the full interactive wizard on a real PTY (expect) ----------------------------
 # These drive `bin/agent-secrets setup` exactly as a human at a terminal — the path the unattended
-# suite can never cover, and the one that failed in the field. NOTE: always answer 'n' to the
-# Keychain offer here — the mock `security -w` reads stdin to EOF and would swallow the script.
+# suite can never cover, and the one that failed in the field. The Keychain populate no longer
+# prompts (it goes file → pipe → `security -i`, and the mock honours `-i`), and the canary prompt
+# is gone — so the drives below answer only the recovery save and the first-secret screen.
 
 @test "E2E: the author's failed first-run now reaches [6/6] — empty pastes everywhere, nothing aborts, nothing destroyed" {
   command -v expect >/dev/null 2>&1 || skip "expect not available"
@@ -130,12 +127,10 @@ expect_after { timeout { puts "\nDESYNC-TIMEOUT"; exit 90 } eof { puts "\nEARLY-
 expect "Save it off this Mac now?" { send "y\r" }
 expect "RECOVERY key (from where you saved it)" { sleep 1; send "\r" }
 expect "RECOVERY key (from where you saved it)" { sleep 1; send "\r" }
-expect "Populate your login Keychain" { send "n\r" }
 expect -ex {choose [1-4, Enter = 1]:} { send "3\r" }
 expect "name:" { send "CODA_API_TOKEN\r" }
 expect "Value for CODA_API_TOKEN" { sleep 1; send "\r" }
 expect "Value for CODA_API_TOKEN" { sleep 1; send "\r" }
-expect "Arm it now?" { send "n\r" }
 expect eof { }
 catch wait result
 exit [lindex $result 3]
@@ -143,8 +138,9 @@ EOF
   run expect "$AGENT_SECRETS_HOME/drive.exp"
   [ "$status" -eq 0 ]
   [[ "$output" == *"You're set up"* ]] || return 1                                # [6/6] reached
+  [[ "$output" == *"Keychain custody — primary"* ]] || return 1                   # no paste, no prompt
   [ -f "$AGENT_SECRETS_HOME/.config/secrets/recovery.key" ]                       # unverified ⇒ KEPT (F2)
-  [ -L "$AGENT_SECRETS_HOME/bin/claude-agent" ]                                   # screen 5 ran
+  [ -L "$AGENT_SECRETS_HOME/bin/claude-agent" ]                                   # screen 4 ran
   [ -L "$AGENT_SECRETS_HOME/bin/apiKeyHelper" ]
   grep -q done "$AGENT_SECRETS_HOME/.local/state/agent-secrets/wizard-state.json" # wizard state: done
 }
@@ -164,10 +160,8 @@ while {[gets $fh l] >= 0} { if {[string match AGE-SECRET-KEY-* $l]} { set keylin
 close $fh
 send "y\r"
 expect "RECOVERY key (from where you saved it)" { sleep 1; send -- "$keyline\r" }
-expect "Populate your login Keychain" { send "n\r" }
 expect -ex {choose [1-4, Enter = 1]:} { send "1\r" }
 expect "Value for ANTHROPIC_API_KEY" { sleep 1; send "e2e-val-regression\r" }
-expect "Arm it now?" { send "n\r" }
 expect eof { }
 catch wait result
 exit [lindex $result 3]
@@ -178,6 +172,7 @@ EOF
   [[ "$output" == *"You're set up"* ]] || return 1
   [ ! -f "$AGENT_SECRETS_HOME/.config/secrets/recovery.key" ]      # verified ⇒ removed
   [[ "$output" != *"e2e-val-regression"* ]] || return 1            # hidden read: value never echoed
+  [[ "$output" == *"wired apiKeyHelper"* ]] || return 1            # the key IS stored ⇒ the helper is wired
   run agsec list
   [[ "$output" == *"ANTHROPIC_API_KEY"* ]] || return 1             # the secret actually landed
 }

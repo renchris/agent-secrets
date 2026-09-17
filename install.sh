@@ -75,13 +75,35 @@ main() {
   local SMOKE_LABEL="com.agent-secrets.smoke"
   local SMOKE_PLIST="$HOME_DIR/Library/LaunchAgents/${SMOKE_LABEL}.plist"
 
-  local DRY_RUN=0
-  [ "${1:-}" = "--dry-run" ] && DRY_RUN=1
-
   _say()  { printf '%s\n' "$*" >&2; }
   _step() { printf '  → %s\n' "$*" >&2; }
   _die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
   _run()  { if [ "$DRY_RUN" -eq 1 ]; then _step "$*"; else _step "$*"; "$@"; fi; }
+
+  # Flags. The setup-shaping ones are passed straight through to `agent-secrets setup`, which owns
+  # their meaning (see `agent-secrets setup --help`): --headless forces the prompt-free setup that an
+  # agent session / no-tty install gets anyway; --import-env seeds the store from env-var NAMES already
+  # set in this process (never a value on argv); --no-discovery skips the machine-wide agent rules
+  # that a headless setup writes by default.
+  local DRY_RUN=0 HEADLESS=0 IMPORT_ENV="" NO_DISCOVERY=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dry-run)      DRY_RUN=1 ;;
+      --headless)     HEADLESS=1 ;;
+      --no-discovery) NO_DISCOVERY=1 ;;
+      --import-env)   [ -n "${2:-}" ] || _die "--import-env needs NAME[,NAME…]"; IMPORT_ENV="$2"; shift ;;
+      --import-env=*) IMPORT_ENV="${1#--import-env=}" ;;
+      -h|--help)
+        _say "usage: install.sh [--dry-run] [--headless] [--import-env NAME[,NAME…]] [--no-discovery]"
+        _say "  --dry-run       show the plan, change nothing"
+        _say "  --headless      prompt-free setup with real keys (automatic in an agent session / with no tty)"
+        _say "  --import-env    seed the store from env-var NAMES set in this shell (never a value on argv)"
+        _say "  --no-discovery  do not write the machine-wide agent rules (headless writes them by default)"
+        return 0 ;;
+      *) _die "unknown argument '$1' (see: install.sh --help)" ;;
+    esac
+    shift
+  done
 
   # Is this a coding-agent session? Inlined (common.sh is not sourced until after unpack) and kept
   # identical in intent to agsec_in_agent_session — a transcript-bearing session must never be
@@ -118,10 +140,20 @@ main() {
     _say "  • symlink the command + wrappers into $BIN_DIR   (agent-secrets, claude-agent, cursor-agent, apiKeyHelper)"
     _say "  • add a marker-delimited PATH block to $RC_FILE${BASH_RC_FILE:+ (and $BASH_RC_FILE — your login shell is bash)}"
     _say "  • install a weekly launchd smoke job ($SMOKE_LABEL)"
-    _say "  • (via 'agent-secrets setup') back up an existing ~/.claude/settings.json as the revert point for its apiKeyHelper edit"
-    _say "  • OFFER (opt-in, interactive terminal only) to add agent-secrets rules to ~/.claude/CLAUDE.md so agents in EVERY repo know to use it"
+    _say "  • (via 'agent-secrets setup') back up an existing ~/.claude/settings.json as the revert point for its apiKeyHelper edit (wired only once ANTHROPIC_API_KEY is stored)"
+    if [ -t 0 ] && [ "$HEADLESS" -eq 0 ]; then
+      _say "  • OFFER (opt-in) to add agent-secrets rules to ~/.claude/CLAUDE.md so agents in EVERY repo know to use it"
+    elif [ "$NO_DISCOVERY" -eq 1 ]; then
+      _say "  • skip the machine-wide agent rules (--no-discovery)"
+    else
+      _say "  • add agent-secrets rules to ~/.claude/CLAUDE.md (+ each present agent CLI's file) so agents in EVERY repo know to use it — advisory, reversible; --no-discovery skips"
+    fi
     _say "  • record every change to $STATE_DIR/install-manifest.json (one-command uninstall)"
-    _say "  • run 'agent-secrets setup' at the end (in a coding-agent session OR a non-interactive install: install now, then finish setup in a real terminal)"
+    if [ -t 0 ] && [ "$HEADLESS" -eq 0 ]; then
+      _say "  • run 'agent-secrets setup' at the end — the interactive wizard (keys, first secret, wiring)"
+    else
+      _say "  • run 'agent-secrets setup --headless' at the end — real keys, Keychain custody, wiring, NO prompts and no secret on any output${IMPORT_ENV:+; import from env: $IMPORT_ENV}"
+    fi
     _say ""
   }
 
@@ -148,9 +180,9 @@ main() {
     fi
   else
     if _agent_session; then
-      _say "(coding-agent session — proceeding with the plan above; the key ceremony defers to a real terminal)"
+      _say "(coding-agent session — proceeding with the plan above; setup runs headless)"
     else
-      _say "(no terminal on stdin — proceeding with the plan above)"
+      _say "(no terminal on stdin — proceeding with the plan above; setup runs headless)"
     fi
   fi
 
@@ -305,11 +337,13 @@ main() {
   # Consent is INFORMED: the prompt NAMES each file it would write + previews the block — never a blind
   # one-keypress fan-out. Interactive stdin only — a piped/CI install NEVER silently edits a global file.
   # Pin AGENT_SECRETS_BIN to the PATH command so the preview and the write share one abs-path (the
-  # rendered rules reference THIS binary, not a PATH impostor).
+  # rendered rules reference THIS binary, not a PATH impostor). Exported, so the headless setup this
+  # installer chains into renders the SAME path when it writes discovery itself.
   AGENT_SECRETS_BIN="$BIN_DIR/agent-secrets"; export AGENT_SECRETS_BIN
-  local DISCOVERY_OFFERED=0
-  if [ -t 0 ] && [ "$DRY_RUN" -eq 0 ]; then
-    DISCOVERY_OFFERED=1
+  # Interactive stdin only, and not under --headless: a headless setup writes discovery ITSELF (by
+  # default, announcing every file first; --no-discovery skips) — so a piped/agent install is never
+  # asked, and never silently skipped either.
+  if [ -t 0 ] && [ "$HEADLESS" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     local _plan; _plan="$(agsec_discovery_plan)"
     if [ -z "$_plan" ]; then
       _say "  → no writable agent surfaces detected (or all are org/MDM-managed) — machine-wide discovery skipped"
@@ -335,50 +369,20 @@ main() {
     fi
   fi
 
-  # --- finish: the key ceremony ------------------------------------------------
-  # setup mints your age key and takes your first secret — a secret-bearing ceremony. Inside a coding-
-  # agent session (Cursor/Claude Code) the transcript would capture those, so setup refuses there. The
-  # TOOL install above is complete and exit-0 regardless; we simply route the human to a real terminal
-  # for the ceremony instead of running (and failing) it here. UNATTENDED (tests/CI) runs it with fakes.
+  # --- finish: setup, in the mode this environment can run ----------------------------------------
+  # ONE command means setup runs HERE, in every environment. A human at a terminal gets the wizard.
+  # An agent session or a no-tty install used to be told "open Terminal.app and run agent-secrets
+  # setup" — the human became the runtime. Now `setup` itself detects that nobody can be prompted and
+  # runs HEADLESS: real keys minted to files, the Keychain populated over a pipe, no first secret
+  # unless --import-env names one already in this environment, and only names/paths/status printed —
+  # nothing a transcript could capture. UNATTENDED (tests/CI) still runs with fake values.
   _say ""
-  # Defer the ceremony when there is no interactive terminal to run it in — an agent session (secret-
-  # bearing transcript) OR any non-tty stdin (`curl … | bash`, ssh, cron). Chaining setup there would
-  # read EOF at the hidden prompts and silently store an EMPTY first secret. UNATTENDED (tests/CI) still
-  # runs it with fake values.
-  if { agsec_in_agent_session || [ ! -t 0 ]; } && [ -z "${AGENT_SECRETS_UNATTENDED:-}" ]; then
-    # ONE command, on its own line, with the ONE reason it could not run here. The previous version
-    # of this screen offered BOTH possible causes ("a coding-agent session, or a non-interactive
-    # install") though the code knows which, and always claimed the machine-wide discovery prompt
-    # had been skipped — false whenever it ran and the user answered it. Both are fixed here.
-    _say "${C_GREEN}✓${C_RESET} agent-secrets is installed. ${C_BOLD}One command left.${C_RESET}"
-    _say ""
-    _say "Open Terminal.app (or iTerm) and run:"
-    _say ""
-    _say "    ${C_BOLD}agent-secrets setup${C_RESET}"
-    _say ""
-    if agsec_in_agent_session; then
-      _say "Not here, because this is a coding-agent session: setup mints your"
-      _say "encryption key and takes your first secret, and an agent transcript"
-      _say "is stored in plain text. Those must never meet."
-    else
-      _say "Not here, because no terminal is attached to this install, and the"
-      _say "wizard's hidden prompts would read end-of-input and store nothing."
-    fi
-    _say ""
-    _say "If the command is not found, that terminal predates the install."
-    _say "Open a new window, or run it by full path:"
-    _say "    ${BIN_DIR}/agent-secrets setup"
-    if [ "$DISCOVERY_OFFERED" -eq 0 ]; then
-      _say ""
-      _say "Skipped here: the opt-in that makes every coding agent on this Mac"
-      _say "aware of agent-secrets. Re-run this installer in a terminal to get it."
-    fi
-    _say ""
-    _say "Undo everything, anytime:  agent-secrets uninstall"
-    return 0
-  fi
-  _say "Installed. Launching the setup wizard…"
-  _run "$BIN_DIR/agent-secrets" setup
+  local -a setup_args=()
+  if [ "$HEADLESS" -eq 1 ]; then setup_args+=(--headless); fi
+  if [ -n "$IMPORT_ENV" ]; then setup_args+=(--import-env "$IMPORT_ENV"); fi
+  if [ "$NO_DISCOVERY" -eq 1 ]; then setup_args+=(--no-discovery); fi
+  _say "Installed. Running setup…"
+  _run "$BIN_DIR/agent-secrets" setup ${setup_args[@]+"${setup_args[@]}"}
 }
 
 # The ~/.claude/CLAUDE.md discovery block is rendered by agsec_render_rules claude-md (lib/common.sh),

@@ -1,19 +1,40 @@
 #!/usr/bin/env bash
 # cmd/setup.sh — onboarding wizard. Six screens, numbered 1..6 from the wizard's OWN first
 # screen (the installer's consent gate is the installer's, not step 1 of this).
-# Interactive by default; AGENT_SECRETS_UNATTENDED=1 runs it non-interactively with fake values for
-# tests (accepts defaults, file custody, skips the clipboard/paste steps). Idempotent:
-# re-running never mints a second key. Names-only.
+#
+# Three modes, one code path:
+#   interactive  a human at a terminal (tty on stdin, or /dev/tty attachable): the prompts below.
+#   headless     NO human to prompt — a coding-agent session (Claude Code / Cursor: the transcript is
+#                secret-bearing) or no attachable terminal (ssh -T, cron, CI) — or `--headless`.
+#                REAL keys, no prompts, and NO secret on any fd: keys are minted to files, the Keychain
+#                takes its key over a pipe (kc_populate_stdin), a first secret comes only from the
+#                caller's own environment (--import-env), and the output is names, paths and status.
+#                This replaced the former agent-session REFUSAL (docs/plans/AGENT_ENTRYPOINT_HEADLESS.md
+#                M2): the refusal guarded the clipboard and the hidden prompt, and headless has neither.
+#   unattended   AGENT_SECRETS_UNATTENDED=1 — tests/CI with FAKE placeholder values. Unchanged.
+# Idempotent: re-running never mints a second key. Names-only.
 set -euo pipefail
 . "${AGENT_SECRETS_LIB:?run via bin/agent-secrets}/common.sh"
-# help guard — precede the agent-session refusal so `setup --help` self-documents
+# help guard — first, so `setup --help` self-documents in every mode
 case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render setup; exit 0 ;; esac
-for _m in ui store keychain manifest restore; do . "$AGENT_SECRETS_LIB/$_m.sh"; done
+for _m in ui store keychain manifest restore wire discovery; do . "$AGENT_SECRETS_LIB/$_m.sh"; done
 
 UNATTENDED="${AGENT_SECRETS_UNATTENDED:-}"
+HEADLESS=""            # set by --headless, or auto-detected in main (no human to prompt)
+HEADLESS_WHY=""        # the ONE reason headless was chosen, for the done screen
+IMPORT_ENV=""          # --import-env NAME[,NAME…]: seed the store from the caller's own environment
+DISCOVERY=""           # headless default 1 (write the machine-wide agent rules); --no-discovery → 0
 STATE="$(agsec_wizard_state)"
 _state() { mkdir -p "$(dirname "$STATE")"; printf '%s\n' "$1" >"$STATE"; }
-_confirm() { [ -n "$UNATTENDED" ] && return 0; ui_confirm "$@"; }
+# UNATTENDED answers every confirm YES (legacy test contract). HEADLESS answers with the DECLARED
+# default — there is nobody to ask, so the safe answer is the one the prompt would have suggested.
+_confirm() {
+  [ -n "$UNATTENDED" ] && return 0
+  if [ -n "$HEADLESS" ]; then [ "${2:-y}" = y ]; return; fi
+  ui_confirm "$@"
+}
+# A human is present iff we are NOT headless/unattended — the one predicate every screen branches on.
+_human() { [ -z "$UNATTENDED" ] && [ -z "$HEADLESS" ]; }
 
 _preflight() {
   if agsec_have fdesetup && fdesetup status 2>/dev/null | grep -q On; then ui_ok "FileVault on"
@@ -46,9 +67,13 @@ _key_ceremony() {
     # possibly-unsaved private key (the F2 loss). Instead, resume the verified handoff below.
     [ -s "$pf" ] || age-keygen -y "$kf" >"$pf"      # re-derive the public recipient when it's absent
     ui_ok "key already exists — not minting a second one"; kc_write_selector; store_init
-    if [ -z "$UNATTENDED" ] && [ -s "$cfg/recovery.key" ]; then
-      _two_key_model
-      _recovery_handoff "$cfg/recovery.key"
+    if [ -s "$cfg/recovery.key" ]; then
+      if _human; then
+        _two_key_model
+        _recovery_handoff "$cfg/recovery.key"
+      elif [ -n "$HEADLESS" ]; then
+        _recovery_kept_note "$cfg/recovery.key"
+      fi
     fi
     return 0
   fi
@@ -83,18 +108,30 @@ _key_ceremony() {
   _keygen "$rec"; age-keygen -y "$rec" >"$cfg/recovery.pub"
   kc_write_selector
   ui_ok "generated your two keys (the store encrypts to both)"
-  if [ -z "$UNATTENDED" ]; then
-    # The PRIMARY key needs NO save ceremony: it lives on this Mac (0600 file; Keychain via the
-    # offer after this ceremony) and the RECOVERY key covers the dead-Mac case. Pre-rebuild, the
+  if _human; then
+    # The PRIMARY key needs NO save ceremony: it lives on this Mac (0600 file; Keychain populated
+    # right after this ceremony) and the RECOVERY key covers the dead-Mac case. Pre-rebuild, the
     # primary ALSO transited the clipboard "for your password manager" plus a public-key echo-back
     # that verified nothing — two prompts deleted, one real verification below instead (F1/F2).
     _two_key_model
     _recovery_handoff "$rec"
+  elif [ -n "$HEADLESS" ]; then
+    # Nobody can save it off this Mac right now, so it stays where it is safe today — the 0600 file
+    # (the same state a human's "n = later" leaves). Deleting it would destroy the only copy of the
+    # dead-Mac key; doctor reminds, and a human proves the save later with a plain `setup`.
+    _recovery_kept_note "$rec"
   else
     rm -f "$rec"       # UNATTENDED (tests/CI, fake store): no interactive handoff; keep recovery.pub only
   fi
   trap - EXIT                                  # ceremony done — disarm the clipboard guard
   store_init
+}
+
+# Headless: the recovery key is kept on disk; say where, and the one command that finishes the job.
+_recovery_kept_note() {
+  ui_say "RECOVERY key kept on this Mac (0600 file) — save it off-machine later:"
+  ui_say "  $1"
+  ui_say "  A human proves the save and clears the file with:  agent-secrets setup"
 }
 
 # The two-key mental model, stated BEFORE the user is asked to act on it (F6). One job each.
@@ -213,8 +250,39 @@ _read_secret_store() {
   return 1
 }
 
+# Headless seed: import each NAME in $IMPORT_ENV that is present and NON-EMPTY in this process's own
+# environment. The value moves ${!name} → pipe → store_add: never argv, never stdout, never a
+# transcript (the agent's command names the VARIABLE, not the value — AGENTS.md golden rule 2).
+# Absent/empty names are reported BY NAME and skipped. Nothing is read from stdin, so this can never
+# hang on an agent's open-but-empty pipe. rc 0 always (a skipped import is not a failed setup).
+_import_env() {
+  local name stored=0 skipped=0
+  [ -n "$IMPORT_ENV" ] || return 0
+  for name in $(printf '%s' "$IMPORT_ENV" | tr ',' ' '); do
+    [ -n "$name" ] || continue
+    if [ -n "${!name:-}" ]; then
+      if printf '%s' "${!name}" | store_add "$name"; then ui_ok "imported $name from the environment (value never shown)"; stored=$((stored + 1))
+      else ui_warn "could not store $name (see the error above)"; fi
+    else
+      ui_warn "$name is not set in this environment — skipped (nothing was stored)"
+      skipped=$((skipped + 1))
+    fi
+  done
+  [ "$skipped" -eq 0 ] || ui_say "  Store a skipped one later: printf '%s' \"\$NAME\" | agent-secrets add NAME"
+  return 0
+}
+
 _first_secret() {
   local name val
+  if [ -n "$HEADLESS" ]; then
+    if [ -n "$IMPORT_ENV" ]; then _import_env
+    else
+      ui_say "No secret stored yet (headless: nothing is read from a prompt)."
+      ui_say "  From a variable you already hold:  printf '%s' \"\$NAME\" | agent-secrets add NAME"
+      ui_say "  From a human, hidden prompt:       agent-secrets add NAME"
+    fi
+    return 0
+  fi
   if [ -n "$UNATTENDED" ]; then
     name="${AGENT_SECRETS_SEED_NAME:-ANTHROPIC_API_KEY}"
     # Seed-value resolution that CANNOT hang (feedback BLOCKER #3): the old `val="$(cat)"` blocked on
@@ -263,25 +331,11 @@ _first_secret() {
   if _read_secret_store "$name" "Value for $name"; then ui_ok "stored $name (value never shown)"; fi
 }
 
-# Offer to ARM the breach canary. Until armed it is an inert decoy; arming = replacing the placeholder
-# with a real tripwire token (e.g. from canarytokens.org) so a whole-store sweep trips the operator's
-# own alert. Value via STDIN/ui_read_secret — names-only. Skipped in UNATTENDED (tests keep the decoy).
-_arm_canary() {
-  [ -n "$UNATTENDED" ] && return 0
-  ui_say "The breach canary ($AGENT_SECRETS_CANARY_NAME) ships as an"
-  ui_say "INERT decoy — it detects a whole-store sweep only once you arm it"
-  ui_say "with a real tripwire token."
-  if _confirm "Arm it now? (paste a canarytokens.org token, or skip)" n; then
-    # Same forgiving ladder as the first secret (F3): an empty paste re-prompts then skips —
-    # it must never abort the wizard at [4/7].
-    if _read_secret_store "$AGENT_SECRETS_CANARY_NAME" "Paste your canary/tripwire token"; then
-      ui_ok "canary armed — a whole-store sweep now trips your alert"
-    fi
-  else
-    ui_say "Skipped — arm later (doctor will remind you) with:"
-    ui_say "  agent-secrets add $AGENT_SECRETS_CANARY_NAME"
-  fi
-}
+# The breach canary is NOT offered here any more. It ships as an inert decoy, arming is opt-in, and
+# the prompt was a default-`no` keystroke almost every first run spent on "Enter" — one touchpoint
+# for no information. `doctor` carries the reminder with the exact command
+# (`agent-secrets add $AGENT_SECRETS_CANARY_NAME`, value via the hidden prompt), which is the same
+# path arming always took underneath.
 
 _wire_tools() {
   local bindir; bindir="$(agsec_bin_dir)"; mkdir -p "$bindir"
@@ -302,54 +356,46 @@ _wire_tools() {
     manifest_record_file "$bindir/$w" >/dev/null 2>&1 || true
   done
   ui_ok "installed wrappers to $bindir"
-  local sj; sj="$(agsec_home)/.claude/settings.json"
-  if agsec_have jq; then
-    mkdir -p "$(dirname "$sj")"
-    local pre=1; [ -f "$sj" ] || pre=0            # existed BEFORE we touched it?
-    [ "$pre" = 1 ] || printf '{}\n' >"$sj"
-    local bak; bak="$(agsec_state_dir)/settings.json.bak"; mkdir -p "$(dirname "$bak")"
-    # $h is a jq variable bound by `jq --arg h` below — it MUST stay literal in the shell (single quotes),
-    # so SC2016's "expand it" advice would be a bug here. Applies to the created-file variant too.
-    # shellcheck disable=SC2016
-    local jqprog='.apiKeyHelper=$h'
-    if [ "$pre" = 1 ]; then
-      [ -f "$bak" ] || cp "$sj" "$bak"            # WRITE-ONCE: a re-run must not overwrite the pristine backup
-      manifest_record_edit "$sj" "$bak" apiKeyHelper >/dev/null 2>&1 || true
-    else
-      # We created settings.json → rollback DELETES it (restoring an empty {} would leave residue).
-      manifest_record_edit "$sj" "$bak" apiKeyHelper created >/dev/null 2>&1 || true
-      # On a file WE create, ALSO set cleanupPeriodDays=14 — clears the `hygiene ⚠ cleanupPeriodDays unset`
-      # that fired immediately after setup, and caps how long ~/.claude transcripts (which can hold
-      # secret-adjacent output) linger. Recorded as a SECOND surgical edit so rollback removes BOTH keys →
-      # the created file reduces to {} and is deleted; a single-marker revert would leave
-      # {"cleanupPeriodDays":14} orphaned. ONLY on create: never inject a second, less-cleanly-revertable
-      # key into a settings.json the user already owns.
-      manifest_record_edit "$sj" "$bak" cleanupPeriodDays created >/dev/null 2>&1 || true
-      # shellcheck disable=SC2016  # $h is a jq --arg variable; keep it literal in the shell
-      jqprog='.apiKeyHelper=$h | .cleanupPeriodDays=14'
-    fi
-    # Capture jq's exit: an INVALID pre-existing settings.json makes jq fail, mv is skipped, and — because
-    # an &&-list is errexit-exempt — the old unconditional ui_ok printed a FALSE "wired" success and left
-    # a settings.json.new residue. Only claim success when the write actually happened.
-    if jq --arg h "$bindir/apiKeyHelper" "$jqprog" "$sj" >"$sj.new" 2>/dev/null; then
-      mv "$sj.new" "$sj"
-      ui_ok "wired apiKeyHelper into settings.json (reversible)"
-    else
-      rm -f "$sj.new"
-      ui_warn "could not wire apiKeyHelper — not valid JSON:"
-      ui_say  "  $sj"
-      ui_say  "  Fix it, then re-run:  agent-secrets setup"
-    fi
-  else
-    ui_warn "jq missing — skipped wiring apiKeyHelper into settings.json."
-    ui_say  "  Install jq (the installer vendors it), then re-run:"
-    ui_say  "  agent-secrets setup"
-  fi
+  # The settings.json edit lives in lib/wire.sh and is CONDITIONAL on ANTHROPIC_API_KEY being in the
+  # store — a wired helper with nothing to print breaks Claude Code's auth outright (M4). `add
+  # ANTHROPIC_API_KEY` completes the wiring later. rc 1/2 are explained by the function; never fatal.
+  agsec_wire_apikeyhelper || true
   ui_say "The Dock Cursor stays secret-free — use 'cursor-agent' for agent work."
+}
+
+# Machine-wide agent discovery (lib/discovery.sh): the advisory, reversible, integrity-marked rule
+# block in every present harness's instruction file. The INTERACTIVE installer owns the informed
+# opt-in prompt (each file named + the block previewed). Here: the headless default, and the
+# standalone `setup --discovery` — the one-command later opt-in that used to be "re-run the installer".
+# The plan (every file that WILL be written) is printed before the write, so a headless run is
+# announced, never silent. An org/MDM-managed machine is deferred by the registry itself.
+_discovery_screen() {
+  # Render the rules against the PATH command (the ~/bin symlink), matching the installer's choice, so
+  # the block a later `setup --discovery` writes is byte-identical to the installer's — not a second
+  # variant pointing at the install-root dispatcher.
+  if [ -z "${AGENT_SECRETS_BIN:-}" ] && [ -x "$(agsec_bin_dir)/agent-secrets" ]; then
+    AGENT_SECRETS_BIN="$(agsec_bin_dir)/agent-secrets"; export AGENT_SECRETS_BIN
+  fi
+  local plan; plan="$(agsec_discovery_plan)"
+  if [ -z "$plan" ]; then
+    ui_say "No writable agent surfaces detected (or all are org/MDM-managed)."
+    ui_say "  Machine-wide discovery skipped — nothing to write."
+    return 0
+  fi
+  ui_say "Writing the agent-secrets rules (advisory, reversible) into:"
+  printf '%s\n' "$plan" | while IFS="$(printf '\t')" read -r _lbl _pth; do ui_say "  $_pth"; done
+  local wrote; wrote="$(agsec_discovery_install_all)"
+  if [ -n "$wrote" ]; then
+    printf '%s\n' "$wrote" | while IFS= read -r _l; do ui_ok "aware: $_l"; done
+  else
+    ui_warn "nothing written (targets became unwritable)"
+  fi
+  ui_say "  Undo with uninstall; verify anytime with:  agent-secrets doctor"
 }
 
 _done_screen() {
   ui_title "You're set up"
+  if [ -n "$HEADLESS" ]; then _done_screen_headless; return 0; fi
   ui_say "The 3 commands you'll use:"
   ui_say "  agent-secrets add <NAME>    — add a secret (value never shown)"
   ui_say "  agent-secrets run -- <cmd>  — run a command with secrets injected"
@@ -383,75 +429,57 @@ _done_screen() {
   ui_say "Docs: https://github.com/renchris/agent-secrets"
 }
 
-# Shared Keychain-populate core (used by the end-of-ceremony offer AND `setup --keychain`). Reads the
-# age key from the 0600 file (present in both callers), copies it to the clipboard as a paste-assist,
-# runs the `security -w` write, records it for reversal, scrubs the clipboard, and reports back by exit
-# code: 0 = custody is primary afterward · 1 = the write ran but the read-back still falls to the file ·
-# 2 = the write command itself failed (or no key on disk). The value transits the clipboard and the
-# hidden /dev/tty paste only — never argv, stdout, or a transcript. Manages its OWN EXIT trap for the
-# clipboard scrub, so call it OUTSIDE any other EXIT-trap region (both callers qualify: the ceremony has
-# already disarmed its strand guard, and --keychain has none).
-_kc_populate() {
-  local kf; kf="$(agsec_age_key_file)"
-  [ -s "$kf" ] || return 2
-  if [ -z "$UNATTENDED" ]; then
-    if agsec_have pbcopy; then
-      # Scrub the private key off the clipboard on ANY exit — a ^C at the macOS double-prompt would
-      # otherwise leave it there for the next paste/clipboard-history reader.
-      trap 'printf "" | pbcopy 2>/dev/null || true' EXIT
-      pbcopy <"$kf"
-      ui_say "Your key is on the clipboard. macOS now asks for it TWICE, at a"
-    else
-      # Post-rebuild the password manager holds the RECOVERY key; the PRIMARY lives in the file.
-      ui_say "Copy your PRIMARY key line (AGE-SECRET-KEY-…) from:"
-      ui_say "  $kf"
-      ui_say "macOS then asks for it TWICE, at a"
-    fi
-    # The affordance the first run lacked (F4): security(1)'s prompt echoes nothing and moves no
-    # cursor, so it reads as a hang — the author's live question was "where is this hidden prompt".
-    ui_say "prompt that looks exactly like this and shows NOTHING as you paste:"
-    ui_say "  password data for new item:"
-    ui_say "That blankness is normal. Cmd-V, press Enter — then once more when"
-    ui_say "it re-asks."
+# The headless done screen is written for the reader it has: an agent, or a log. It names the
+# ABSOLUTE binary (the calling shell predates the ~/.zshenv PATH line, so a bare `agent-secrets`
+# is "command not found" until a new shell), the one-line usage, and — only if any — the steps a
+# human still owns. No clipboard: an agent must never overwrite the user's clipboard.
+_done_screen_headless() {
+  ui_say "Set up headless${HEADLESS_WHY:+ ($HEADLESS_WHY)}: keys, custody, store, wrappers."
+  ui_say "This shell predates the PATH line — until a new shell, call it by path:"
+  ui_say "  $(agsec_bin_dir)/agent-secrets"
+  ui_say "The commands you'll use (names-only; a value is never printed):"
+  ui_say "  agent-secrets list                       — what is stored"
+  ui_say "  agent-secrets run -- <cmd>               — run with secrets injected"
+  ui_say "  printf '%s' \"\$NAME\" | agent-secrets add NAME   — from a variable, never a literal"
+  ui_say "  agent-secrets doctor                     — health (exit 0 = good)"
+  local cfg; cfg="$(agsec_config_dir)"
+  if [ -s "$cfg/recovery.key" ]; then
+    ui_say ""
+    ui_say "Left for a human (optional, whenever convenient):"
+    ui_say "  save the RECOVERY key off this Mac — in a terminal:  agent-secrets setup"
   fi
-  local wrote=1
-  if security add-generic-password -U -a "${USER:-agent}" -s "$AGENT_SECRETS_KC_SERVICE" -w 2>/dev/null; then
-    manifest_record_keychain "$AGENT_SECRETS_KC_SERVICE" >/dev/null 2>&1 || true   # reversible: uninstall removes it
-    wrote=0
-  fi
-  [ -z "$UNATTENDED" ] && agsec_have pbcopy && printf '' | pbcopy; trap - EXIT
-  [ "$(kc_status)" = primary ] && return 0
-  [ "$wrote" = 0 ] && return 1
-  return 2
+  ui_say ""
+  ui_say "Docs: https://github.com/renchris/agent-secrets  (AGENTS.md for agents)"
 }
 
-# End-of-ceremony Keychain offer (P0-4). On macOS Sequoia the wizard's key ceremony leaves custody on
-# the 0600-file fallback (the `security -w` paste needs a real /dev/tty), so a full interactive setup
-# still ended "degraded (file custody)" and the user had to DISCOVER `setup --keychain` from a later
-# doctor run. Instead, offer to populate now — the setup ends `primary` OR the user explicitly declines,
-# never a silent degrade. Skipped in UNATTENDED (no tty for the double-prompt) and when already primary.
-_kc_offer() {
+# Shared Keychain-populate core (the end-of-ceremony populate AND `setup --keychain`). Delegates to
+# kc_populate_stdin (lib/keychain.sh): the key goes file → pipe → `security -i`, with no argv, no
+# clipboard and no tty, so it works identically for a human, an agent and a cron job. rc: 0 = custody
+# is primary afterward · 1 = the write ran but the read-back still falls to the file · 2 = the write
+# failed (or no key on disk). The former clipboard + "paste it twice at an invisible prompt" path is
+# gone: it copied the WHOLE key file (whose first line is a comment) into a one-line prompt.
+_kc_populate() { kc_populate_stdin; }
+
+# End-of-ceremony Keychain populate — no prompt. It used to ask "Populate your login Keychain now?"
+# because saying yes cost the user two invisible pastes; now it costs nothing, and prompt-free primary
+# custody is what every answer wanted. Skipped in UNATTENDED (tests keep file custody, the
+# `setup --keychain` drill depends on it) and when already primary. A failed write is a warn, never
+# a stop: file custody is fully supported and `setup --keychain` retries.
+_kc_auto() {
   [ -n "$UNATTENDED" ] && return 0
   [ "$(kc_status 2>/dev/null || echo missing)" = primary ] && return 0
-  if _confirm "Populate your login Keychain now for prompt-free reads?" y; then
-    if _kc_populate; then ui_ok "Keychain custody — primary (prompt-free reads)"
-    else
-      ui_warn "the Keychain write didn't take on this macOS — file custody"
-      ui_say  "  remains (fully supported). Enable it later, in Terminal.app:"
-      ui_say  "  agent-secrets setup --keychain"
-    fi
-  else
-    ui_say "Declined — running on the 0600 file fallback (fully supported)."
-    ui_say "Enable prompt-free Keychain custody anytime:"
-    ui_say "  agent-secrets setup --keychain"
-  fi
+  local rc=0; _kc_populate || rc=$?
+  case "$rc" in
+    0) ui_ok "Keychain custody — primary (prompt-free reads)" ;;
+    *) ui_warn "the Keychain write didn't take on this macOS — file custody"
+       ui_say  "  remains (fully supported). Retry anytime:"
+       ui_say  "  agent-secrets setup --keychain" ;;
+  esac
 }
 
-# Re-run ONLY the Keychain populate step (v2 feedback R2). On macOS Sequoia
-# `security add-generic-password -w` (no argv) does not read STDIN — it prompts /dev/tty with a
-# double-confirm — so any non-interactive first run leaves custody on the 0600-file fallback and
-# doctor reports "degraded (file custody)". This path restores PRIMARY (prompt-free Keychain)
-# custody in a real terminal without re-running the whole wizard, via the shared _kc_populate core.
+# Re-run ONLY the Keychain populate step (v2 feedback R2). Restores PRIMARY (prompt-free Keychain)
+# custody without re-running the whole wizard, via the shared _kc_populate core — in a terminal, an
+# agent session, or a cron job alike (nothing here needs a tty).
 _keychain_screen() {
   ui_title "agent-secrets setup --keychain"
   local kf; kf="$(agsec_age_key_file)"
@@ -465,8 +493,8 @@ _keychain_screen() {
   local rc=0; _kc_populate || rc=$?
   case "$rc" in
     0) ui_ok "Keychain custody restored — primary (prompt-free reads)"; return 0 ;;
-    1) ui_warn "the Keychain write succeeded but the read-back still falls to the file — file custody remains (fully supported); re-run in Terminal.app to retry"; return 0 ;;
-    *) agsec_die "Keychain populate did not complete — file custody remains in effect (fully supported); retry in Terminal.app with: agent-secrets setup --keychain" ;;
+    1) ui_warn "the Keychain write succeeded but the read-back still falls to the file — file custody remains (fully supported); re-run to retry"; return 0 ;;
+    *) agsec_die "Keychain populate did not complete — file custody remains in effect (fully supported); retry with: agent-secrets setup --keychain" ;;
   esac
 }
 
@@ -483,48 +511,79 @@ _restore_screen() {
   _done_screen
 }
 
+# Validate an --import-env list: comma/space-separated env-var NAMES (a value never appears here).
+_import_env_valid() {
+  local n
+  for n in $(printf '%s' "$1" | tr ',' ' '); do
+    case "$n" in [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]* | '') return 1 ;; esac
+  done
+  return 0
+}
+
 main() {
-  local do_restore=0 do_keychain=0
-  case "${1:-}" in
-    --restore)  do_restore=1 ;;
-    --keychain) do_keychain=1 ;;
-  esac
-  if [ -z "$UNATTENDED" ] && agsec_in_agent_session; then
-    agsec_die "refusing the key ceremony inside an agent session (transcripts are secret-bearing) — run in a normal terminal (or AGENT_SECRETS_UNATTENDED=1 for a fake-value test)"
+  local do_restore=0 do_keychain=0 do_discovery=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --restore)      do_restore=1 ;;
+      --keychain)     do_keychain=1 ;;
+      --discovery)    do_discovery=1 ;;
+      --headless)     HEADLESS=1; HEADLESS_WHY="--headless" ;;
+      --no-discovery) DISCOVERY=0 ;;
+      --import-env)
+        [ -n "${2:-}" ] || agsec_die "--import-env needs NAME[,NAME…] (env-var names — never a value)" 2
+        _import_env_valid "$2" || agsec_die "--import-env: '$2' — names are letters, digits, underscore (start with a letter or _), comma-separated" 2
+        IMPORT_ENV="$2"; HEADLESS="${HEADLESS:-1}"; HEADLESS_WHY="${HEADLESS_WHY:---import-env}"; shift ;;
+      --import-env=*)
+        _import_env_valid "${1#--import-env=}" || agsec_die "--import-env: bad NAME list (letters, digits, underscore; comma-separated)" 2
+        IMPORT_ENV="${1#--import-env=}"; HEADLESS="${HEADLESS:-1}"; HEADLESS_WHY="${HEADLESS_WHY:---import-env}" ;;
+      *) agsec_die "setup: unknown argument '$1' (see: agent-secrets setup --help)" 2 ;;
+    esac
+    shift
+  done
+  # Mode resolution. HEADLESS whenever there is nobody to prompt: a coding-agent session (its pty is
+  # transcript-captured, so a hidden prompt there is not hidden — M2), or no terminal that could be
+  # attached (ssh -T, cron, CI). A human running `curl … | bash` has a pipe on stdin AND a real
+  # terminal, and is attached to it below — that is what keeps the one-liner ONE command.
+  if [ -z "$UNATTENDED" ] && [ -z "$HEADLESS" ]; then
+    if agsec_in_agent_session; then HEADLESS=1; HEADLESS_WHY="coding-agent session"
+    elif ! agsec_have_tty; then HEADLESS=1; HEADLESS_WHY="no terminal attached"
+    fi
   fi
+  [ -n "$DISCOVERY" ] || { [ -n "$HEADLESS" ] && DISCOVERY=1 || DISCOVERY=0; }
   agsec_secure_umask
-  # --keychain and --restore legitimately read piped stdin (the key), so they run BEFORE this guard.
+  # --keychain / --restore / --discovery are single screens; --restore reads piped stdin (the key).
   if [ "$do_keychain" -eq 1 ]; then _keychain_screen; return 0; fi
   if [ "$do_restore" -eq 1 ]; then _restore_screen; _state 'done'; return 0; fi
-  # The wizard reads secrets from hidden prompts on STDIN; with no terminal it would silently read EOF
-  # and store an empty first secret (the `curl … | bash` failure). Hard-refuse instead — the installer
-  # defers the ceremony to a real terminal, and UNATTENDED tests use fake values.
-  # A human who ran `curl … | bash` has stdin on the PIPE while a real terminal sits in front of
-  # them. Rebind to it rather than refusing — that is what makes the one-liner ONE command. The
-  # agent-session refusal above has already run, so this can never attach an agent's own pty.
-  if [ -z "$UNATTENDED" ] && [ ! -t 0 ]; then
-    agsec_attach_tty || agsec_die "setup is an interactive ceremony but there is no terminal to run it on — open Terminal.app and run 'agent-secrets setup' (or AGENT_SECRETS_UNATTENDED=1 for a fake-value test run)"
+  if [ "$do_discovery" -eq 1 ]; then ui_title "agent-secrets setup --discovery"; _discovery_screen; return 0; fi
+  if _human && [ ! -t 0 ]; then
+    agsec_attach_tty || agsec_die "setup: a terminal was detected but could not be attached — re-run in Terminal.app, or add --headless for a prompt-free setup"
   fi
-  ui_title "agent-secrets setup"
+  ui_title "agent-secrets setup${HEADLESS:+ (headless)}"
   case "$(restore_returning_user_check)" in
     installed) ui_say "agent-secrets is already set up."
       # Re-wire before the health check: after an uninstall(keep)→reinstall the wrappers are re-symlinked
       # but settings.json is NOT (that edit is owned by _wire_tools), so the fast path must re-wire or
-      # Claude Code is left unwired while doctor reads healthy. _wire_tools is idempotent.
-      if _confirm "Run a health check instead of re-onboarding?" y; then _wire_tools; exec bash "$AGENT_SECRETS_CMD/doctor.sh"; fi ;;
+      # Claude Code is left unwired while doctor reads healthy. _wire_tools is idempotent. A headless
+      # --import-env on an installed machine imports, then reports — the natural "add these" one-liner.
+      if _confirm "Run a health check instead of re-onboarding?" y; then
+        _wire_tools; _import_env
+        [ "$DISCOVERY" = 1 ] && _discovery_screen
+        exec bash "$AGENT_SECRETS_CMD/doctor.sh" --summary
+      fi ;;
     partial) ui_say "A previous setup was interrupted — continuing (idempotent; your key is kept)." ;;
   esac
   ui_step 1 6 "Preflight";        _preflight;      _state preflight
-  ui_step 2 6 "Your keys";        _key_ceremony;   _kc_offer;   _state key
+  ui_step 2 6 "Your keys";        _key_ceremony;   _kc_auto;    _state key
   ui_step 3 6 "Your first secret"
   # Guarded (F3): the first-secret screen is OPTIONAL onboarding — no failure here may strand
-  # screens 5–7 (wrappers, apiKeyHelper, settings.json), which are what make the install work.
+  # screens 4–6 (wrappers, apiKeyHelper, settings.json), which are what make the install work.
   # The || also suppresses errexit inside, so an unforeseen refusal degrades to a warn + skip.
   # UNATTENDED seed failures still hard-die inside _first_secret (explicit agsec_die).
   _first_secret || ui_warn "first secret not stored — add one anytime:  agent-secrets add <NAME>"
-  _arm_canary   || ui_warn "canary not armed — arm anytime:  agent-secrets add $AGENT_SECRETS_CANARY_NAME"
   _state secret
-  ui_step 4 6 "Wire your tools";  _wire_tools;     _state wired
+  ui_step 4 6 "Wire your tools";  _wire_tools
+  [ "$DISCOVERY" = 1 ] && _discovery_screen
+  _state wired
   # --summary so the wizard ends on core custody/toolchain/store/injection status instead of ~7 aspirational
   # ⚠ (canary/backup/discovery/hygiene/…) that read as "broken" though exit is 0. Full report: `doctor`.
   ui_step 5 6 "Health check";     bash "$AGENT_SECRETS_CMD/doctor.sh" --summary || true

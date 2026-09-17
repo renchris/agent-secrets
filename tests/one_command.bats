@@ -67,15 +67,27 @@ load test_helper
   [[ "$output" == *"rc=1"* ]] || return 1
 }
 
-@test "B6: setup with no terminal anywhere still refuses, and names the one command to run" {
-  run bash -c 'env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash "$REPO_ROOT/bin/agent-secrets" setup </dev/null 2>&1'
-  [ "$status" -ne 0 ]
-  [[ "$output" == *"agent-secrets setup"* ]] || return 1
+@test "B6: setup with no terminal anywhere runs HEADLESS to completion — no refusal, no empty secret, no key on screen" {
+  # This used to assert a refusal ("no terminal to run it on"). The hazard it guarded — a hidden
+  # prompt reading EOF and storing an EMPTY first secret — is structurally absent from headless mode,
+  # which reads no secret at all. So "no human" now means "do the safe defaults", not "stop".
+  run bash -c 'env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM AGSEC_TEST_CONFIRM= bash "$REPO_ROOT/bin/agent-secrets" setup </dev/null 2>&1'
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"(headless)"* ]] || return 1
+  [[ "$output" == *"no terminal attached"* ]] || return 1          # the ONE reason, named
+  [[ "$output" == *"You're set up"* ]] || return 1
+  [[ "$output" != *"AGE-SECRET-KEY"* ]] || return 1
+  run agsec list
+  [[ "$output" != *"ANTHROPIC_API_KEY"* ]] || return 1             # nothing was seeded from a dead pipe
 }
 
 # ---- B8 / DoD 2: the wizard is legible at 80 columns, with no terminal-query garbage -----------
 
-# Drive the whole wizard on a PTY and keep every byte it wrote.
+# Drive the whole wizard on a PTY and keep every byte it wrote. Two answers is the whole minimum
+# path now: the recovery save (n = later) and the first-secret menu (4 = skip). The Keychain
+# populate no longer asks (it needs no paste), and the canary prompt is gone.
+# rc: 0 = wizard exited 0 · 99 = expect not installed · anything else = the DRIVE desynced (a prompt
+# changed, or the wizard died) — a failure, never a skip.
 _e2e_capture() {
   command -v expect >/dev/null 2>&1 || return 99
   cat >"$AGENT_SECRETS_HOME/cap.exp" <<'EOF'
@@ -85,18 +97,35 @@ spawn -noecho env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_I
 stty rows 24 columns 80 < $spawn_out(slave,name)
 expect_after { timeout { puts "\nDESYNC-TIMEOUT"; exit 90 } eof { puts "\nEARLY-EOF"; exit 91 } }
 expect "Save it off this Mac now?" { send "n\r" }
-expect "Populate your login Keychain" { send "n\r" }
 expect -ex {choose [1-4, Enter = 1]:} { send "4\r" }
-expect "Arm it now?" { send "n\r" }
 expect eof { }
 catch wait result
 exit [lindex $result 3]
 EOF
   expect "$AGENT_SECRETS_HOME/cap.exp" >/dev/null 2>&1
 }
+# The wizard drive is a precondition; its own failure must read as one, not as "expect not available".
+_e2e_require() {
+  local rc=0; _e2e_capture || rc=$?
+  [ "$rc" -eq 99 ] && skip "expect not available"
+  [ "$rc" -eq 0 ] || { printf 'wizard drive failed rc=%s\n%s\n' "$rc" "$(cat "$AGENT_SECRETS_HOME/cap.log" 2>/dev/null)"; return 1; }
+}
+
+@test "DoD: the interactive minimum path is TWO answers (recovery: later · first secret: skip) — no Keychain paste, no canary prompt" {
+  _e2e_require
+  run cat "$AGENT_SECRETS_HOME/cap.log"
+  [[ "$output" == *"You're set up"* ]] || return 1
+  [[ "$output" != *"Populate your login Keychain"* ]] || return 1
+  [[ "$output" != *"password data for new item"* ]] || return 1
+  [[ "$output" != *"Arm it now?"* ]] || return 1
+  [[ "$output" == *"Keychain custody — primary"* ]] || return 1    # populated with no paste at all
+  # The prompts that remain are exactly the two the drive answered.
+  run bash -c 'LC_ALL=C grep -c "\[Y/n\]\|\[y/N\]\|choose \[" "$AGENT_SECRETS_HOME/cap.log" || true'
+  [ "$output" = "2" ]
+}
 
 @test "DoD: the wizard reaches the done screen and emits NO terminal capability query" {
-  _e2e_capture || skip "expect not available"
+  _e2e_require
   run cat "$AGENT_SECRETS_HOME/cap.log"
   [[ "$output" == *"You're set up"* ]] || return 1
   # OSC-11 background query and DSR cursor report — gum emitted both on every prompt and blocked
@@ -108,7 +137,7 @@ EOF
 }
 
 @test "DoD: no wizard line exceeds 72 columns except an unsplittable path token" {
-  _e2e_capture || skip "expect not available"
+  _e2e_require
   # A line is a failure only if it is over budget AND every token in it is short — i.e. it is prose
   # we chose not to fit. A long filesystem path is emitted WHOLE on purpose (drag-copy), so the
   # terminal, not us, wraps it.
@@ -130,13 +159,13 @@ EOF
 }
 
 @test "DoD: the wizard never prints a raw age public key banner" {
-  _e2e_capture || skip "expect not available"
+  _e2e_require
   run bash -c 'LC_ALL=C grep -c "^Public key: age1" "$AGENT_SECRETS_HOME/cap.log" || true'
   [ "$output" = "0" ]
 }
 
 @test "DoD: the wizard's own screens are numbered from 1" {
-  _e2e_capture || skip "expect not available"
+  _e2e_require
   run cat "$AGENT_SECRETS_HOME/cap.log"
   [[ "$output" == *"[1/6]"* ]] || return 1
   [[ "$output" == *"[6/6]"* ]] || return 1
