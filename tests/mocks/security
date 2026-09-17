@@ -10,6 +10,17 @@ db="${AGENT_SECRETS_HOME:?AGENT_SECRETS_HOME unset}/.mock-keychain"
 sub="${1:-}"; shift || true
 
 case "$sub" in
+  -i)
+    # Interactive/command mode: one security command per stdin line, exactly how the real binary
+    # behaves. Each line is re-dispatched through this same mock; the -w value arrives INSIDE the
+    # command line (double-quoted), which is the no-argv/no-tty path kc_populate_stdin relies on.
+    while IFS= read -r cmdline; do
+      [ -n "$cmdline" ] || continue
+      eval "set -- $cmdline"
+      "$0" "$@" </dev/null || exit $?
+    done
+    exit 0
+    ;;
   add-generic-password)
     svc=""; val=""; have_w=0
     while [ "$#" -gt 0 ]; do

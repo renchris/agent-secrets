@@ -3,12 +3,42 @@
 # Call `security` by BARE name so tests
 # shim it. Names/status only — the age key VALUE transits STDIN in, and kc_read's stdout out.
 
-# Store the age PRIVATE key (STDIN) under both custody sinks. The 0600 file is the guaranteed,
-# clean, no-argv sink; the Keychain add mirrors it via the design's STDIN `-w` form (also honored
-# by the test `security` shim).  ⚠️ On real macOS Sequoia the `security -w` no-argv path does NOT
-# read STDIN — it prompts /dev/tty with a double-confirm — so the Keychain sink cannot be
-# populated without argv (banned) or an interactive tty double-type — so custody runs on the
-# file fallback until a no-argv Keychain-write flow is settled.
+# Populate the login Keychain from the 0600 key file, with NO argv, NO clipboard and NO tty.
+#
+# `security add-generic-password -w` with no value is a /dev/tty double-prompt on current macOS — it
+# does not read STDIN — which is why custody used to fall to the file whenever nobody could type. But
+# `security -i` reads its COMMAND LANGUAGE from stdin, and the -w value inside that command line is
+# parsed by security itself: the key travels a pipe from an in-process read of the file into the
+# security process, and is never in `ps`, on the clipboard, or on a terminal. Measured 2026-09-17 on
+# macOS 15 against the real login Keychain with a throwaway service (docs/plans/
+# AGENT_ENTRYPOINT_HEADLESS.md M3). This is what lets a headless `setup` end on PRIMARY custody, and
+# what removed the invisible paste-twice screen from the human wizard.
+#
+# Only the AGE-SECRET-KEY line is stored, never the whole file: an age key file starts with comment
+# lines, a one-line Keychain value holding `# created: …` decrypts nothing, and kc_read hands the
+# Keychain value straight to sops as SOPS_AGE_KEY_CMD output (a bare identity line is what it wants).
+#
+# rc: 0 = item written AND custody reads back primary · 1 = written but the read-back still falls
+# to the file · 2 = no usable key on disk, or the write itself failed.
+kc_populate_stdin() {
+  local kf line; kf="$(agsec_age_key_file)"
+  [ -s "$kf" ] || return 2
+  line="$(grep -m1 '^AGE-SECRET-KEY-' "$kf" 2>/dev/null)" || true
+  [ -n "$line" ] || return 2
+  if ! printf 'add-generic-password -U -a "%s" -s "%s" -w "%s"\n' "${USER:-agent}" \
+        "$AGENT_SECRETS_KC_SERVICE" "$line" | security -i >/dev/null 2>&1; then
+    unset line; return 2
+  fi
+  unset line
+  # Record the item so uninstall reverts it by RECORD (with the exact-service scan as belt-and-suspenders).
+  command -v manifest_record_keychain >/dev/null 2>&1 && manifest_record_keychain "$AGENT_SECRETS_KC_SERVICE" >/dev/null 2>&1 || true
+  [ "$(kc_status)" = primary ] && return 0
+  return 1
+}
+
+# Store the age PRIVATE key (STDIN) under both custody sinks: the 0600 file first (the guaranteed
+# sink), then the Keychain mirror via kc_populate_stdin (best-effort — file custody is fully
+# supported if the Keychain write does not take).
 kc_add() {
   # Read the FULL key material from stdin — an age key file is multi-line (comment lines + the
   # AGE-SECRET-KEY line), so a single `read -r` would drop the actual key. `cat` preserves all of it.
@@ -16,13 +46,8 @@ kc_add() {
   agsec_secure_umask
   local f; f="$(agsec_age_key_file)"; mkdir -p "$(dirname "$f")"
   printf '%s' "$key" >"$f"; chmod 600 "$f" 2>/dev/null || true      # primary custody: 0600 file
-  # Mirror into the login Keychain without the value in argv (STDIN form; -U to update).
-  if printf '%s' "$key" | security add-generic-password -U -a "${USER:-agent}" \
-       -s "$AGENT_SECRETS_KC_SERVICE" -w >/dev/null 2>&1; then
-    # Record the item so uninstall reverts it by RECORD (with the exact-service scan as belt-and-suspenders).
-    command -v manifest_record_keychain >/dev/null 2>&1 && manifest_record_keychain "$AGENT_SECRETS_KC_SERVICE" >/dev/null 2>&1 || true
-  fi
   unset key
+  kc_populate_stdin >/dev/null 2>&1 || true
 }
 
 # The age-key-cmd selector body: Keychain primary, 0600 file fallback. Value → STDOUT only
