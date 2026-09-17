@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: complete (release cut pending — operator-gated)
 ---
 
 # Agent entrypoint — zero-human setup, and fewer touchpoints for the human one
@@ -146,3 +146,45 @@ install exits 0.
 
 - **2026-09-17** — M1–M5 measured (all live, none hypothetical); plan written; implementation
   started on `main` at `54ee8dc`.
+- **2026-09-17** — **Landed on `main`, five commits:** `8c379c5` (Keychain over stdin via
+  `security -i`; mock honours `-i`) · `8a40450` (headless `setup`: auto in an agent session / no tty,
+  `--headless`, `--import-env`, `--discovery`, `--no-discovery`; recovery key kept; canary and
+  Keychain prompts removed; conditional `apiKeyHelper` wiring in `lib/wire.sh` + `add` completes it;
+  `doctor` rows; `install.sh` flags + chaining; install tests archive the working tree; 19 locks in
+  `tests/headless.bats`) · `b490357` (docs: AGENTS.md, README, llms.txt, SECURITY.md, FAQ,
+  `help --json`) · `c56dacc` (version bump to 0.1.3). **Gate: 260 bats pass / 0 fail · shellcheck exit 0.**
+  Not yet cut: the `v0.1.3` tag + release (operator-gated) — until then the README one-liner points
+  at a tag that does not exist, exactly as the `0.1.1 → 0.1.2` bump did before its release.
+
+### The result, measured the same way the defects were
+
+| | before | after |
+|---|---|---|
+| agent session, one command → usable tool | **no** — exit 0 with "open Terminal.app and run setup" | **yes** — keys, primary custody, store, wrappers, discovery, `doctor` 0 |
+| secret bytes in a headless transcript | n/a (refused) | **0** (`AGE-SECRET-KEY` and the imported value grep 0; locked) |
+| custody after a non-interactive setup | file ("degraded") | **primary** (Keychain over stdin) |
+| `doctor` after skipping the first secret | **✗** (helper "empty output") and Claude Code auth broken | ⚠ optional, exit 0, Claude Code on its own login |
+| human wizard, minimum path | 6–7 actions | **2** (recovery: `n` · secret: `4`) — PTY-locked |
+| invisible Keychain double-paste | present | gone (no paste in any mode) |
+| later opt-in to discovery | re-run the installer | `agent-secrets setup --discovery` |
+
+### Durable learnings
+
+1. **A refusal guards a mechanism, not a mode.** "Setup refuses in an agent session" was really
+   "the clipboard and the hidden prompt must not meet a transcript". Name the mechanism and the
+   mode can be rebuilt without it; name the mode and every agent obeys the refusal forever.
+2. **`security -i` is the no-argv, no-tty Keychain write.** `-w` with no value is a tty prompt;
+   `-w` with a value is argv; `-i` takes the whole command on stdin. Store only the identity line —
+   a one-line Keychain value holding a key file's first (comment) line decrypts nothing, which is
+   also why the old whole-file clipboard paste could never have worked.
+3. **A credential helper outranks the login it is meant to supplement.** Claude Code tries
+   `apiKeyHelper` before `/login` and fails closed when it prints nothing. A helper must be wired
+   only when it has something to serve, and the moment it does (`add ANTHROPIC_API_KEY`) is the
+   moment to wire it — not setup time.
+4. **Tests that archive `HEAD` test the previous commit.** `git archive HEAD` in a harness makes
+   every uncommitted change invisible and a new lib file a phantom; build the mirror from the
+   working tree with the same `export-ignore` filter the release uses (`git check-attr` matches a
+   directory pattern only against the directory path with its trailing slash — check the ancestors).
+5. **A default-`no` prompt is a touchpoint that carries no information.** The canary question was
+   answered "Enter" on every recorded run; `doctor` already named the command. Delete the prompt,
+   keep the command.
