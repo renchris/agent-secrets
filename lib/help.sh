@@ -30,19 +30,27 @@ agsec_help_spec() {
 	exit	2	usage error / unknown command / reserved verb
 	seealso	https://github.com/renchris/agent-secrets/blob/v0.1.1/AGENTS.md	agent-facing usage guide (read this first if you are an agent)
 	seealso	https://github.com/renchris/agent-secrets/blob/v0.1.1/SECURITY.md	threat model + the honest ceiling
-setup	synopsis	agent-secrets setup [--restore|--keychain]
-setup	summary	One-time onboarding wizard: generate your key, add your first secret, wire your tools.
-setup	desc	Idempotent — safe to re-run; detects an existing install and never mints a second key. Screens: preflight → key ceremony (Keychain + file fallback + recovery leg) → first secret → wire wrappers/apiKeyHelper → health check → done. --restore recovers on a new machine: paste your saved age key to re-establish custody over a restored store copy (verifies decryption; never mints a new key). --keychain re-runs ONLY the Keychain populate step: macOS Sequoia's security(1) takes the key via an interactive /dev/tty paste, so a non-interactive first run leaves custody on the 0600-file fallback (doctor: "degraded (file custody)") — run this once in a real terminal to restore prompt-free Keychain custody. Refuses to run inside an agent session (transcripts are secret-bearing) unless AGENT_SECRETS_UNATTENDED=1.
-setup	flag	--restore	recover on a new machine — paste your saved age key to re-establish custody over a restored store copy (never mints a new key)
-setup	flag	--keychain	restore prompt-free Keychain custody in a real terminal — re-runs just the paste-once Keychain step (use when doctor reports "degraded (file custody)")
-setup	env	AGENT_SECRETS_UNATTENDED	1 = non-interactive with FAKE placeholder values (tests/CI); reads the first secret value from STDIN if piped
-setup	example	agent-secrets setup	run the interactive wizard (in a normal terminal, not an agent session)
+setup	synopsis	agent-secrets setup [--headless] [--import-env NAME[,NAME…]] [--no-discovery] | --discovery | --keychain | --restore
+setup	summary	One-time onboarding: generate your keys, wire your tools. Interactive for a human; HEADLESS (no prompts, no human) in an agent session.
+setup	desc	Idempotent — safe to re-run; detects an existing install and never mints a second key. INTERACTIVE (a human at a terminal): preflight → keys (recovery-key save offer) → first secret → wire wrappers → health check → done; the Keychain is populated with no paste. HEADLESS — auto-selected inside a coding-agent session (Claude Code / Cursor) or with no attachable terminal, or forced with --headless: the SAME real setup with zero prompts and NO secret on any output — keys are minted to files, recovery.key stays on disk (0600) for a human to save later, the login Keychain takes the key over a pipe (primary custody), a first secret enters ONLY via --import-env from variables already in the environment, machine-wide agent discovery is written by default (announced per file; --no-discovery skips), and the done screen names the absolute binary path plus any optional human follow-up. An AGENT CAN RUN THIS. apiKeyHelper is wired into ~/.claude/settings.json only once ANTHROPIC_API_KEY is in the store (a wired helper with nothing to print breaks Claude Code's auth); `add ANTHROPIC_API_KEY` completes the wiring. --discovery: only write the discovery rules (the later opt-in). --keychain: only the Keychain populate step (works headless). --restore: recover on a new machine — pipe or paste your saved age key to re-establish custody over a restored store copy (never mints a new key).
+setup	flag	--headless	prompt-free setup with REAL keys (automatic in an agent session / with no tty): nothing read from a prompt, nothing secret printed
+setup	flag	--import-env NAME[,NAME…]	headless: store each NAME that is set and non-empty in this process's environment (value moves variable → pipe → store; never argv, never shown); absent names are reported and skipped. Implies --headless
+setup	flag	--no-discovery	headless: do not write the machine-wide agent rules (written by default; advisory, reversible)
+setup	flag	--discovery	write ONLY the machine-wide agent rules into every present harness's file (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md, …) — the one-command later opt-in; idempotent
+setup	flag	--keychain	restore prompt-free Keychain custody — re-runs just the populate step, over stdin (no paste, no tty; use when doctor reports "file custody")
+setup	flag	--restore	recover on a new machine — paste (or pipe) your saved age key to re-establish custody over a restored store copy (never mints a new key)
+setup	env	AGENT_SECRETS_UNATTENDED	1 = tests/CI ONLY: non-interactive with a FAKE placeholder first secret (deletes the recovery key). Not the agent mode — agents get real keys via headless
+setup	example	agent-secrets setup	a human: the interactive wizard (two answers on the minimum path)
+setup	example	agent-secrets setup --headless	an agent / CI: real keys, Keychain custody, wiring, discovery — no prompts, no secret printed
+setup	example	OPENROUTER_API_KEY="$(cat ~/.x)" agent-secrets setup --import-env OPENROUTER_API_KEY	headless + seed one secret from a variable the caller already holds (the value never appears in the command)
+setup	example	agent-secrets setup --discovery	later: make every coding agent on this Mac aware of agent-secrets
 setup	example	agent-secrets setup --restore	recover on a new machine (copy your store copy into place first, then paste your saved key)
-setup	example	agent-secrets setup --keychain	re-run only the Keychain populate step after a non-interactive install (doctor: degraded custody)
-setup	writes	~/.config/secrets/{age.key,age.pub,recovery.pub,age-key-cmd.sh,secrets.env,.sops.yaml,manifest.toml}, ~/bin wrappers, ~/.claude/settings.json (apiKeyHelper)
-setup	exit	0	wizard completed (or returned early on an existing install)
+setup	example	agent-secrets setup --keychain	re-run only the Keychain populate step (doctor: file custody)
+setup	writes	~/.config/secrets/{age.key,age.pub,recovery.key (headless: kept),recovery.pub,age-key-cmd.sh,secrets.env,.sops.yaml,manifest.toml}, ~/bin wrappers, ~/.claude/settings.json (apiKeyHelper, only once ANTHROPIC_API_KEY is stored), discovery blocks (headless default / --discovery)
+setup	exit	0	setup completed (or returned early on an existing install)
 setup	exit	1	a step failed (see message)
-setup	namesonly	never prints the age key or any secret value; hidden input via read -s
+setup	exit	2	usage error (unknown flag, or a bad --import-env NAME list)
+setup	namesonly	never prints the age key or any secret value; interactive input is hidden (read -s); headless reads no secret from any prompt and imports only from named environment variables
 add	synopsis	agent-secrets add <NAME>
 add	summary	Add or update ONE secret by name. The value is read hidden and never echoed.
 add	desc	NAME must match ^[A-Za-z_][A-Za-z0-9_]*$. The value is read from STDIN when piped (scriptable/agent-friendly), otherwise from a hidden prompt. Upserts the encrypted store entry and its manifest.toml row (rotate_by defaults to +180d).

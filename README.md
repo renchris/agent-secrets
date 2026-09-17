@@ -82,26 +82,26 @@ the pipe.
 
 </details>
 
-**There is exactly one case where it is two commands, and it is deliberate: a coding-agent session.**
-Run the same line inside Cursor or Claude Code and the tool installs completely, then stops before
-the key ceremony and tells you to run `agent-secrets setup` in a real terminal. Minting your
-encryption key and typing your first secret inside an agent session would write both into a
-plaintext transcript, which is the exact thing this tool exists to prevent.
+**It is one command from inside a coding agent too.** Paste the same line into Claude Code or Cursor
+— or have the agent run it — and setup runs **headless**: real keys minted to files, the login
+Keychain populated over a pipe, wrappers wired, nothing read from a prompt and nothing secret
+printed, so the transcript records paths and names only. The agent can then store the secrets it
+already holds and use them, with no human step. Details → [For AI agents](#for-ai-agents).
 
 <details>
-<summary>What the wizard asks you (six screens, and every default is safe)</summary>
+<summary>What the wizard asks you (six screens, two questions, and every default is safe)</summary>
 
 | Screen | What it wants | Press Enter and you get |
 |---|---|---|
 | 1 · Preflight | nothing | a FileVault / toolchain readout |
 | 2 · Your keys | *save your recovery key off this Mac now?* | yes — or `n` to defer it with no loss |
-| 2 · Your keys | *put the key in your login Keychain?* | yes — prompt-free reads afterwards |
+| 2 · Your keys | nothing — the Keychain is populated with no paste | prompt-free reads afterwards |
 | 3 · First secret | which secret to store first | `ANTHROPIC_API_KEY` (or pick 4 to skip) |
-| 3 · First secret | *arm the breach canary?* | **no** — it is opt-in |
 | 4–6 | nothing | wrappers, `apiKeyHelper`, health check, done |
 
 Nothing here is irreversible, and nothing is destroyed on a wrong answer: the recovery key is only
-deleted from disk after you paste it back from wherever you saved it.
+deleted from disk after you paste it back from wherever you saved it. The breach canary is opt-in
+after setup (`doctor` shows the command); it no longer costs a keystroke here.
 
 </details>
 
@@ -142,15 +142,21 @@ installed, and otherwise downloads pinned, SHA-256-verified static binaries into
 uninstall); the `agent-secrets` command plus the `claude-agent`, `cursor-agent`, and
 `apiKeyHelper` wrappers in `~/bin`; an encrypted store at `~/.config/secrets/`; your age key in the
 login Keychain (with a `0600` file fallback); one `PATH` line in `~/.zshenv`; a weekly `launchd`
-smoke job; and the `apiKeyHelper` line in `~/.claude/settings.json`. It also *offers* (opt-in) to write
-a short agent-discovery block into `~/.claude/CLAUDE.md` (read by Claude Code + VS Code Copilot, plus a
-per-tool file for any other agent CLI present). Every change is recorded in
-`install-manifest.json` and reversed by `agent-secrets uninstall` — all removable in one command.
+smoke job; and — **only once `ANTHROPIC_API_KEY` is in the store** — the `apiKeyHelper` line in
+`~/.claude/settings.json` (Claude Code ranks that helper above your claude.ai login and treats an
+empty one as an auth failure, so it is never wired with nothing to serve; `add ANTHROPIC_API_KEY`
+wires it). It also *offers* (opt-in, in a terminal) to write a short agent-discovery block into
+`~/.claude/CLAUDE.md` (read by Claude Code + VS Code Copilot, plus a per-tool file for any other agent
+CLI present); a headless install writes it by default (`--no-discovery` to skip). Every change is
+recorded in `install-manifest.json` and reversed by `agent-secrets uninstall` — all removable in one
+command.
 
-> **Running this from inside a coding agent (Cursor / Claude Code)?** The installer finishes the file
-> setup (exit 0) and then **stops before the key ceremony** — minting your key and taking your first
-> secret would land them in the agent's transcript. It prints one instruction: open **Terminal.app**
-> and run `agent-secrets setup`. Everything else is already done.
+> **Running this from inside a coding agent (Cursor / Claude Code), over `ssh -T`, or from CI?** The
+> installer sees there is nobody to prompt and chains straight into `agent-secrets setup --headless`:
+> the same real setup with zero prompts. Keys go to files, the Keychain takes its key over a pipe, the
+> recovery key stays on disk (0600) for a human to save off-machine whenever they like, and no secret
+> is ever printed. Flags: `--headless` (force it), `--import-env NAME[,NAME…]` (seed the store from
+> variables already set in that shell — never a value on the command line), `--no-discovery`.
 
 > **Brand-new Mac?** Verified on a stock macOS PATH with no Homebrew, no Node, no Python, no
 > iTerm2 and no oh-my-zsh: the whole tool runs under the system `/bin/bash` 3.2, every command it
@@ -353,6 +359,18 @@ agent-secrets help --json          # authoritative machine-readable command mani
 agent-secrets <command> --help     # detailed per-command help (side-effect-free, even `uninstall --help`)
 ```
 
+**An agent can install and set it up, too — zero human-in-the-loop.** The install one-liner above,
+run from inside Claude Code or Cursor, chains into `agent-secrets setup --headless`: real keys minted
+to files, the login Keychain populated over a pipe (primary, prompt-free custody), wrappers wired,
+discovery written, `doctor` green — and nothing secret printed, so the transcript holds only names
+and paths. The one thing an agent cannot do is *type* a secret; it seeds the store from values it
+already holds instead (`--import-env NAME`, or `printf '%s' "$NAME" | agent-secrets add NAME`),
+naming a *source* in the command rather than a literal. What remains for a human is optional:
+saving the recovery key off the Mac (`agent-secrets setup` in a terminal proves it; `doctor`
+reminds), arming the canary, Cursor's User Rules paste. Only `share` (it extracts a plaintext value)
+and `uninstall` (destructive) stay human-gated. The security argument is in
+**[SECURITY.md → Headless setup](SECURITY.md#headless-setup-inside-an-agent-session)**.
+
 **Machine-wide discovery — how agents in *other* repos find out.** This repo's `AGENTS.md` is
 repo-scoped, and the `apiKeyHelper` only auths Claude Code's own key, so by default an agent working
 in some *other* project has no idea this Mac has `agent-secrets`. To close that gap the installer
@@ -367,9 +385,10 @@ Cline — each in its own instruction file). Every block is **abs-path-pinned** 
 binary, not a PATH impostor), carries a **self-guard** (it goes inert if the file is synced to a machine
 without the tool), and an invisible **integrity marker** (`doctor` flags tampering). Discovery is
 **advisory** (it makes agents *aware* of the tool; it is not an enforced guarantee), everything is
-recorded for total rollback, and nothing is written unless you say yes on an interactive install (a
-piped `curl | bash` never silently edits a global file, and the prompt **names each file** it would
-write + previews the block first). On an **org/MDM-managed** machine the installer **defers entirely** —
+recorded for total rollback, and it is never written silently: an interactive install asks first
+(the prompt **names each file** it would write + previews the block), a headless install writes it by
+default but **announces each file** before writing (`--no-discovery` skips), and
+`agent-secrets setup --discovery` adds it any time later. On an **org/MDM-managed** machine the installer **defers entirely** —
 it writes nothing machine-wide and leaves that tier to your IT (see
 **[docs/enterprise-deployment.md](docs/enterprise-deployment.md)**). `agent-secrets doctor` reports each
 surface's status (and flags a tampered block).
@@ -381,10 +400,10 @@ config every IDE honors**. Here's the honest picture:
 
 | Surface | How it learns the rules | Automated? |
 |---|---|---|
-| **Claude Code** (global) | The opt-in block in `~/.claude/CLAUDE.md`, loaded in every session in every repo | ✅ installer opt-in; `doctor` verifies it |
+| **Claude Code** (global) | The block in `~/.claude/CLAUDE.md`, loaded in every session in every repo | ✅ installer opt-in in a terminal; written by default headless; `agent-secrets setup --discovery` later; `doctor` verifies it |
 | **VS Code Copilot** (global) | The **same** `~/.claude/CLAUDE.md` block — Copilot reads it by default (`chat.useClaudeMdFile`) | ✅ covered free by the Claude file; `doctor` reports it |
-| **Cursor** (global) | **Settings → Rules → User Rules** — paste the four golden rules once | ⚠️ semi-automated: `setup` prints them **and copies them to your clipboard** (Cursor has no stable file-based path to write) |
-| **Codex / Gemini / Zed / Cline** (global) | Each tool's own file (`~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.config/zed/AGENTS.md`, `~/.agents/AGENTS.md`) | ✅ installer opt-in when the tool is present on this Mac |
+| **Cursor** (global) | **Settings → Rules → User Rules** — paste the four golden rules once | ⚠️ semi-automated: the interactive `setup` prints them **and copies them to your clipboard** (Cursor has no stable file-based path to write) |
+| **Codex / Gemini / Zed / Cline** (global) | Each tool's own file (`~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`, `~/.config/zed/AGENTS.md`, `~/.agents/AGENTS.md`) | ✅ same opt-in / headless default / `--discovery`, when the tool is present on this Mac |
 | **Any repo** (`AGENTS.md`) | A repo's own `AGENTS.md`, which Claude Code, Cursor, and others read | 📄 add per repo (this project ships one you can copy as a template) |
 
 Cursor also reads a repo's `AGENTS.md`, so per-project guidance carries over even without the global

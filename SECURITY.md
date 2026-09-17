@@ -165,17 +165,28 @@ does **not** buy you:
 
 ## Custody and recovery
 
-The bootstrap age key is custodied behind one selector script with two paths. An **attended** `setup`
-populates the login Keychain via the interactive paste prompt (primary; prompt-free thereafter). An
-**automated / `AGENT_SECRETS_UNATTENDED`** install — or a declined Keychain prompt — stores the key in
-the `0600` FileVault-backed file **by default** (on current macOS the no-argv Keychain write can't be
-populated without an interactive paste, so unattended installs run on file custody now, not someday).
-That is a normal, `doctor`-tracked steady state shown as "degraded (file custody)" — fully supported,
-not an outage; a later macOS upgrade breaking the Keychain path is just one more trigger for it. Rotate the key every
-180 days (tracked by a `rotate_by` row and the weekly smoke job). Your **recovery key** (a second
-age recipient saved offline during setup) is what makes a full-machine restore possible — the
-`agent-secrets setup --restore` path (paste the saved key over a restored store copy) and the
-documented restore drill verify it.
+The bootstrap age key is custodied behind one selector script with two paths. Every `setup` —
+attended or headless — populates the login Keychain **over a pipe**: the `AGE-SECRET-KEY` line is
+read from the `0600` file in-process and handed to `security -i` on stdin, so it is never in `ps`,
+on the clipboard, or on a terminal (primary custody; prompt-free thereafter). If that write does not
+take, custody stays on the `0600` FileVault-backed file — a normal, `doctor`-tracked state shown as
+"file custody", fully supported, not an outage; `setup --keychain` retries. Only the test mode
+(`AGENT_SECRETS_UNATTENDED`) deliberately skips the Keychain. Rotate the key every 180 days
+(tracked by a `rotate_by` row and the weekly smoke job). Your **recovery key** (a second age
+recipient) is what makes a full-machine restore possible — the `agent-secrets setup --restore` path
+(paste the saved key over a restored store copy) and the documented restore drill verify it. An
+attended setup offers to save it off-machine on the spot; a headless setup **keeps it on disk**
+(`0600`, beside the primary) and `doctor` reminds until a human runs `setup` and proves the save.
+
+### Headless setup inside an agent session
+
+`setup` used to refuse inside a coding-agent session because the wizard put key material on the
+clipboard and read a secret from a hidden prompt, and an agent's pty is transcript-captured. The
+headless mode has neither: keys are minted to files, the Keychain takes its key over a pipe, a first
+secret enters only via `--import-env` from a variable already in the caller's environment (the value
+moves `${!NAME}` → pipe → store, never argv), and the output is names, paths and status. Nothing in
+that path reaches a file descriptor the harness records, so the refusal's premise is gone and an agent
+may run it. `share` keeps its refusal: it extracts a plaintext value by design.
 
 ## Reporting a vulnerability
 

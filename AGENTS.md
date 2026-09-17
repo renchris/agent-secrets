@@ -23,15 +23,59 @@ either.
    child process's environment for that run only. Prefer this over ever materializing a value.
 4. **Gate on `doctor`'s exit code.** `0` = no failing checks, `1` = at least one ✗. Parse
    `doctor --format=json` for structure.
-5. **`uninstall`, the setup key-ceremony, and `share` are human-gated.** `uninstall` removes the
-   installation and prompts about the store; the `setup` wizard refuses its key ceremony inside an
-   agent session; **`share` also refuses inside an agent session** (`CLAUDECODE=1` / etc.) — it
-   extracts a plaintext value to encrypt, which must not touch a secret-bearing transcript. Do not
-   automate these without an explicit human instruction.
+5. **`uninstall` and `share` are human-gated. `setup` is NOT — you can run it.** `uninstall` removes
+   the installation and prompts about the store; **`share` refuses inside an agent session**
+   (`CLAUDECODE=1` / etc.) — it extracts a plaintext value to encrypt, which must not touch a
+   secret-bearing transcript. Do not automate those two without an explicit human instruction.
+   `setup`, by contrast, detects your session and runs **headless**: real keys minted to files, the
+   Keychain populated over a pipe, nothing read from a prompt, nothing secret printed. See
+   **Install + set up autonomously** below.
 6. **`receive` is tty-gated, not session-gated.** It refuses when there is **no controlling terminal**
    (except `--yes-i-reviewed` for CI). The pasted blob occupies STDIN, so every confirm/digest-readback
    must be answered on `/dev/tty` — with no tty there is nowhere to safely confirm, so it hard-refuses.
    `pubkey` is **safe for agents**: it emits only your *public* recipient key, never a secret.
+
+## Install + set up autonomously — zero human-in-the-loop
+
+If `agent-secrets` is not on this machine (`command -v agent-secrets` fails and `~/bin/agent-secrets`
+is absent), **install it yourself** — one command, no human step, safe inside your session:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.3/install.sh -o /tmp/agent-secrets-install.sh \
+  && bash /tmp/agent-secrets-install.sh
+```
+
+Inside a coding-agent session the installer detects that nobody can be prompted and chains into
+`agent-secrets setup --headless` automatically. What that does, and why it is safe in a transcript:
+
+| Step | Headless behaviour | What touches your output |
+|---|---|---|
+| keys | primary + recovery `age` keys minted **to files** (`~/.config/secrets/`, 0600) | paths only |
+| Keychain | the primary key goes file → pipe → `security -i` (**no argv, no clipboard, no tty**) → prompt-free **primary** custody | the word `primary` |
+| recovery key | **kept** on disk (0600), never deleted unverified; a human saves it off-machine later with `agent-secrets setup` | its path |
+| first secret | **none**, unless you pass `--import-env NAME[,NAME…]` for variables already set in your environment | names only |
+| wiring | wrappers in `~/bin`; `apiKeyHelper` wired into `~/.claude/settings.json` **only once** `ANTHROPIC_API_KEY` is in the store (a wired helper with nothing to print breaks Claude Code's auth) | status |
+| discovery | the golden rules written into `~/.claude/CLAUDE.md` (+ each present agent CLI's file), advisory + reversible; `--no-discovery` skips | each file's path |
+
+Your shell predates the `PATH` line the installer adds, so **call it by full path until a new
+shell**: `~/bin/agent-secrets`. Then gate on `~/bin/agent-secrets doctor` (exit 0).
+
+**Seeding a secret you already hold** — from a variable, a file, or a Keychain item you can read —
+without the value ever appearing in a command:
+
+```sh
+# value already in an exported variable
+OPENROUTER_API_KEY="$OPENROUTER_API_KEY" ~/bin/agent-secrets setup --import-env OPENROUTER_API_KEY
+# value in a file / a Keychain item you created earlier
+printf '%s' "$(security find-generic-password -s my-item -w)" | ~/bin/agent-secrets add OPENROUTER_API_KEY
+```
+
+The command text names a *source*, never a literal, so the transcript records how the value was
+found and not the value. Never type the value into the command.
+
+**What is left for a human, and only if they want it:** saving the recovery key off this Mac
+(`agent-secrets setup` in a terminal walks them through it; `doctor` reminds meanwhile), arming the
+breach canary, and Cursor's User Rules paste. None of them blocks you.
 
 ## Discovery — learn the whole surface without a human
 
@@ -51,7 +95,7 @@ writes, names_only }`. **Everything you need to construct a valid invocation is 
 
 | Command | Use it to | Key detail |
 |---|---|---|
-| `setup` | onboard a machine (once) | interactive; refuses key-ceremony in an agent session |
+| `setup [--headless] [--import-env N,…] [--no-discovery]` | onboard a machine (once) | **headless in your session** (auto): real keys, no prompts, nothing secret printed; `--discovery` / `--keychain` / `--restore` are single steps |
 | `add <NAME>` | store/update one secret | value via **STDIN**; `NAME` = `^[A-Za-z_][A-Za-z0-9_]*$` |
 | `list [--format=json]` | see what exists | **names + rotate dates only**, never values |
 | `run [--no-egress] -- <cmd>` | run a tool with secrets | JIT-injected into that process; `--` required; bounds egress to `~/.config/secrets/egress.allow` when set (`--no-egress` opts out) |
@@ -86,9 +130,11 @@ agent-secrets run -- printenv ANTHROPIC_API_KEY | wc -c      # >1 means present
 # Health-gate before doing work; branch on exit code
 if agent-secrets doctor >/dev/null 2>&1; then echo healthy; else agent-secrets doctor; fi
 
-# Unattended setup (tests/CI ONLY — fake/placeholder values): PIPE the seed value in.
-# Without piped stdin (or AGENT_SECRETS_SEED_VALUE) the wizard falls back to a placeholder
-# after a bounded 5s stdin read — pipe the value to make it deterministic and instant.
+# Set up THIS machine from inside your session (real keys; see "Install + set up autonomously").
+agent-secrets setup --headless --import-env ANTHROPIC_API_KEY      # imports it only if already set in env
+agent-secrets setup --discovery                                    # later: teach every agent on this Mac
+
+# Unattended setup (tests/CI ONLY — fake/placeholder values, recovery key deleted): not the agent mode.
 printf '%s' "$SEED_VALUE" | AGENT_SECRETS_UNATTENDED=1 agent-secrets setup
 
 # Machine-readable health for decisions — the payload is an OBJECT:
@@ -103,7 +149,8 @@ agent-secrets doctor --format=json | jq '[.checks[] | select(.status=="bad")]'
 |---|---|
 | `AGENT_SECRETS_HOME` | base dir for all state (default `$HOME`). **Set to an isolated temp dir to test/CI without touching the real machine.** |
 | `AGENT_SECRETS_PLAIN` / `NO_COLOR` | plain output (no color/box-drawing) — use when capturing output |
-| `AGENT_SECRETS_UNATTENDED` | `setup` runs non-interactively with **fake placeholder** values (tests/CI only). The seed value comes from `AGENT_SECRETS_SEED_VALUE` if set, else a single piped STDIN line (read with a bounded timeout so it **never hangs** on an open agent stdin), else a placeholder; the name from `AGENT_SECRETS_SEED_NAME` (default `ANTHROPIC_API_KEY`). |
+| `AGENT_SECRETS_UNATTENDED` | tests/CI **only**: `setup` runs with **fake placeholder** values and deletes the recovery key. Not the agent mode — an agent session gets the real headless setup with no variable at all. The seed value comes from `AGENT_SECRETS_SEED_VALUE` if set, else a single piped STDIN line (bounded read, never hangs), else a placeholder; the name from `AGENT_SECRETS_SEED_NAME` (default `ANTHROPIC_API_KEY`). |
+| `CLAUDECODE` / `CURSOR_AGENT` / `TERM_PROGRAM=Cursor` | how the tool recognises a coding-agent session: `setup` goes headless, `share` refuses, `add` reminds you to pipe from a variable. You do not set these; your harness does. |
 
 ⚠️ The macOS login Keychain is **not** scoped by `AGENT_SECRETS_HOME`. When testing, put a mock
 `security` on `PATH` (see `tests/mocks/`) so you never touch the real Keychain.
@@ -118,7 +165,7 @@ specifically when any check is ✗ — use it as a boolean gate.
 
 - ❌ Print a value to confirm it — use `list` (names) or `run -- printenv X | wc -c` (length) instead.
 - ❌ Put a value on the command line (`add NAME value`) — pipe it via STDIN.
-- ❌ Run `setup`'s key ceremony inside your own session — it will refuse; that is correct.
+- ❌ Hand the human "open Terminal.app and run `agent-secrets setup`" — you can run it yourself; it goes headless in your session. Only `share` and `uninstall` need a human.
 - ❌ Run `uninstall` to "clean up" without explicit human intent — it is a destructive, gated action.
 - ❌ Use a Model Context Protocol (MCP) server or command that returns a raw secret value — it lands in the transcript.
 

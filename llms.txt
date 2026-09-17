@@ -5,12 +5,13 @@
 > an AI agent, read AGENTS.md and run `agent-secrets help --json` to learn the full command surface.
 
 ## For agents (read first)
-- [AGENTS.md](AGENTS.md): complete guide to driving the CLI autonomously — golden rules, discovery, recipes, exit codes.
+- [AGENTS.md](AGENTS.md): complete guide to driving the CLI autonomously — golden rules, install + set up with zero human-in-the-loop, discovery, recipes, exit codes.
+- Not installed on this machine? You can install AND set it up yourself from inside your session (the installer goes headless: real keys, no prompts, nothing secret printed) — see AGENTS.md → "Install + set up autonomously".
 - Live manifest: run `agent-secrets help --json` for the authoritative, machine-readable command surface (commands, flags, args, examples, exit codes, reads/writes, names-only notes).
 - Per-command help (side-effect-free): `agent-secrets <command> --help`.
 
 ## Commands
-- `setup` — one-time onboarding wizard (human-gated key ceremony).
+- `setup [--headless] [--import-env NAME,…] [--no-discovery]` — one-time onboarding; headless (no prompts, no human) in an agent session; `--discovery` / `--keychain` / `--restore` run one step.
 - `add <NAME>` — store/update one secret; value via STDIN, never argv.
 - `list [--format=json]` — list secret names + rotate dates (never values).
 - `run -- <cmd>` — run a command with secrets JIT-injected into its process.
