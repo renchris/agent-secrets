@@ -115,12 +115,14 @@ _mint_rec() {
 @test "E2E: the author's failed first-run now reaches [6/6] — empty pastes everywhere, nothing aborts, nothing destroyed" {
   command -v expect >/dev/null 2>&1 || skip "expect not available"
   cat >"$AGENT_SECRETS_HOME/drive.exp" <<'EOF'
-set timeout 30
+# One wall-clock bound on the whole drive, and no per-expect timeout. A timeout action in expect_after
+# never fires on this expect, wherever it is declared (measured 2026-11-07, expect 5.45): a timed-out
+# `expect` returns silently, so a slow wizard under load lost its output tail, then blocked forever in
+# `wait` while the wizard sat in kernel exit waiting for its pty to drain. An early exit makes the next
+# expect or send fail, which also fails the drive.
+set timeout -1
+after 300000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
 spawn env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash $env(REPO_ROOT)/bin/agent-secrets setup
-# AFTER spawn, so the handlers bind to the wizard's spawn_id — declared before spawn they bind
-# to the pre-spawn id and every timeout is SILENT (measured: a desync then cascades into a
-# forever-blocking `wait`, hanging the whole suite).
-expect_after { timeout { puts "\nDESYNC-TIMEOUT"; exit 90 } eof { puts "\nEARLY-EOF"; exit 91 } }
 # `sleep 1` before answering any HIDDEN prompt: bash's `read -s` termios switch FLUSHES queued
 # input, so an answer sent in the µs between prompt-print and read-start is silently discarded
 # (measured — the race hung the wizard at the second prove-read).
@@ -133,6 +135,8 @@ expect "Value for CODA_API_TOKEN" { sleep 1; send "\r" }
 expect "Value for CODA_API_TOKEN" { sleep 1; send "\r" }
 expect eof { }
 catch wait result
+# A signal death reads as 0 in field 3 (measured), so it must not pass as a clean exit.
+if {[llength $result] > 4} { puts "\nWIZARD-KILLED $result"; exit 92 }
 exit [lindex $result 3]
 EOF
   run expect "$AGENT_SECRETS_HOME/drive.exp"
@@ -148,10 +152,10 @@ EOF
 @test "E2E: happy path — verified recovery paste-back + a stored first secret, to [6/6]" {
   command -v expect >/dev/null 2>&1 || skip "expect not available"
   cat >"$AGENT_SECRETS_HOME/drive.exp" <<'EOF'
-set timeout 30
+# See the sibling test for why there is one wall-clock bound and why hidden prompts get `sleep 1`.
+set timeout -1
+after 300000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
 spawn env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash $env(REPO_ROOT)/bin/agent-secrets setup
-# See the sibling test for why expect_after comes AFTER spawn and hidden prompts get `sleep 1`.
-expect_after { timeout { puts "\nDESYNC-TIMEOUT"; exit 90 } eof { puts "\nEARLY-EOF"; exit 91 } }
 expect "Save it off this Mac now?"
 # The test's "password manager": read the key line from the on-disk file the wizard just minted.
 set fh [open "$env(AGENT_SECRETS_HOME)/.config/secrets/recovery.key" r]
@@ -164,6 +168,7 @@ expect -ex {choose [1-4, Enter = 1]:} { send "1\r" }
 expect "Value for ANTHROPIC_API_KEY" { sleep 1; send "e2e-val-regression\r" }
 expect eof { }
 catch wait result
+if {[llength $result] > 4} { puts "\nWIZARD-KILLED $result"; exit 92 }
 exit [lindex $result 3]
 EOF
   run expect "$AGENT_SECRETS_HOME/drive.exp"

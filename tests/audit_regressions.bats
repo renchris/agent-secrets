@@ -127,7 +127,7 @@ my $c=IO::Socket::INET->new(PeerAddr=>'127.0.0.1',PeerPort=>$pport,Proto=>'tcp')
 my $body='x' x 50;
 print $c "POST http://127.0.0.1:$uport/p HTTP/1.1\r\nHost: 127.0.0.1:$uport\r\nContent-Length: 50\r\nConnection: close\r\n\r\n$body";
 my $s=$up->accept; my $buf=''; my $got=0; my $inbody=0;
-local $SIG{ALRM}=sub{ print "TIMEOUT\n"; kill 'TERM',-$pid; exit 1 }; alarm 5;
+local $SIG{ALRM}=sub{ print "TIMEOUT\n"; kill 'TERM',-$pid; exit 1 }; alarm 60;
 while(my $n=sysread($s,my $b,4096)){ $buf.=$b; if(!$inbody && $buf=~/\r\n\r\n(.*)/s){ $inbody=1; $got=length($1) } elsif($inbody){ $got+=$n } last if $got>=50 }
 alarm 0; kill 'TERM',-$pid; kill 'TERM',$pid;
 print $got==50 ? "BODY_OK\n" : "BODY_BAD:$got\n";

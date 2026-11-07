@@ -91,15 +91,17 @@ load test_helper
 _e2e_capture() {
   command -v expect >/dev/null 2>&1 || return 99
   cat >"$AGENT_SECRETS_HOME/cap.exp" <<'EOF'
-set timeout 30
+# See the note in wizard_interactive.bats: one wall-clock bound, never a per-expect timeout.
+set timeout -1
+after 300000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
 log_file -a $env(AGENT_SECRETS_HOME)/cap.log
 spawn -noecho env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash $env(REPO_ROOT)/bin/agent-secrets setup
 stty rows 24 columns 80 < $spawn_out(slave,name)
-expect_after { timeout { puts "\nDESYNC-TIMEOUT"; exit 90 } eof { puts "\nEARLY-EOF"; exit 91 } }
 expect "Save it off this Mac now?" { send "n\r" }
 expect -ex {choose [1-4, Enter = 1]:} { send "4\r" }
 expect eof { }
 catch wait result
+if {[llength $result] > 4} { puts "\nWIZARD-KILLED $result"; exit 92 }
 exit [lindex $result 3]
 EOF
   expect "$AGENT_SECRETS_HOME/cap.exp" >/dev/null 2>&1

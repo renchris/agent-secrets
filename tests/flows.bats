@@ -28,7 +28,7 @@ load test_helper
   command -v perl >/dev/null 2>&1 || skip "perl needed for the timeout guard"
   local fifo="$AGENT_SECRETS_HOME/seed.fifo"; mkfifo "$fifo"
   exec 9<>"$fifo"                          # hold a writer end open with nothing written
-  run perl -e 'my $p=fork; if(!$p){exec @ARGV or die} local $SIG{ALRM}=sub{kill "KILL",$p; exit 124}; alarm 20; waitpid $p,0; exit($? >> 8)' \
+  run perl -e 'my $p=fork; if(!$p){exec @ARGV or die} local $SIG{ALRM}=sub{kill "KILL",$p; exit 124}; alarm 300; waitpid $p,0; exit($? >> 8)' \
       env AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" AGENT_SECRETS_UNATTENDED=1 \
       bash "$REPO_ROOT/bin/agent-secrets" setup <"$fifo"
   exec 9>&-
