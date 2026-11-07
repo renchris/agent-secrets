@@ -24,18 +24,19 @@
 # no emulator can reflow it. Soft-wrapping is the terminal's job; our job is to stay under its width.
 # tests/onboarding.bats holds the budget (72 columns) as an executable assertion over a real run.
 
-ui_title() { printf '\n%s== %s ==%s\n' "$C_BOLD" "$*" "$C_RESET"; }
-ui_say()   { printf '%s\n' "$*"; }
+# Everything a person reads goes to stderr, so a captured stdout only ever carries a result.
+ui_title() { printf '\n%s== %s ==%s\n' "$E_BOLD" "$*" "$E_RESET" >&2; }
+ui_say()   { printf '%s\n' "$*" >&2; }
 ui_step()  { # ui_step N TOTAL TEXT
-  printf '%s[%s/%s]%s %s\n' "$C_BLUE" "${1:-?}" "${2:-?}" "$C_RESET" "${3:-}"; }
-ui_ok()    { agsec_ok "$*"; }
-ui_warn()  { agsec_attn "$*"; }
-ui_bad()   { agsec_bad "$*"; }
+  printf '%s[%s/%s]%s %s\n' "$E_BLUE" "${1:-?}" "${2:-?}" "$E_RESET" "${3:-}" >&2; }
+ui_ok()    { agsec_receipt "$*"; }
+ui_warn()  { agsec_receipt_attn "$*"; }
+ui_bad()   { agsec_receipt_bad "$*"; }
 
-# ui_confirm PROMPT [default:y|n] -> exit 0 (yes) / 1 (no). [Enter] = default.
+# ui_confirm PROMPT [default:y|n] -> exit 0 (yes) / 1 (no). [Enter] = default, n when omitted.
 # The default is ALWAYS shown (capitalised in the hint) — an invisible default is a trap.
 ui_confirm() {
-  local prompt="${1:-Continue?}" def="${2:-y}" ans
+  local prompt="${1:?ui_confirm: PROMPT required}" def="${2:-n}" ans
   local hint="[Y/n]"; [ "$def" = "n" ] && hint="[y/N]"
   printf '%s %s ' "$prompt" "$hint" >&2
   # Distinguish EOF (closed stdin, no human) from a bare Enter (human accepting the default): on EOF
@@ -46,8 +47,10 @@ ui_confirm() {
   case "$ans" in [yY]*) return 0 ;; *) return 1 ;; esac
 }
 
-# ui_menu PROMPT OPT... -> chosen option to STDOUT. Option 1 is the default: a bare Enter, an EOF,
-# and any out-of-range entry all resolve to it, so this screen can never wedge or abort.
+# ui_menu PROMPT OPT... -> chosen option to STDOUT. A bare Enter picks option 1. Anything else that is
+# not a listed number asks again, up to 3 times: a mistyped `2x` must not pick a secret nobody chose,
+# because the value pasted next would be stored under its name. EOF or a 4th bad answer returns 1 with
+# nothing on stdout, which is a cancel. The callers capture stdout, so it carries only the pick.
 ui_menu() {
   local prompt="$1"; shift
   printf '%s\n' "$prompt" >&2
@@ -57,17 +60,28 @@ ui_menu() {
     else printf '  %s) %s\n' "$i" "$opt" >&2; fi
     i=$((i+1))
   done
-  local pick; printf 'choose [1-%s, Enter = 1]: ' "$#" >&2; read -r pick || true
-  case "$pick" in ''|*[!0-9]*) pick=1 ;; esac
-  [ "$pick" -ge 1 ] 2>/dev/null && [ "$pick" -le "$#" ] 2>/dev/null || pick=1
-  eval "printf '%s\n' \"\${$pick}\""
+  printf '(Ctrl-D cancels)\n' >&2
+  local pick bad=0
+  while :; do
+    printf 'choose [1-%s, Enter = 1]: ' "$#" >&2
+    if ! IFS= read -r pick; then printf '\n' >&2; return 1; fi
+    pick="${pick:-1}"
+    i=1
+    for opt in "$@"; do
+      if [ "$pick" = "$i" ]; then printf '%s\n' "$opt"; return 0; fi
+      i=$((i+1))
+    done
+    bad=$((bad+1))
+    [ "$bad" -le 3 ] || return 1
+    printf 'Enter a number from 1 to %s.\n' "$#" >&2
+  done
 }
 
 # ui_read_secret PROMPT -> hidden builtin `read -s`. Prompt+hint to STDERR; value to STDOUT
 # (caller pipes it onward, e.g. `ui_read_secret "…" | store_add NAME`). Echoes nothing to the tty.
 ui_read_secret() {
   local prompt="${1:-Value}" val
-  printf '%s%s%s\n' "$C_DIM" "  (nothing appears as you type or paste — that's on purpose; Cmd-V works)" "$C_RESET" >&2
+  agsec_plan "  (nothing appears as you type or paste — that's on purpose; Cmd-V works)"
   printf '%s: ' "$prompt" >&2
   IFS= read -rs val || true
   printf '\n' >&2

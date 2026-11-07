@@ -2,6 +2,13 @@
 # tests/mocks/launchctl — record load/bootout into a file under AGENT_SECRETS_HOME; never touch real launchd.
 set -euo pipefail
 db="${AGENT_SECRETS_HOME:?}/.mock-launchd"
+# AGSEC_MOCK_LAUNCHCTL_BOOTSTRAP_FAIL=1: bootstrap fails without loading, and list reports the job absent.
+if [ "${AGSEC_MOCK_LAUNCHCTL_BOOTSTRAP_FAIL:-}" = 1 ]; then
+  case "${1:-}" in
+    bootstrap) exit 5 ;;
+    list)      exit 113 ;;
+  esac
+fi
 case "${1:-}" in
   bootstrap|load)   printf 'loaded\n'  >>"$db" ;;
   bootout|remove)   printf 'booted\n'  >>"$db" ;;

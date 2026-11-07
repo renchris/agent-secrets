@@ -8,8 +8,22 @@
 # (2) When `-o <file>` is present AND AGSEC_MOCK_DL_DIR is set, serve $AGSEC_MOCK_DL_DIR/<url-basename>
 #     into <file> (exit 22 if that mirror file is absent, matching `-f` on a 404). This lets the
 #     install suite drive a real dev-mirror install without network.
+# Knobs, applied in this order, before either use:
+#   AGSEC_MOCK_CURL_LOG=<file>    append one line per call with every argument
+#   AGSEC_MOCK_CURL_SLEEP=<s>     sleep first (signal tests)
+#   AGSEC_MOCK_CURL_EXIT=<n>      exit n (28 is a timeout, 6 a DNS failure)
+#   AGSEC_MOCK_CURL_RETRY_NOTE=1  print curl's retry warning on stderr before serving
 set -euo pipefail
+if [ -n "${AGSEC_MOCK_CURL_LOG:-}" ]; then printf '%s\n' "$*" >>"$AGSEC_MOCK_CURL_LOG"; fi
+if [ -n "${AGSEC_MOCK_CURL_SLEEP:-}" ]; then
+  # In the background with its fds closed: a signal that kills this mock must not leave a sleep holding
+  # the test's pipes open.
+  sleep "$AGSEC_MOCK_CURL_SLEEP" >/dev/null 2>&1 3>&- &
+  wait "$!"
+fi
+if [ -n "${AGSEC_MOCK_CURL_EXIT:-}" ]; then exit "$AGSEC_MOCK_CURL_EXIT"; fi
 if [ -n "${AGSEC_MOCK_KEYS_FAIL:-}" ]; then exit 22; fi
+if [ -n "${AGSEC_MOCK_CURL_RETRY_NOTE:-}" ]; then printf 'Warning: Problem : timeout. Will retry...\n' >&2; fi
 
 # --- (2) download-to-file mode: only when an -o target is given ---
 _out=""; _url=""

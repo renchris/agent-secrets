@@ -17,6 +17,10 @@ setup() {
   # agsec_src_is_tty to accept an openable file — a TEST-ONLY seam, never set in production. The
   # dedicated hardening test unsets it to prove a plain file is refused without it.
   export AGSEC_TEST_CONFIRM=1
+  # GitHub-hosted runners set CI=true for every step, and a non-empty CI means non-interactive: the PTY
+  # wizard drives would go headless there and desync, while a local run stays green. A test that wants
+  # CI sets it itself.
+  unset CI
 }
 
 teardown() {
