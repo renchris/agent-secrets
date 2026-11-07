@@ -82,7 +82,7 @@ FAKE_VALUE=fakevalue_ROUNDTRIP_123
   # ~/.claude transcripts). The sanctioned value sinks — a 0600 temp file redirect in
   # store.sh and ui_read_secret's pipe output — are NOT logging calls, so this precise check passes
   # them while catching a genuine `agsec_warn "...$value"` style leak.
-  run bash -c "grep -rnE '(agsec_log|agsec_note|agsec_warn|agsec_die|agsec_ok|agsec_attn|agsec_bad|ui_say|ui_ok|ui_warn|ui_bad|echo)[^\n]*\\\$(value|val|secret|apikey)([^A-Za-z_]|\$)' '$REPO_ROOT/lib' '$REPO_ROOT/cmd' || true"
+  run bash -c "grep -rnE '(agsec_log|agsec_note|agsec_warn|agsec_die|agsec_ok|agsec_attn|agsec_bad|agsec_receipt|agsec_receipt_attn|agsec_receipt_bad|agsec_plan|agsec_fail|agsec_canceled|ui_say|ui_ok|ui_warn|ui_bad|echo)[^\n]*\\\$(value|val|secret|apikey)([^A-Za-z_]|\$)' '$REPO_ROOT/lib' '$REPO_ROOT/cmd' || true"
   [ -z "$output" ]
 }
 
