@@ -11,7 +11,13 @@ if [ "${AGSEC_MOCK_LAUNCHCTL_BOOTSTRAP_FAIL:-}" = 1 ]; then
 fi
 case "${1:-}" in
   bootstrap|load)   printf 'loaded\n'  >>"$db" ;;
-  bootout|remove)   printf 'booted\n'  >>"$db" ;;
+  bootout|remove)
+    printf 'booted\n' >>"$db"
+    # AGSEC_MOCK_LAUNCHCTL_BOOTOUT_STUCK=1: bootout leaves the job loaded, so print still reports it.
+    if [ "${AGSEC_MOCK_LAUNCHCTL_BOOTOUT_STUCK:-}" != 1 ]; then
+      { grep -vx loaded "$db" || true; } >"$db.tmp"
+      mv -f "$db.tmp" "$db"
+    fi ;;
   print)            grep -q loaded "$db" 2>/dev/null && echo "state = running" || exit 1 ;;
 esac
 exit 0

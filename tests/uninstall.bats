@@ -1,6 +1,14 @@
 #!/usr/bin/env bats
 # tests/uninstall.bats — install-manifest round-trip + total-rollback zero-residue.
+bats_require_minimum_version 1.5.0
 load test_helper
+load mode_matrix
+
+_load_manifest() {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib" AGENT_SECRETS_ROOT="$REPO_ROOT"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+}
 
 @test "manifest round-trip: record -> list -> dry-run touches nothing -> rollback removes" {
   export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
@@ -172,4 +180,189 @@ load test_helper
   manifest_rollback >/dev/null
   grep -q '# BELOW the block' "$cm"                                  # content below the block SURVIVES
   grep -q '# top user rules' "$cm"                                   # content above survives
+}
+
+# --- B5: partial rollback, receipts, argument loop, launchd, user-target backups ------------------
+
+@test "a partial rollback says so, keeps the failed records, and exits 1" {
+  setup_store
+  . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+  local f="$AGENT_SECRETS_HOME/fake-artifact" u="$AGENT_SECRETS_HOME/bin/users-tool"
+  echo hi >"$f"; manifest_record_file "$f"
+  mkdir -p "$(dirname "$u")"; echo mine >"$u"
+  manifest_record_edit "$u" "$AGENT_SECRETS_HOME/no-such.bak"    # non-marker edit whose backup is gone
+  run bash "$REPO_ROOT/cmd/uninstall.sh" </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"1 failed"* ]] || return 1
+  [[ "$output" == *"Re-run agent-secrets uninstall to retry the rest."* ]] || return 1
+  [[ "$output" != *"uninstall complete"* ]] || return 1
+  [ ! -e "$f" ]                                                  # the rest of the rollback still ran
+  run jq length "$(agsec_install_manifest)"; [ "$output" -eq 1 ]
+  run jq -r '.[0].type' "$(agsec_install_manifest)"; [ "$output" = edit ]
+  [ -d "$(agsec_state_dir)" ]                                    # kept for the retry
+  [ -f "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]       # keep/purge still honoured (KEEP)
+}
+
+@test "the full-success path is unchanged" {
+  setup_store
+  . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+  local f="$AGENT_SECRETS_HOME/fake-artifact"; echo hi >"$f"; manifest_record_file "$f"
+  run bash "$REPO_ROOT/cmd/uninstall.sh" </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"uninstall complete"* ]] || return 1
+  [ ! -e "$f" ]
+  [ ! -d "$(agsec_state_dir)" ]
+}
+
+@test "uninstall --dry-run --bogus exits 2 and changes nothing" {
+  setup_store
+  . "$REPO_ROOT/lib/manifest.sh"; manifest_init
+  local f="$AGENT_SECRETS_HOME/fake-artifact"; echo hi >"$f"; manifest_record_file "$f"
+  run --separate-stderr bash "$REPO_ROOT/cmd/uninstall.sh" --dry-run --bogus=VALUE </dev/null
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"Unknown option '--bogus' for uninstall."* ]] || return 1
+  [[ "$stderr" != *VALUE* ]] || return 1                         # the value half is never echoed
+  run --separate-stderr bash "$REPO_ROOT/cmd/uninstall.sh" surplus </dev/null
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"Unexpected argument for uninstall."* ]] || return 1
+  run bash "$REPO_ROOT/cmd/uninstall.sh" --dry-run --dry-run </dev/null   # a repeated --dry-run is fine
+  [ "$status" -eq 0 ]
+  run env AGSEC_PARSE_ONLY=1 bash "$REPO_ROOT/cmd/uninstall.sh" </dev/null
+  [ "$status" -eq 0 ]; [ -z "$output" ]                          # parse-only seam: stops before any work
+  [ -f "$f" ]
+  run jq length "$(agsec_install_manifest)"; [ "$output" -eq 1 ]
+  [ -f "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]
+}
+
+@test "rollback receipts go to stderr" {
+  _load_manifest
+  local f="$AGENT_SECRETS_HOME/fake-artifact" rc="$AGENT_SECRETS_HOME/.zshrc"
+  echo hi >"$f"; manifest_record_file "$f"
+  printf 'export EDITOR=vim\n' >"$rc"
+  manifest_pathblock_install "$rc" "agent-secrets" 'export PATH="$HOME/bin:$PATH"'
+  run --separate-stderr manifest_rollback --dry-run
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  [[ "$stderr" == *"(dry-run) rm: $f"* ]] || return 1
+  run --separate-stderr manifest_rollback
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  [[ "$stderr" == *"removed: $f"* ]] || return 1
+  [[ "$stderr" == *"stripped block: $rc"* ]] || return 1
+}
+
+@test "a launchd job that stays loaded counts as failed" {
+  _load_manifest
+  local plist="$AGENT_SECRETS_HOME/Library/LaunchAgents/com.example.smoke.plist"
+  mkdir -p "$(dirname "$plist")"; : >"$plist"
+  launchctl bootstrap "gui/$(id -u)" "$plist"
+  manifest_record_launchd com.example.smoke "$plist"
+  export AGSEC_MOCK_LAUNCHCTL_BOOTOUT_STUCK=1
+  run --separate-stderr manifest_rollback
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"launchd job still loaded: com.example.smoke"* ]] || return 1
+  [[ "$stderr" == *"1 failed"* ]] || return 1
+  [[ "$stderr" != *"booted out"* ]] || return 1
+  [ -f "$plist" ]
+  run jq -r '.[0].type' "$(agsec_install_manifest)"; [ "$output" = launchd ]
+  unset AGSEC_MOCK_LAUNCHCTL_BOOTOUT_STUCK                        # the retry: bootout now unloads it
+  run --separate-stderr manifest_rollback
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"launchd booted out: com.example.smoke"* ]] || return 1
+  [ ! -e "$plist" ]
+  run cat "$(agsec_install_manifest)"; [ "$output" = "[]" ]
+}
+
+@test "pathblock install and strip never touch a user's own <rc>.new" {
+  _load_manifest
+  local rc="$AGENT_SECRETS_HOME/.zshenv"
+  printf 'export EDITOR=vim\n' >"$rc"; printf 'MINE\n' >"$rc.new"
+  manifest_pathblock_install "$rc" "agent-secrets" 'export PATH="$HOME/bin:$PATH"'
+  manifest_rollback >/dev/null 2>&1
+  [ "$(cat "$rc.new")" = MINE ]
+  run compgen -G "$AGENT_SECRETS_HOME/..zshenv.*"; [ "$status" -ne 0 ]   # no temp sibling left behind
+}
+
+@test "a foreign symlink at a user target is backed up as a link and restored as a link" {
+  _load_manifest
+  local bd="$AGENT_SECRETS_HOME/bin" other="$AGENT_SECRETS_HOME/elsewhere/helper"
+  mkdir -p "$bd" "$(dirname "$other")"; printf '#!/bin/sh\n' >"$other"
+  ln -s "$other" "$bd/apiKeyHelper"
+  manifest_backup_user_target "$bd/apiKeyHelper" wrapper-apiKeyHelper.bak
+  local b; b="$(agsec_state_dir)/wrapper-apiKeyHelper.bak"
+  [ -L "$b" ]; [ "$(readlink "$b")" = "$other" ]                 # the link itself, not a dereferenced copy
+  ln -sfn "$REPO_ROOT/bin/apiKeyHelper" "$bd/apiKeyHelper"; manifest_record_file "$bd/apiKeyHelper"
+  manifest_rollback >/dev/null 2>&1
+  [ -L "$bd/apiKeyHelper" ]; [ "$(readlink "$bd/apiKeyHelper")" = "$other" ]
+}
+
+@test "a dangling symlink at a user target counts as foreign and comes back dangling" {
+  _load_manifest
+  local bd="$AGENT_SECRETS_HOME/bin" gone="$AGENT_SECRETS_HOME/gone/helper"
+  mkdir -p "$bd"; ln -s "$gone" "$bd/apiKeyHelper"
+  manifest_backup_user_target "$bd/apiKeyHelper" wrapper-apiKeyHelper.bak
+  ln -sfn "$REPO_ROOT/bin/apiKeyHelper" "$bd/apiKeyHelper"; manifest_record_file "$bd/apiKeyHelper"
+  run --separate-stderr manifest_rollback
+  [ "$status" -eq 0 ]                                            # not "edit backup missing"
+  [ -L "$bd/apiKeyHelper" ]; [ ! -e "$bd/apiKeyHelper" ]
+  [ "$(readlink "$bd/apiKeyHelper")" = "$gone" ]
+}
+
+@test "our own link at a user target, reached by a non-canonical path, gets no backup" {
+  _load_manifest
+  local bd="$AGENT_SECRETS_HOME/bin"; mkdir -p "$bd"
+  ln -s "$REPO_ROOT/bin/../bin/apiKeyHelper" "$bd/apiKeyHelper"
+  manifest_backup_user_target "$bd/apiKeyHelper" wrapper-apiKeyHelper.bak
+  [ ! -e "$(agsec_state_dir)/wrapper-apiKeyHelper.bak" ]
+  [ ! -L "$(agsec_state_dir)/wrapper-apiKeyHelper.bak" ]
+  run jq '[.[] | select(.type=="edit")] | length' "$(agsec_install_manifest)"; [ "$output" -eq 0 ]
+}
+
+@test "a changed user file refreshes the backup, keeps the old one timestamped, and uninstall restores the newer" {
+  _load_manifest
+  local bd="$AGENT_SECRETS_HOME/bin" b; mkdir -p "$bd"
+  b="$(agsec_state_dir)/apiKeyHelper.preinstall.bak"
+  printf 'v1\n' >"$bd/apiKeyHelper"
+  manifest_backup_user_target "$bd/apiKeyHelper" apiKeyHelper.preinstall.bak "$REPO_ROOT/bin/apiKeyHelper"
+  manifest_backup_user_target "$bd/apiKeyHelper" apiKeyHelper.preinstall.bak "$REPO_ROOT/bin/apiKeyHelper"
+  run compgen -G "$b.*"; [ "$status" -ne 0 ]                     # identical re-run: nothing moved aside
+  ln -sfn "$REPO_ROOT/bin/apiKeyHelper" "$bd/apiKeyHelper"; manifest_record_file "$bd/apiKeyHelper"
+  rm -f "$bd/apiKeyHelper"; printf 'v2\n' >"$bd/apiKeyHelper"    # the user replaces our link with v2
+  run --separate-stderr manifest_backup_user_target "$bd/apiKeyHelper" apiKeyHelper.preinstall.bak "$REPO_ROOT/bin/apiKeyHelper"
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"kept the earlier backup"* ]] || return 1
+  [ "$(cat "$b")" = v2 ]
+  local olds; olds="$(compgen -G "$b.[0-9]*")"
+  [ "$(printf '%s\n' "$olds" | wc -l | tr -d ' ')" -eq 1 ]
+  [ "$(cat "$olds")" = v1 ]
+  run jq '[.[] | select(.type=="edit")] | length' "$(agsec_install_manifest)"; [ "$output" -eq 1 ]
+  ln -sfn "$REPO_ROOT/bin/apiKeyHelper" "$bd/apiKeyHelper"; manifest_record_file "$bd/apiKeyHelper"
+  manifest_rollback >/dev/null 2>&1
+  [ ! -L "$bd/apiKeyHelper" ]; [ "$(cat "$bd/apiKeyHelper")" = v2 ]
+}
+
+@test "uninstall keep/purge prompt across the mode matrix: only a terminal is asked; the store is kept" {
+  setup_store
+  local store="$AGENT_SECRETS_HOME/.config/secrets/secrets.env" mode q='Also delete your encrypted store'
+  for mode in tty stdout-redirected noninteractive-tty ci-tty stdin-piped agent; do
+    mm_run "$mode" -- bash "$REPO_ROOT/cmd/uninstall.sh"
+    [ "$mm_status" -eq 0 ] || { echo "$mode: status $mm_status"; return 1; }
+    [ -f "$store" ] || { echo "$mode: store removed"; return 1; }
+    case "$mode" in
+      tty)
+        [[ "$mm_pty" == *"$q"* ]] || { echo "$mode: no prompt"; return 1; } ;;
+      stdout-redirected)   # stdin and stderr are still the terminal, so the prompt (on stderr) is asked
+        [[ "$mm_pty" == *"$q"* ]] || { echo "$mode: no prompt"; return 1; }
+        [ -z "$mm_stdout" ] || { echo "$mode: stdout not empty"; return 1; } ;;
+      noninteractive-tty|ci-tty)
+        [[ "$mm_pty" != *"$q"* ]] || { echo "$mode: prompted"; return 1; }
+        [[ "$mm_pty" == *"non-interactive — keeping"* ]] || { echo "$mode: no keep note"; return 1; } ;;
+      *)
+        [[ "$mm_stderr" != *"$q"* ]] || { echo "$mode: prompted"; return 1; }
+        [[ "$mm_stderr" == *"non-interactive — keeping"* ]] || { echo "$mode: no keep note"; return 1; }
+        [ -z "$mm_stdout" ] || { echo "$mode: stdout not empty"; return 1; } ;;
+    esac
+  done
+  mm_run json-tty -- bash "$REPO_ROOT/cmd/uninstall.sh" --json   # uninstall has no --json: a usage error
+  [ "$mm_status" -eq 2 ]
+  [[ "$mm_pty" != *"$q"* ]] || return 1
+  [ -f "$store" ]
 }

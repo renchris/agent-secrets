@@ -21,13 +21,11 @@
 _manifest_block_begin() { case "${2:-sh}" in md) printf '<!-- >>> %s >>> -->' "$1";; *) printf '# >>> %s >>>' "$1";; esac; }
 _manifest_block_end()   { case "${2:-sh}" in md) printf '<!-- <<< %s <<< -->' "$1";; *) printf '# <<< %s <<<' "$1";; esac; }
 
-# Replace FILE with FILE.new. A `mv` over a SYMLINK (a stow/chezmoi-managed ~/.zshenv or
-# ~/.claude/CLAUDE.md) would replace the LINK with a regular file, silently diverging the dotfiles
-# repo; write THROUGH the link instead. Regular files keep the atomic mv.
-_manifest_replace() {
-  local file="$1"
-  if [ -L "$file" ]; then cat "${file}.new" >"$file" && rm -f "${file}.new"
-  else mv "${file}.new" "$file"; fi
+# Replace FILE with TMP (from agsec_tmp_sibling, never a fixed FILE.new that would clobber a user's own
+# ~/.zshenv.new). agsec_commit writes THROUGH a symlink (a stow/chezmoi-managed ~/.zshenv or
+# ~/.claude/CLAUDE.md must stay a link) and keeps FILE's mode; regular files keep the atomic mv.
+_manifest_replace() {  # FILE TMP
+  agsec_commit "$2" "$1"
 }
 
 # --- low-level append (idempotent init; jq is the only writer) ------------------
@@ -95,22 +93,78 @@ manifest_record_pathblock() {
 # manifest_pathblock_install <file> <marker> <line> [style=sh]
 #   style 'sh' → '# >>>' markers (shell rc); 'md' → HTML-comment markers (markdown surfaces).
 manifest_pathblock_install() {
-  local file="$1" marker="$2" line="$3" style="${4:-sh}" body created=0 mode=''
-  if [ -f "$file" ]; then
-    mode="$(stat -f '%Lp' "$file" 2>/dev/null || true)"   # preserve the user's file mode: mv would reset it to the .new default (0644/umask)
-  else
-    created=1; : >"$file"                                  # note when WE create the rc / CLAUDE.md file
-  fi
+  local file="$1" marker="$2" line="$3" style="${4:-sh}" body created=0 tmp
+  # The user's file mode survives the rewrite: agsec_commit copies it onto the temp before the mv.
+  [ -f "$file" ] || { created=1; : >"$file"; }            # note when WE create the rc / CLAUDE.md file
   body="$(_manifest_strip_block "$file" "$marker")"        # drop any prior block first (either style)
+  tmp="$(agsec_tmp_sibling "$file")" || return 1
   {
     printf '%s\n' "$body"
     _manifest_block_begin "$marker" "$style"; printf '\n'
     printf '%s\n' "$line"
     _manifest_block_end "$marker" "$style"; printf '\n'
-  } >"${file}.new"
-  [ -n "$mode" ] && chmod "$mode" "${file}.new" 2>/dev/null || true
-  _manifest_replace "$file"
+  } >"$tmp" || { rm -f "$tmp"; return 1; }
+  _manifest_replace "$file" "$tmp" || return 1
   manifest_record_pathblock "$file" "$marker" "$created" "$style"
+}
+
+# --- back up a user's own file before linking over it ---------------------------
+# Physical parent plus basename: the leaf may legitimately be a link, so only the parent is resolved.
+_manifest_canon() {  # PATH → canonical path, or non-zero when the parent does not exist
+  local d; d="$(cd -P "$(dirname "$1")" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/%s\n' "${d%/}" "$(basename "$1")"
+}
+
+# Ours = a LIVE symlink whose target is OURS by canonical path. A dangling link, a link elsewhere, or a
+# regular file is the user's. A false "foreign" would back up our own link, so compare canonically.
+_manifest_is_ours() {  # T OURS
+  local t="$1" ours="$2" dest a b
+  [ -L "$t" ] && [ -e "$t" ] || return 1
+  dest="$(readlink "$t")" || return 1
+  case "$dest" in /*) ;; *) dest="$(dirname "$t")/$dest" ;; esac
+  a="$(_manifest_canon "$dest")" && b="$(_manifest_canon "$ours")" && [ "$a" = "$b" ]
+}
+
+_manifest_same_entry() {  # A B — same link text, or same bytes for two regular files
+  if [ -L "$1" ] || [ -L "$2" ]; then
+    [ -L "$1" ] && [ -L "$2" ] && [ "$(readlink "$1")" = "$(readlink "$2")" ]
+  else
+    cmp -s "$1" "$2"
+  fi
+}
+
+# Usage: manifest_backup_user_target T BASENAME [OURS=$AGENT_SECRETS_ROOT/bin/<basename T>]
+# Backs up a user's own file or symlink at T to $(agsec_state_dir)/BASENAME and records one edit record,
+# so uninstall restores it after removing our link. Returns 0 when T is absent, a directory or already
+# ours; non-zero when the copy or the record fails. A changed user file refreshes the backup and keeps the
+# previous one as BASENAME.<UTC timestamp>; the single record stays, since a second one would make LIFO
+# rollback restore the older file last.
+manifest_backup_user_target() {
+  local t="${1:-}" base="${2:-}" ours dir b old tmpd
+  [ -n "$t" ] && [ -n "$base" ] || return 1
+  ours="${3:-${AGENT_SECRETS_ROOT:-}/bin/$(basename "$t")}"
+  [ -L "$t" ] || [ -f "$t" ] || return 0
+  ! _manifest_is_ours "$t" "$ours" || return 0
+  dir="$(agsec_state_dir)"; b="$dir/$base"
+  [ -d "$dir" ] || { mkdir -p "$dir" && chmod 0700 "$dir"; } || return 1
+  if [ -e "$b" ] || [ -L "$b" ]; then
+    if _manifest_same_entry "$t" "$b"; then
+      manifest_record_edit "$t" "$b"; return
+    fi
+    old="$b.$(date -u +%Y%m%d%H%M%S)"
+    [ ! -e "$old" ] && [ ! -L "$old" ] || old="$old.$$"
+    mv -f "$b" "$old" || return 1
+    agsec_receipt "kept the earlier backup of $t as $old"
+  fi
+  # cp -p would follow a link; -PR copies the link itself. A private dir keeps the copy off $b until done.
+  tmpd="$(mktemp -d "$dir/.$base.XXXXXX")" || return 1
+  if cp -PR "$t" "$tmpd/entry" && mv -f "$tmpd/entry" "$b"; then
+    rmdir "$tmpd" 2>/dev/null || true
+  else
+    rm -f "$tmpd/entry"; rmdir "$tmpd" 2>/dev/null || true
+    return 1
+  fi
+  manifest_record_edit "$t" "$b"
 }
 
 # --- list -----------------------------------------------------------------------
@@ -159,9 +213,23 @@ _manifest_kc_exact() {
     | grep -Fx "$AGENT_SECRETS_KC_SERVICE" 2>/dev/null | sort -u
 }
 
-_manifest_kc_delete() {  # delete every item under a service (loops to clear duplicates)
+_manifest_kc_delete() {  # delete every item under a service (loops to clear duplicates); 1 if one survives
   local svc="$1"
   while security delete-generic-password -s "$svc" >/dev/null 2>&1; do :; done
+  if security find-generic-password -s "$svc" >/dev/null 2>&1; then
+    agsec_receipt_bad "keychain item still present: $svc"
+    return 1
+  fi
+}
+
+# Rollback helpers return 0 (gone), 1 (failed: the record is kept for a retry) or 3 (skipped: nothing left
+# to undo). Each is called as `|| rc=$?` so a failure under set -e cannot abort the remaining records.
+_manifest_rb_count() {  # RC REC
+  case "$1" in
+    0) _rb_ok=$((_rb_ok + 1)) ;;
+    3) _rb_skip=$((_rb_skip + 1)) ;;
+    *) _rb_fail=$((_rb_fail + 1)); _rb_failed+=("$2") ;;
+  esac
 }
 
 manifest_rollback() {
@@ -175,7 +243,9 @@ manifest_rollback() {
   jq -e 'type=="array"' "$mf" >/dev/null 2>&1 \
     || agsec_die "install manifest is not a valid JSON array — refusing to clear it or claim zero residue; inspect $mf (each recorded artifact is still on disk)"
 
-  local rec type p deferred_dirs=""
+  local rec type p rc i total=0
+  local _rb_ok=0 _rb_fail=0 _rb_skip=0
+  local -a _rb_failed=() deferred_paths=() deferred_recs=()
   # Reverse order so later artifacts undo before earlier ones (LIFO). BUT a `file` record that points at
   # an existing DIRECTORY (the install root, which holds the vendored jq/age/sops on a no-brew install)
   # is DEFERRED to a final pass: removing it mid-loop deletes jq and every later `jq -r '.type'` exits
@@ -185,51 +255,88 @@ manifest_rollback() {
   # extracted NOW (jq still present) and removed after the loop, so no jq call outlives the install dir.
   while IFS= read -r rec; do
     [ -n "$rec" ] || continue
+    total=$((total + 1))
     type="$(jq -r '.type' <<<"$rec")"
     if [ "$type" = file ]; then
       p="$(jq -r '.path' <<<"$rec")"
-      if [ -d "$p" ] && [ ! -L "$p" ]; then deferred_dirs="${deferred_dirs}${p}"$'\n'; continue; fi
+      if [ -d "$p" ] && [ ! -L "$p" ]; then deferred_paths+=("$p"); deferred_recs+=("$rec"); continue; fi
     fi
+    rc=0
     case "$type" in
-      file)      _manifest_rb_file "$rec" "$dry" ;;
-      edit)      _manifest_rb_edit "$rec" "$dry" ;;
-      keychain)  _manifest_rb_keychain "$rec" "$dry" ;;
-      launchd)   _manifest_rb_launchd "$rec" "$dry" ;;
-      pathblock) _manifest_rb_pathblock "$rec" "$dry" ;;
+      file)      _manifest_rb_file "$rec" "$dry" || rc=$? ;;
+      edit)      _manifest_rb_edit "$rec" "$dry" || rc=$? ;;
+      keychain)  _manifest_rb_keychain "$rec" "$dry" || rc=$? ;;
+      launchd)   _manifest_rb_launchd "$rec" "$dry" || rc=$? ;;
+      pathblock) _manifest_rb_pathblock "$rec" "$dry" || rc=$? ;;
+      *)         rc=3 ;;
     esac
+    _manifest_rb_count "$rc" "$rec"
   done < <(jq -c 'reverse[]' "$mf")
   # Deferred directory removals LAST (no jq needed — paths already captured; removing the install dir
   # takes the vendored jq with it).
-  if [ -n "$deferred_dirs" ]; then
-    while IFS= read -r p; do
-      [ -n "$p" ] || continue
-      if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) rm dir: $p"
-      else rm -rf "$p" && agsec_ok "removed dir: $p"; fi
-    done <<< "$deferred_dirs"
-  fi
+  i=0
+  while [ "$i" -lt "${#deferred_paths[@]}" ]; do
+    p="${deferred_paths[$i]}"; rc=0
+    if [ "$dry" -eq 1 ]; then agsec_plan "(dry-run) rm dir: $p"
+    elif rm -rf "$p"; then agsec_receipt "removed dir: $p"
+    else agsec_receipt_bad "could not remove dir: $p"; rc=1; fi
+    _manifest_rb_count "$rc" "${deferred_recs[$i]}"
+    i=$((i + 1))
+  done
 
-  # Belt-and-suspenders: purge our EXACT-service Keychain item even if its record was lost.
+  # Belt-and-suspenders: purge our EXACT-service Keychain item even if its record was lost. A survivor
+  # is kept as a keychain record so the retry targets it.
   local svc
   while IFS= read -r svc; do
     [ -n "$svc" ] || continue
-    if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) keychain purge (exact service): $svc"
-    else _manifest_kc_delete "$svc"; agsec_ok "keychain purged (exact service): $svc"; fi
+    if [ "$dry" -eq 1 ]; then agsec_plan "(dry-run) keychain purge (exact service): $svc"; continue; fi
+    total=$((total + 1)); rc=0
+    if _manifest_kc_delete "$svc"; then agsec_receipt "keychain purged (exact service): $svc"; else rc=1; fi
+    _manifest_rb_count "$rc" "{\"type\":\"keychain\",\"service\":\"$(agsec_js "$svc")\"}"
   done < <(_manifest_kc_exact)
 
   if [ "$dry" -eq 1 ]; then
-    agsec_note "(dry-run) install manifest would be cleared"
-  else
-    printf '[]\n' >"$mf"; agsec_ok "install manifest cleared"
+    agsec_plan "(dry-run) install manifest would be cleared"
+    return 0
   fi
+  if [ "$_rb_fail" -eq 0 ]; then
+    printf '[]\n' | agsec_atomic_write "$mf" || { agsec_receipt_bad "could not clear the install manifest: $mf"; return 1; }
+    agsec_receipt "install manifest cleared"
+    return 0
+  fi
+  _manifest_keep_failed "$mf" ${_rb_failed[@]+"${_rb_failed[@]}"} \
+    || agsec_receipt_bad "could not rewrite the install manifest: $mf (it still lists every record)"
+  agsec_receipt_bad "Removed $_rb_ok of $total artifacts. $_rb_fail failed, $_rb_skip skipped. Re-run agent-secrets uninstall to retry the rest."
+  return 1
+}
+
+# Rewrite MF to hold only the failed records, in their original (install) order. They arrive in rollback
+# (reverse) order. The install dir may have taken a vendored jq with it, so the jq-free fallback joins the
+# records, each already one compact JSON object from `jq -c`.
+_manifest_keep_failed() {  # MF REC...
+  local mf="$1" tmp joined="" r; shift
+  tmp="$(agsec_tmp_sibling "$mf")" || return 1
+  if agsec_have jq; then
+    jq -n '$ARGS.positional | reverse' --jsonargs "$@" >"$tmp" || { rm -f "$tmp"; return 1; }
+  else
+    for r in "$@"; do joined="$r${joined:+,$joined}"; done
+    printf '[%s]\n' "$joined" >"$tmp" || { rm -f "$tmp"; return 1; }
+  fi
+  agsec_commit "$tmp" "$mf"
 }
 
 _manifest_rb_file() {
   local rec="$1" dry="$2" p; p="$(jq -r '.path' <<<"$rec")"
-  if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) rm: $p"; return 0; fi
+  if [ "$dry" -eq 1 ]; then agsec_plan "(dry-run) rm: $p"; return 0; fi
   # A recorded real directory (the unpacked $INSTALL_DIR) is removed recursively; everything else
   # (files, and symlinks-to-dirs) is rm -f so we never delete THROUGH a symlink.
-  if [ -d "$p" ] && [ ! -L "$p" ]; then rm -rf "$p" && agsec_ok "removed dir: $p"
-  else rm -f "$p" && agsec_ok "removed: $p"; fi
+  if [ -d "$p" ] && [ ! -L "$p" ]; then
+    rm -rf "$p" && { agsec_receipt "removed dir: $p"; return 0; }
+  else
+    rm -f "$p" && { agsec_receipt "removed: $p"; return 0; }
+  fi
+  agsec_receipt_bad "could not remove: $p"
+  return 1
 }
 
 _manifest_rb_edit() {
@@ -237,9 +344,9 @@ _manifest_rb_edit() {
   p="$(jq -r '.path' <<<"$rec")"; backup="$(jq -r '.backup' <<<"$rec")"
   created="$(jq -r '.created // false' <<<"$rec")"; marker="$(jq -r '.marker // ""' <<<"$rec")"
   if [ "$dry" -eq 1 ]; then
-    if [ -n "$marker" ]; then agsec_note "(dry-run) remove key .$marker from: $p$([ "$created" = true ] && printf ' (delete if now empty)')"
-    elif [ "$created" = true ]; then agsec_note "(dry-run) remove tool-created file: $p"
-    else agsec_note "(dry-run) restore edit: $p <- $backup"; fi
+    if [ -n "$marker" ]; then agsec_plan "(dry-run) remove key .$marker from: $p$([ "$created" = true ] && printf ' (delete if now empty)')"
+    elif [ "$created" = true ]; then agsec_plan "(dry-run) remove tool-created file: $p"
+    else agsec_plan "(dry-run) restore edit: $p <- $backup"; fi
     return 0
   fi
   # SURGICAL revert: the tool only ADDED one key (marker, e.g. apiKeyHelper). Remove exactly that key
@@ -253,15 +360,15 @@ _manifest_rb_edit() {
     # same-install backup for this key; a stale cross-cycle backup must not resurrect a historical value.
     if [ "$created" != true ] && [ "$orig" != null ] && jq --argjson v "$orig" ".\"$marker\" = \$v" "$p" >"$tmp" 2>/dev/null; then
       # The user had their OWN apiKeyHelper before install → RESTORE it, don't delete the key.
-      mv -f "$tmp" "$p"; agsec_ok "restored pre-install .$marker: $p"; return 0
+      mv -f "$tmp" "$p"; agsec_receipt "restored pre-install .$marker: $p"; return 0
     fi
     if jq "del(.\"$marker\")" "$p" >"$tmp" 2>/dev/null; then
       # Tool added the key fresh (no pre-install value) → remove it, preserving the user's other keys.
       if [ "$created" = true ] && [ "$(tr -d '[:space:]' <"$tmp")" = "{}" ]; then
         rm -f "$tmp" "$p"; rmdir "$(dirname "$p")" 2>/dev/null || true
-        agsec_ok "removed tool-created (now empty): $p"
+        agsec_receipt "removed tool-created (now empty): $p"
       else
-        mv -f "$tmp" "$p"; agsec_ok "reverted edit (removed .$marker): $p"
+        mv -f "$tmp" "$p"; agsec_receipt "reverted edit (removed .$marker): $p"
       fi
       return 0
     fi
@@ -269,38 +376,63 @@ _manifest_rb_edit() {
   fi
   # Fallback (no marker recorded / no jq / not a regular file): the coarse behavior.
   if [ "$created" = true ]; then
-    rm -f "$p" && agsec_ok "removed tool-created: $p"; rmdir "$(dirname "$p")" 2>/dev/null || true
-  elif [ -f "$backup" ]; then cp "$backup" "$p" && agsec_ok "reverted edit: $p"
-  else agsec_warn "edit backup missing, left as-is: $p"; fi
+    rm -f "$p" || { agsec_receipt_bad "could not remove tool-created: $p"; return 1; }
+    agsec_receipt "removed tool-created: $p"; rmdir "$(dirname "$p")" 2>/dev/null || true
+    return 0
+  fi
+  # A link backup (manifest_backup_user_target copies links as links) comes back as the same link, live
+  # or dangling; `[ -f ]` would deref a live one into a copy and call a dangling one missing.
+  if [ -L "$backup" ]; then
+    rm -f "$p" && ln -s "$(readlink "$backup")" "$p" && { agsec_receipt "reverted edit (link): $p"; return 0; }
+    agsec_receipt_bad "could not restore the link at: $p (backup: $backup)"; return 1
+  fi
+  if [ -f "$backup" ]; then
+    cp "$backup" "$p" && { agsec_receipt "reverted edit: $p"; return 0; }
+    agsec_receipt_bad "could not restore: $p (backup: $backup)"; return 1
+  fi
+  agsec_warn "edit backup missing, left as-is: $p (expected backup: $backup)"
+  return 1
 }
 
 _manifest_rb_keychain() {
   local rec="$1" dry="$2" svc; svc="$(jq -r '.service' <<<"$rec")"
-  if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) keychain delete: $svc"; return 0; fi
-  _manifest_kc_delete "$svc"; agsec_ok "keychain deleted: $svc"
+  if [ "$dry" -eq 1 ]; then agsec_plan "(dry-run) keychain delete: $svc"; return 0; fi
+  _manifest_kc_delete "$svc" || return 1
+  agsec_receipt "keychain deleted: $svc"
 }
 
 _manifest_rb_launchd() {
   local rec="$1" dry="$2" label plist
   label="$(jq -r '.label' <<<"$rec")"; plist="$(jq -r '.plist' <<<"$rec")"
-  if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) launchctl bootout + rm: $label"; return 0; fi
-  launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
-  rm -f "$plist" && agsec_ok "launchd booted out: $label"
+  if [ "$dry" -eq 1 ]; then agsec_plan "(dry-run) launchctl bootout + rm: $label"; return 0; fi
+  launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true   # "not loaded" is fine; print decides
+  if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+    agsec_receipt_bad "launchd job still loaded: $label"; return 1
+  fi
+  rm -f "$plist" || { agsec_receipt_bad "could not remove launchd plist: $plist"; return 1; }
+  agsec_receipt "launchd booted out: $label"
 }
 
 _manifest_rb_pathblock() {
-  local rec="$1" dry="$2" file marker stripped created
+  local rec="$1" dry="$2" file marker stripped created tmp
   file="$(jq -r '.file' <<<"$rec")"; marker="$(jq -r '.marker' <<<"$rec")"; created="$(jq -r '.created // false' <<<"$rec")"
-  if [ "$dry" -eq 1 ]; then agsec_note "(dry-run) strip block '$marker' from: $file"; return 0; fi
-  [ -f "$file" ] || return 0
+  if [ "$dry" -eq 1 ]; then agsec_plan "(dry-run) strip block '$marker' from: $file"; return 0; fi
+  [ -f "$file" ] || return 3
   stripped="$(_manifest_strip_block "$file" "$marker")"
   # If WE created this file and only blank lines remain after stripping our block, remove it — don't
   # leave an orphaned empty ~/.zshenv / ~/.claude/CLAUDE.md (the "zero tool residue" claim).
   if [ "$created" = true ] && ! printf '%s' "$stripped" | grep -q '[^[:space:]]'; then
-    rm -f "$file" && agsec_ok "removed tool-created: $file"
+    rm -f "$file" || { agsec_receipt_bad "could not remove tool-created: $file"; return 1; }
+    agsec_receipt "removed tool-created: $file"
     rmdir "$(dirname "$file")" 2>/dev/null || true   # drop a now-empty tool-created dir (e.g. ~/.claude)
   else
-    printf '%s\n' "$stripped" >"${file}.new" && _manifest_replace "$file"
-    agsec_ok "stripped block: $file"
+    if tmp="$(agsec_tmp_sibling "$file")"; then
+      if printf '%s\n' "$stripped" >"$tmp" && _manifest_replace "$file" "$tmp"; then
+        agsec_receipt "stripped block: $file"; return 0
+      fi
+      rm -f "$tmp"
+    fi
+    agsec_receipt_bad "could not strip block: $file"
+    return 1
   fi
 }
