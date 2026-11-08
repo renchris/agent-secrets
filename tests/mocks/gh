@@ -3,9 +3,13 @@
 # A local BARE repo at $AGSEC_MOCK_GH_REMOTE stands in for the private GitHub repo:
 #   auth status         -> 0 (authenticated)
 #   api user -q .login  -> prints $AGSEC_MOCK_GH_LOGIN (default: testuser)
-#   repo view REPO      -> 0 iff the bare remote exists ("repo already created")
+#   repo view REPO      -> 0 iff the bare remote exists ("repo already created"); otherwise GitHub's
+#                          not-found line on stderr and exit 1
 #   repo create REPO …  -> git init --bare the remote
 #   repo clone REPO DIR -> git clone the remote into DIR
+# Knobs for repo view:
+#   AGSEC_MOCK_GH_PRIVATE=true|false|none  the isPrivate answer (default true; none prints nothing)
+#   AGSEC_MOCK_GH_VIEW_FAIL=network        stderr "error connecting to api.github.com", exit 1
 # With no $AGSEC_MOCK_GH_REMOTE set every path still exits 0, so `agsec_have gh` / setup preflight
 # (which only check presence) keep working unchanged.
 set -euo pipefail
@@ -20,8 +24,16 @@ case "$sub" in
     [ -n "${AGSEC_MOCK_GH_REMOTE:-}" ] || exit 0
     case "$action" in
       view)
-        [ -d "$AGSEC_MOCK_GH_REMOTE" ] || exit 1                       # not created → does not exist
-        case " $* " in *" --json "*) printf '%s\n' "${AGSEC_MOCK_GH_PRIVATE:-true}" ;; esac  # isPrivate query
+        if [ "${AGSEC_MOCK_GH_VIEW_FAIL:-}" = network ]; then
+          printf 'error connecting to api.github.com\n' >&2; exit 1
+        fi
+        if [ ! -d "$AGSEC_MOCK_GH_REMOTE" ]; then                      # not created → does not exist
+          printf "GraphQL: Could not resolve to a Repository with the name '%s'. (repository)\n" "${1:-}" >&2
+          exit 1
+        fi
+        case " $* " in
+          *" --json "*) [ "${AGSEC_MOCK_GH_PRIVATE:-true}" = none ] || printf '%s\n' "${AGSEC_MOCK_GH_PRIVATE:-true}" ;;
+        esac
         exit 0 ;;
       create) # GitHub defaults new repos to `main`; mirror that so remote HEAD isn't a dangling `master`
         git init --bare -q -b main "$AGSEC_MOCK_GH_REMOTE" 2>/dev/null \

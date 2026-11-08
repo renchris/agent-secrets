@@ -92,7 +92,27 @@ _deps_ok() {
 }
 
 # --- download + verify primitive (the security-critical, unit-tested core) ------
-_deps_curl() { curl -fLsS --proto '=https' --tlsv1.2 "$@"; }   # -L: follow the release 302 to the CDN
+# -L follows the release 302 to the CDN. Timeouts are sized for the ~50 MB sops binary (600 s is ~84 KB/s);
+# --retry backs off and retries only transient errors, never a 404 (so no --retry-all-errors), and
+# --retry-max-time caps the total wait. --no-progress-meter (curl 7.67+) keeps curl's "Will retry" notice,
+# which -sS silences; older curl falls back to -sS. Exit codes pass through the stderr filter unchanged.
+_DEPS_CURL_QUIET=""
+_deps_retry_notice() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *"Will retry"*) printf '%s\n' "Retrying automatically…" ;; *) printf '%s\n' "$line" ;; esac
+  done
+}
+_deps_curl() {
+  if [ -z "$_DEPS_CURL_QUIET" ]; then
+    if curl --no-progress-meter --version >/dev/null 2>&1; then _DEPS_CURL_QUIET=--no-progress-meter
+    else _DEPS_CURL_QUIET=-sS; fi
+  fi
+  { curl -fL "$_DEPS_CURL_QUIET" --proto '=https' --tlsv1.2 \
+      --connect-timeout 15 --max-time 600 --retry 3 --retry-connrefused --retry-max-time 900 \
+      "$@" 2>&1 1>&3 3>&- | _deps_retry_notice >&2; } 3>&1
+  return "${PIPESTATUS[0]}"
+}
 
 # _deps_download_verify URL EXPECTED_SHA256 DEST — fetch to a temp, verify, then atomically move to
 # DEST. FAILS CLOSED: on download failure OR any SHA mismatch, DEST is NOT written and we return 1.
@@ -174,7 +194,7 @@ _deps_resolve() {
     _deps_ok "$tool" && { agsec_note "  $tool: installed via Homebrew"; return 0; }
   fi
   agsec_note "  $tool: fetching pinned, SHA-256-verified binary (no sudo)…"
-  if "$fetch" && _deps_ok "$tool"; then agsec_ok "$tool ready (vendored)"; return 0; fi
+  if "$fetch" && _deps_ok "$tool"; then agsec_receipt "$tool ready (vendored)"; return 0; fi
   if [ "$need" = optional ]; then
     agsec_warn "$tool is optional and could not be installed — continuing (plain-text UI fallback)"
     return 0

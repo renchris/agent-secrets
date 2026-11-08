@@ -2,6 +2,7 @@
 # tests/deps.bats — no-sudo dependency resolver (lib/deps.sh): the sops version floor that fixes the
 # feedback's silent-decrypt BLOCKER #4, Rosetta-proof arch, and the SHA-256 fail-closed download core.
 # Synthetic-HOME + mocked curl (no network). Never touches the real toolchain or Keychain.
+bats_require_minimum_version 1.5.0
 load test_helper
 
 _source_deps() {
@@ -68,4 +69,53 @@ _source_deps() {
   run deps_ensure
   [ "$status" -eq 0 ]
   [ ! -e "$AGENT_SECRETS_VENDOR_BIN/sops" ]                # present sops used, not re-downloaded
+}
+
+_mirror_asset() {  # sets $mirror (served by the curl mock) holding one asset
+  mirror="$(mktemp -d "${TMPDIR:-/tmp}/agsec-depmirror.XXXXXX")"
+  printf 'pretend-binary-bytes\n' >"$mirror/asset"
+  export AGSEC_MOCK_DL_DIR="$mirror"
+}
+
+@test "_deps_curl passes connect, max-time and retry options" {
+  _source_deps
+  local mirror; _mirror_asset
+  export AGSEC_MOCK_CURL_LOG="$AGENT_SECRETS_HOME/curl.log"
+  run _deps_curl "https://x.example/asset" -o "$AGENT_SECRETS_HOME/asset"
+  [ "$status" -eq 0 ]
+  local line; line="$(grep 'https://x.example/asset' "$AGSEC_MOCK_CURL_LOG")"
+  [[ " $line " == *" --proto =https --tlsv1.2 "* ]] || return 1
+  [[ " $line " == *" --connect-timeout 15 "* ]] || return 1
+  [[ " $line " == *" --max-time 600 "* ]] || return 1
+  [[ " $line " == *" --retry 3 "* ]] || return 1
+  [[ " $line " == *" --retry-connrefused "* ]] || return 1
+  [[ " $line " == *" --retry-max-time 900 "* ]] || return 1
+  [[ " $line " != *"--retry-all-errors"* ]] || return 1      # would retry a 404
+  [[ " $line " == *" --no-progress-meter "* ]] || return 1   # the probe passed, so curl keeps its retry notice
+  rm -rf "$mirror"
+}
+
+@test "_deps_curl rewrites curl's retry notice and keeps the download" {
+  _source_deps
+  local mirror; _mirror_asset
+  export AGSEC_MOCK_CURL_RETRY_NOTE=1
+  local good; good="$(shasum -a 256 "$mirror/asset" | awk '{print $1}')"
+  local dest="$AGENT_SECRETS_HOME/vend/asset"; mkdir -p "$(dirname "$dest")"
+  run --separate-stderr _deps_download_verify "https://x.example/asset" "$good" "$dest"
+  [ "$status" -eq 0 ]
+  [ -f "$dest" ]
+  [[ "$stderr" == *"Retrying automatically…"* ]] || return 1
+  [[ "$stderr" != *"Will retry"* ]] || return 1
+  rm -rf "$mirror"
+}
+
+@test "_deps_curl passes curl's exit code through, and falls back to -sS when the probe fails" {
+  _source_deps
+  export AGSEC_MOCK_CURL_LOG="$AGENT_SECRETS_HOME/curl.log" AGSEC_MOCK_CURL_EXIT=28
+  run _deps_curl "https://x.example/asset" -o "$AGENT_SECRETS_HOME/asset"
+  [ "$status" -eq 28 ]
+  [ ! -e "$AGENT_SECRETS_HOME/asset" ]
+  local line; line="$(grep 'https://x.example/asset' "$AGSEC_MOCK_CURL_LOG")"
+  [[ " $line " == *" -sS "* ]] || return 1
+  [[ " $line " != *"--no-progress-meter"* ]] || return 1
 }
