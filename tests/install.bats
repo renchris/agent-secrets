@@ -2,50 +2,11 @@
 # tests/install.bats — install.sh bootstrap: dry-run fidelity + the baked-SHA integrity gate.
 # The FIRST tests to exercise install-from-tarball (the audit flagged this coverage gap). Fully
 # synthetic-HOME + mocked (curl/brew/launchctl/security/osascript) — no network, no real Keychain.
+# Also owns install.sh's argument parsing, help, version and the sh re-exec guard.
+bats_require_minimum_version 1.5.0
 load test_helper
-
-# The release file set, from the WORKING TREE: tracked + untracked-not-ignored paths minus every path
-# that is `export-ignore` itself or sits under an `export-ignore` directory. One check-attr call.
-_tree_files() {
-  local files ign
-  files="$(git ls-files -co --exclude-standard)"
-  # The ignore set travels as ONE '|'-joined string: BSD awk rejects a newline inside a -v value.
-  ign="$(printf '%s\n' "$files" \
-        | awk -F/ '{ p=""; for (i = 1; i < NF; i++) { p = p $i "/"; print p }; print $0 }' | sort -u \
-        | git check-attr --stdin export-ignore | awk -F': ' '$3 == "set" { print $1 }' | tr '\n' '|')"
-  printf '%s\n' "$files" | awk -v ign="$ign" '
-    BEGIN { n = split(ign, a, "|"); for (i = 1; i <= n; i++) if (a[i] != "") I[a[i]] = 1 }
-    { keep = ($0 in I) ? 0 : 1; p = ""; nf = split($0, s, "/")
-      for (i = 1; i < nf; i++) { p = p s[i] "/"; if (p in I) keep = 0 }
-      if (keep) print }'
-}
-
-# Build a real runtime tarball into a mock "mirror" dir the curl mock serves (AGSEC_MOCK_DL_DIR).
-# Exports: TAG, PKG (basename), MIRROR (dir). SHA of the built tarball → $BUILT_SHA.
-_build_mirror() {
-  # Derived from VERSION, never hardcoded: install.sh's PINNED_TAG tracks VERSION, so a pinned
-  # literal here silently serves the wrong filename from the mock mirror the moment the version is
-  # bumped — which is exactly how five install tests went red on the 0.1.1 -> 0.1.2 bump.
-  TAG="v$(cat "$REPO_ROOT/VERSION")"; PKG="agent-secrets-${TAG}.tar.gz"
-  MIRROR="$(mktemp -d "${TMPDIR:-/tmp}/agsec-mirror.XXXXXX")"
-  # Archive the WORKING TREE, not HEAD. `git archive HEAD` meant every install test silently exercised
-  # the PREVIOUS commit's setup.sh — a suite that goes green on code you have not committed yet is
-  # measuring the wrong thing (and a new lib file was invisible until committed). Same file set the
-  # release cuts: tracked + untracked-not-ignored, minus every `export-ignore` path in .gitattributes,
-  # under the single prefix dir install.sh's layout guard requires.
-  # A directory pattern (`tests/ export-ignore`) is matched by check-attr only against the DIRECTORY
-  # path with its trailing slash, never against the files inside — so every ancestor dir is checked
-  # in the same single call and a file under an ignored ancestor is dropped.
-  ( cd "$REPO_ROOT" && _tree_files | tar -czf "$MIRROR/$PKG" -s "|^|agent-secrets-${TAG}/|" -T - )
-  BUILT_SHA="$(shasum -a 256 "$MIRROR/$PKG" | awk '{print $1}')"
-  printf '%s  %s\n' "$BUILT_SHA" "$PKG" >"$MIRROR/$PKG.sha256"
-  export AGSEC_MOCK_DL_DIR="$MIRROR" TAG PKG MIRROR BUILT_SHA
-}
-
-teardown() {
-  [ -n "${MIRROR:-}" ] && [ -d "$MIRROR" ] && rm -rf "$MIRROR"
-  [ -n "${AGENT_SECRETS_HOME:-}" ] && [ -d "$AGENT_SECRETS_HOME" ] && rm -rf "$AGENT_SECRETS_HOME"
-}
+load install_helper
+load mode_matrix
 
 @test "install --dry-run renders the complete plan and mutates nothing" {
   run bash "$REPO_ROOT/install.sh" --dry-run
@@ -182,4 +143,293 @@ teardown() {
   [ "$status" -ne 0 ]
   [ ! -d "$qhome/.agent-secrets" ]                              # trap ran cleanly despite the quote
   rm -rf "$(dirname "$qhome")"
+}
+
+# ---- argument parsing, help, version and the sh re-exec guard -----------------------------------
+
+# ARGS… must be a usage error: exit 2, and no install dir created.
+_expect_usage() {
+  run bash "$REPO_ROOT/install.sh" "$@" </dev/null
+  if [ "$status" -ne 2 ]; then printf 'want exit 2, got %s for: %s\n%s\n' "$status" "$*" "$output" >&2; return 1; fi
+  [ ! -e "$AGENT_SECRETS_HOME/.agent-secrets" ] || return 1
+}
+# ARGS… must pass the parse-only seam: exit 0, no output, no curl call.
+_expect_parse_ok() {
+  run env AGSEC_PARSE_ONLY=1 AGSEC_MOCK_CURL_LOG="$BATS_TEST_TMPDIR/curl.log" bash "$REPO_ROOT/install.sh" "$@" </dev/null
+  if [ "$status" -ne 0 ] || [ -n "$output" ]; then printf 'want a clean parse, got %s for: %s\n%s\n' "$status" "$*" "$output" >&2; return 1; fi
+  [ ! -s "$BATS_TEST_TMPDIR/curl.log" ] || return 1
+}
+
+@test "install.sh --help, -h and help: usage on stdout, exit 0, empty stderr, no line over 80 columns" {
+  local a
+  for a in --help -h help; do
+    run --separate-stderr bash "$REPO_ROOT/install.sh" "$a"
+    [ "$status" -eq 0 ] || return 1
+    [[ "$output" == "Usage: install.sh"* ]] || return 1
+    [ -z "$stderr" ] || return 1
+    [ -z "$(printf '%s\n' "$output" | awk 'length > 80')" ] || return 1
+  done
+}
+
+@test "install.sh help under sh never fetches or re-execs: the file case and the piped sh -s case" {
+  local log="$BATS_TEST_TMPDIR/curl.log"; : >"$log"
+  run env AGSEC_MOCK_CURL_LOG="$log" /bin/sh "$REPO_ROOT/install.sh" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == "Usage: install.sh"* ]] || return 1
+  # The pipe form has no file to re-exec: before the pre-scan it re-fetched, and with the fetch failing it died.
+  run env AGSEC_MOCK_CURL_LOG="$log" AGSEC_MOCK_KEYS_FAIL=1 sh -s -- --help <"$REPO_ROOT/install.sh"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "Usage: install.sh"* ]] || return 1
+  [[ "$output" != *"could not re-fetch"* ]] || return 1
+  [ ! -s "$log" ]
+}
+
+@test "help wins over an unknown flag and a missing value; '--import-env help' stays a value" {
+  run --separate-stderr bash "$REPO_ROOT/install.sh" --bogus --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == "Usage: install.sh"* ]] || return 1
+  run --separate-stderr bash "$REPO_ROOT/install.sh" --import-env --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == "Usage: install.sh"* ]] || return 1
+  [ ! -e "$AGENT_SECRETS_HOME/.agent-secrets" ]
+  _expect_parse_ok --import-env help
+}
+
+@test "install.sh help and version in every mode: stdout only, exit 0, no prompt" {
+  local m
+  for m in tty stdout-redirected stdin-piped noninteractive-tty ci-tty agent; do
+    mm_run "$m" -- bash "$REPO_ROOT/install.sh" --help
+    [ "$mm_status" -eq 0 ] || return 1
+    case "$m" in
+      tty|noninteractive-tty|ci-tty) [[ "$mm_pty" == *"Usage: install.sh"* ]] || return 1 ;;
+      stdout-redirected) [[ "$mm_stdout" == "Usage: install.sh"* ]] && [ -z "$mm_pty" ] || return 1 ;;
+      *) [[ "$mm_stdout" == "Usage: install.sh"* ]] && [ -z "$mm_stderr" ] || return 1 ;;
+    esac
+    [[ "$mm_pty$mm_stderr" != *"[Enter]"* ]] || return 1
+  done
+  mm_run json-tty -- bash "$REPO_ROOT/install.sh" --version --json
+  [ "$mm_status" -eq 0 ]
+  [[ "$mm_pty" == *"{\"version\":\"$(cat "$REPO_ROOT/VERSION")\"}"* ]] || return 1
+}
+
+@test "usage errors exit 2, name the token and a runnable --help, and create nothing" {
+  local self; printf -v self 'bash %q' "$REPO_ROOT/install.sh"
+  run --separate-stderr bash "$REPO_ROOT/install.sh" --bogus
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"'--bogus'"* ]] || return 1
+  [[ "$stderr" == *"    $self --help"* ]] || return 1
+  [ -z "$output" ]
+  run --separate-stderr bash "$REPO_ROOT/install.sh" --import-env
+  [ "$status" -eq 2 ]
+  [[ "$stderr" == *"--import-env without <NAME>"* ]] || return 1
+  [[ "$stderr" == *"install.sh --help"* ]] || return 1
+  [ ! -e "$AGENT_SECRETS_HOME/.agent-secrets" ]
+}
+
+@test "usage errors never echo a value; a near-miss option gets one suggestion, a far one none" {
+  local a
+  for a in --import-envv=SEKRET SEKRET; do
+    _expect_usage "$a" || return 1
+    [[ "$output" != *SEKRET* ]] || return 1
+  done
+  _expect_usage -- SEKRET
+  [[ "$output" != *SEKRET* ]] || return 1
+  _expect_usage --dry-rn
+  [[ "$output" == *"Did you mean --dry-run?"* ]] || return 1
+  _expect_usage --zzz
+  [[ "$output" != *"Did you mean"* ]] || return 1
+}
+
+@test "--import-env --dry-run is a usage error before anything runs (it used to drop the dry run)" {
+  local log="$BATS_TEST_TMPDIR/curl.log"; : >"$log"
+  run env AGSEC_MOCK_CURL_LOG="$log" bash "$REPO_ROOT/install.sh" --import-env --dry-run </dev/null
+  [ "$status" -eq 2 ]
+  [ ! -e "$AGENT_SECRETS_HOME/.agent-secrets" ]
+  [ ! -e "$AGENT_SECRETS_HOME/bin" ]
+  [ ! -s "$log" ]
+}
+
+@test "parse errors exit 2: empty or bad --import-env, bad Boolean values, contradictions, -- extra" {
+  _expect_usage --import-env= || return 1
+  _expect_usage --import-env '' || return 1
+  _expect_usage --import-env 1BAD || return 1
+  _expect_usage --import-env , || return 1
+  _expect_usage --import-env ' ' || return 1
+  _expect_usage --import-env 'GOOD,A-B' || return 1
+  _expect_usage --dry-run=maybe || return 1
+  _expect_usage --headless=yes || return 1
+  _expect_usage --no-discovery= || return 1
+  _expect_usage -- extra || return 1
+  _expect_usage --dry-run --no-dry-run || return 1
+  _expect_usage --dry-run=false --dry-run || return 1
+  _expect_usage --headless --no-headless || return 1
+  _expect_usage --discovery --no-discovery || return 1
+  _expect_usage --discovery=false --no-discovery=false || return 1
+  [[ "$output" != *"line "*": "* ]] || return 1    # tests/one_command.bats pins this glob on install output
+}
+
+@test "--import-env='*' is refused whatever the cwd holds (no glob expansion into valid names)" {
+  local d="$BATS_TEST_TMPDIR/cwd"; mkdir -p "$d"; : >"$d/GOOD"
+  run bash -c 'cd "$1" && AGSEC_PARSE_ONLY=1 bash "$2" --import-env="*"' _ "$d" "$REPO_ROOT/install.sh"
+  [ "$status" -eq 2 ]
+  run bash -c 'cd "$1" && AGSEC_PARSE_ONLY=1 bash "$2" --import-env "GOOD,?OOD"' _ "$d" "$REPO_ROOT/install.sh"
+  [ "$status" -eq 2 ]
+}
+
+@test "the parse-only seam accepts the help examples, last-wins --import-env and every negation, with no fetch" {
+  local line
+  # The examples are read from the help itself, so the two cannot drift apart.
+  run bash "$REPO_ROOT/install.sh" --help
+  while IFS= read -r line; do
+    # shellcheck disable=SC2086  # the example's words are meant to split
+    _expect_parse_ok ${line#  bash install.sh} || return 1
+  done < <(printf '%s\n' "$output" | grep '^  bash install.sh ')
+  _expect_parse_ok --import-env 1BAD --import-env GOOD || return 1
+  _expect_parse_ok --import-env 'A, B' --import-env=_X,Y9 || return 1
+  _expect_parse_ok --no-dry-run || return 1
+  _expect_parse_ok --no-headless || return 1
+  _expect_parse_ok --dry-run --dry-run=true || return 1
+  _expect_parse_ok --headless=false --no-headless || return 1
+  _expect_parse_ok --discovery --discovery=true --no-discovery=false || return 1
+  _expect_parse_ok --no-discovery=true --discovery=false || return 1
+  _expect_parse_ok --no-color -- || return 1
+}
+
+@test "--dry-run=true renders the same plan as --dry-run; --no-color --dry-run exits 0" {
+  run bash "$REPO_ROOT/install.sh" --dry-run </dev/null
+  [ "$status" -eq 0 ]
+  local plain="$output"
+  run bash "$REPO_ROOT/install.sh" --dry-run=true </dev/null
+  [ "$status" -eq 0 ]
+  [ "$output" = "$plain" ]
+  run bash "$REPO_ROOT/install.sh" --no-color --dry-run </dev/null
+  [ "$status" -eq 0 ]
+  [ "$output" = "$plain" ]
+}
+
+@test "--debug prints step diagnostics on stderr without tracing (no set -x, no value)" {
+  run --separate-stderr env SEEDED=SEKRET bash "$REPO_ROOT/install.sh" --debug --dry-run --import-env SEEDED </dev/null
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"debug: parsed: dry_run=1"* ]] || return 1
+  [[ "$stderr" != *SEKRET* ]] || return 1
+  [[ "$stderr" != *$'\n+ '* ]] || return 1
+  [ -z "$output" ]
+}
+
+@test "install's inline --import-env check agrees with setup's _import_env_valid, and also needs one name" {
+  local in want got
+  # No glob characters here: setup's unquoted word-split would make its verdict depend on the cwd.
+  for in in GOOD A,B _X 'A B' 'A,,B' ' A' A1,_b2 1BAD A-B 'GOOD,9X' 'A$B' A.B 'A,B-'; do
+    run bash -c 'export AGENT_SECRETS_LIB="$1/lib"; . "$1/cmd/setup.sh"; _import_env_valid "$2"' _ "$REPO_ROOT" "$in"
+    want="$status"
+    run env AGSEC_PARSE_ONLY=1 bash "$REPO_ROOT/install.sh" --import-env "$in" </dev/null
+    case "$status" in 0) got=0 ;; 2) got=1 ;; *) printf 'install exit %s for [%s]\n' "$status" "$in" >&2; return 1 ;; esac
+    if [ "$got" != "$want" ]; then printf 'disagree on [%s]: setup %s, install %s\n' "$in" "$want" "$got" >&2; return 1; fi
+  done
+  # setup accepts a list with no names (its '' arm never runs); install requires at least one.
+  for in in , ' ' ',,'; do
+    run bash -c 'export AGENT_SECRETS_LIB="$1/lib"; . "$1/cmd/setup.sh"; _import_env_valid "$2"' _ "$REPO_ROOT" "$in"
+    [ "$status" -eq 0 ] || return 1
+    _expect_usage --import-env "$in" || return 1
+  done
+}
+
+@test "install.sh --version prints the bare version from the one tag variable; help still wins; --json is JSON" {
+  local log="$BATS_TEST_TMPDIR/curl.log" v; : >"$log"; v="$(cat "$REPO_ROOT/VERSION")"
+  run --separate-stderr env AGSEC_MOCK_CURL_LOG="$log" bash "$REPO_ROOT/install.sh" --version
+  [ "$status" -eq 0 ]
+  [ "$output" = "$v" ]
+  [ -z "$stderr" ]
+  run --separate-stderr env AGSEC_MOCK_CURL_LOG="$log" /bin/sh "$REPO_ROOT/install.sh" -v
+  [ "$status" -eq 0 ]
+  [ "$output" = "$v" ]
+  run bash "$REPO_ROOT/install.sh" --version --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == "Usage: install.sh"* ]] || return 1
+  run --separate-stderr bash "$REPO_ROOT/install.sh" --version --json
+  [ "$status" -eq 0 ]
+  printf '%s' "$output" | jq -e --arg v "$v" '. == {version: $v}' >/dev/null
+  [ ! -s "$log" ]
+  # One tag literal, equal to VERSION; the release sed's EXPECTED_SHA256 line keeps its single form.
+  grep -qx "AGSEC_PINNED_TAG=\"v$v\"" "$REPO_ROOT/install.sh"
+  run grep -cE '"v[0-9]+\.[0-9]+\.[0-9]+"' "$REPO_ROOT/install.sh"
+  [ "$output" -eq 1 ]
+  run grep -c 'EXPECTED_SHA256="' "$REPO_ROOT/install.sh"
+  [ "$output" -eq 1 ]
+}
+
+@test "help parity: every option the parser takes is in the help, and every option in the help is parsed" {
+  local parsed helped
+  # Parser: the arms of main's parse loop plus the version pre-scan (help is pre-scanned the same way).
+  parsed="$( { awk '/^  while \[ "\$#" -gt 0 \]; do$/ { on = 1 } on && /^  done$/ { on = 0 } on' "$REPO_ROOT/install.sh" \
+                 | sed -nE 's/^      ([-a-z|=*]+)\).*/\1/p'
+               sed -nE 's/.*case "\$_a" in --\) break ;; (-v\|--version)\).*/\1/p' "$REPO_ROOT/install.sh"; } \
+             | tr '|' '\n' | sed 's/=\*$//' | grep -vxE -- '--|-?\*|help' | sort -u)"
+  run bash "$REPO_ROOT/install.sh" --help
+  helped="$(printf '%s\n' "$output" | awk '/^Options:$/ { on = 1; next } on && /^$/ { on = 0 } on && /^  -/' \
+             | sed -E 's/^  //; s/   .*//; s/\[=[^]]*\]//; s/ <.*//' | tr ',' '\n' | tr -d ' ' | sort -u)"
+  if [ "$parsed" != "$helped" ]; then printf 'parser:\n%s\nhelp:\n%s\n' "$parsed" "$helped" >&2; return 1; fi
+  [ "$(printf '%s\n' "$parsed" | wc -l)" -ge 13 ]
+  [[ "$output" == *"--json"* ]] || return 1    # the version pre-scan's --json is documented on -v's row
+}
+
+@test "re-run hints never echo a mirror URL: AGENT_SECRETS_BASE_URL shows as a placeholder" {
+  run env AGENT_SECRETS_BASE_URL='https://u:SEKRET@mirror.example' bash "$REPO_ROOT/install.sh" --bogus
+  [ "$status" -eq 2 ]
+  [[ "$output" != *SEKRET* ]] || return 1
+}
+
+@test "in the pipe form the re-run hint is one unwrapped download-then-run line, credentials masked" {
+  local log="$BATS_TEST_TMPDIR/curl.log" line; : >"$log"
+  run env AGSEC_MOCK_KEYS_FILE="$REPO_ROOT/install.sh" AGSEC_MOCK_CURL_LOG="$log" \
+      AGENT_SECRETS_BASE_URL='https://u:SEKRET@mirror.example' \
+      AGENT_SECRETS_INSTALL_URL='https://u:SEKRET@mirror.example/install.sh?token=SEKRET' \
+      sh -s -- --bogus <"$REPO_ROOT/install.sh"
+  [ "$status" -eq 2 ]
+  [[ "$output" != *SEKRET* ]] || return 1
+  grep -q 'mirror.example/install.sh' "$log"                     # it really took the re-fetch
+  line="$(printf '%s\n' "$output" | sed -n 's/^    //p' | tail -1)"
+  # shellcheck disable=SC2016  # literal text of the printed command
+  [ "$line" = 'f="$(mktemp "${TMPDIR:-/tmp}/agent-secrets-install.XXXXXX")" && curl -fsSL https://***@mirror.example/install.sh -o "$f" && AGENT_SECRETS_BASE_URL=<URL> bash "$f" --help' ]
+}
+
+@test "under curl | sh a planted ./sh in the cwd never runs; sh -s and /bin/sh -s take the re-fetch" {
+  local d="$BATS_TEST_TMPDIR/cwd" log="$BATS_TEST_TMPDIR/curl.log" url
+  url="https://raw.githubusercontent.com/renchris/agent-secrets/v$(cat "$REPO_ROOT/VERSION")/install.sh"
+  mkdir -p "$d"; : >"$log"
+  printf '#!/bin/sh\n: >"%s/PLANTED-RAN"\n' "$d" >"$d/sh"; chmod +x "$d/sh"
+  run bash -c 'cd "$1" && AGSEC_MOCK_KEYS_FILE="$2" AGSEC_MOCK_CURL_LOG="$3" sh -s -- --dry-run <"$2"' \
+      _ "$d" "$REPO_ROOT/install.sh" "$log"
+  [ "$status" -eq 0 ]
+  [ ! -e "$d/PLANTED-RAN" ]
+  [[ "$output" == *"agent-secrets installer"* ]] || return 1
+  [ "$(cat "$log")" = "-fsSL $url" ]
+  : >"$log"
+  # $0 is /bin/sh here: it used to be re-exec'd as a script (bash /bin/sh, rc 126).
+  run bash -c 'cd "$1" && AGSEC_MOCK_KEYS_FILE="$2" AGSEC_MOCK_CURL_LOG="$3" /bin/sh -s -- --dry-run <"$2"' \
+      _ "$d" "$REPO_ROOT/install.sh" "$log"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"agent-secrets installer"* ]] || return 1
+  [ "$(cat "$log")" = "-fsSL $url" ]
+  : >"$log"
+  # A real script path stays the file case: re-exec in place, no fetch.
+  run env AGSEC_MOCK_CURL_LOG="$log" /bin/sh "$REPO_ROOT/install.sh" --dry-run </dev/null
+  [ "$status" -eq 0 ]
+  [ ! -s "$log" ]
+}
+
+@test "setup gets neither the AGSEC_REEXECED sentinel nor --discovery; --no-color reaches it (argv/env shim)" {
+  _build_mirror
+  _shim_setup_in_mirror
+  local baked argv="$BATS_TEST_TMPDIR/setup.argv" envl="$BATS_TEST_TMPDIR/setup.env"
+  baked="$(_bake_install)"
+  # /bin/sh takes the guard's file case, which sets and exports the sentinel before the re-exec.
+  run env -u NO_COLOR AGSEC_SETUP_ARGV_LOG="$argv" AGSEC_SETUP_ENV_LOG="$envl" \
+      /bin/sh "$baked" --discovery --no-color </dev/null
+  [ "$status" -eq 0 ]
+  [ "$(cat "$argv")" = setup ]                    # no --discovery forwarded on a no-TTY run
+  grep -qx AGENT_SECRETS_BIN "$envl"              # the env log is live: install's own export reached it
+  grep -qx NO_COLOR "$envl"
+  run grep -cx AGSEC_REEXECED "$envl"
+  [ "$output" -eq 0 ]
 }

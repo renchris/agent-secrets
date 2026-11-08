@@ -3,9 +3,97 @@
 # FUNCTION-GUARDED (main(){…}; main "$@") so a truncated download can never partial-exec
 # Consent gate is the FIRST screen; --dry-run = plan-then-apply (the rendered
 # plan is exactly what executes). STOP-ASK gates have NO --force/env bypass.
-# Install from a PINNED release tag (never main); SHA-256 verify any artifact before running it.
+# Install from a PINNED release tag (never main); SHA-256 verify the release tarball and every
+# dependency binary before running it. This script is itself the trust root: the sh re-fetch below runs
+# AGENT_SECRETS_INSTALL_URL's text unverified, so that override replaces the trust root.
 # AGENT_SECRETS_BASE_URL overrides the source (private-repo / corporate mirror; the smoke test
 # uses it). Records every TOOL artifact via lib/manifest.sh; no secret value ever handled.
+
+# --- pinned tag, help and version (POSIX-clean: all of it runs before the bash guard) ---------------
+# The ONE tag literal: the sh re-fetch URL, main's PINNED_TAG, --version and help all read it.
+AGSEC_PINNED_TAG="v0.1.3"
+_agsec_repo="renchris/agent-secrets"
+
+# Mask userinfo (a mirror URL can carry credentials) and drop any query or fragment, for display only.
+_agsec_show_url() { _u="$1"; case "$_u" in *://*@*) _u="${_u%%://*}://***@${_u##*@}" ;; esac; printf '%s\n' "${_u%%[?#]*}"; }
+
+_agsec_usage() {
+  # shellcheck disable=SC2016  # the help text names $HOME literally
+  printf '%s\n' \
+    'Usage: install.sh [options]' \
+    '' \
+    'Install agent-secrets and run setup.' \
+    '' \
+    'Options:' \
+    '  --debug               Print extra step diagnostics on stderr (default: off).' \
+    '  --discovery[=true|false]' \
+    '                        Answer yes to the offer to write the machine-wide agent' \
+    '                        rules (default: ask on a terminal; headless setup writes' \
+    '                        them anyway).' \
+    '  --dry-run[=true|false]' \
+    '                        Show the plan and change nothing (default: false).' \
+    '  -h, --help            Show this help and exit.' \
+    '  --headless[=true|false]' \
+    '                        Run setup prompt-free (default: automatic in an agent' \
+    "                        session or with no terminal). Install's own consent" \
+    '                        keypress still applies on a terminal.' \
+    '  --import-env <NAME>[,<NAME>...]' \
+    '                        Seed the store from env-var NAMES set in this shell,' \
+    '                        never a value (default: none). An empty list is an' \
+    '                        error.' \
+    '  --no-color            Turn off color in setup; sets NO_COLOR=1 (default: off).' \
+    '  --no-discovery[=true|false]' \
+    '                        Do not write the machine-wide agent rules (default:' \
+    '                        false; headless setup writes them).' \
+    '  --no-dry-run          Same as --dry-run=false.' \
+    '  --no-headless         Same as --headless=false: setup picks its own mode.' \
+    '  -v, --version         Print the version and exit. With --json, print' \
+    '                        {"version":"<version>"}.' \
+    '' \
+    'Repeating a flag: the last --import-env wins; Boolean flags are idempotent, and' \
+    'a flag together with its opposite (--dry-run --no-dry-run) is an error.' \
+    '' \
+    'Environment (an empty value counts as unset):' \
+    '  AGENT_SECRETS_HOME    Install under this home (default: $HOME). Paths derived' \
+    '                        from it are written to the shell rc PATH block and the' \
+    '                        launchd plist; the variable itself is not saved.' \
+    '  AGENT_SECRETS_BASE_URL' \
+    '                        Download the release tarball from this mirror (default:' \
+    "                        https://github.com/${_agsec_repo})." \
+    '  AGENT_SECRETS_INSTALL_URL' \
+    '                        Re-fetch install.sh from this URL when run under sh.' \
+    '  AGENT_SECRETS_DEPS_BASE_URL' \
+    '                        Mirror for the pinned age, sops and jq downloads' \
+    '                        (default: https://github.com).' \
+    '  AGENT_SECRETS_DEPS_NO_BREW' \
+    '                        Set to skip Homebrew when resolving age, sops and jq.' \
+    '' \
+    'Notes:' \
+    '  Progress and prompts go to stderr. An agent session, CI or no terminal means' \
+    '  headless setup.' \
+    '' \
+    'Examples:' \
+    '  bash install.sh --headless --import-env OPENROUTER_API_KEY --no-discovery' \
+    '  bash install.sh --dry-run' \
+    '' \
+    'Learn more:' \
+    "  https://github.com/${_agsec_repo}/blob/${AGSEC_PINNED_TAG}/README.md"
+}
+
+# Help, then version, win over every other argument (an unknown flag or a missing value included) and
+# never fetch or re-exec. The bare word `help` counts only as $1, so `--import-env help` stays a value.
+for _a in "$@"; do
+  case "$_a" in --) break ;; -h|--help) _agsec_usage; exit 0 ;; esac
+done
+if [ "${1:-}" = help ]; then _agsec_usage; exit 0; fi
+_agsec_ver=0; _agsec_json=0
+for _a in "$@"; do
+  case "$_a" in --) break ;; -v|--version) _agsec_ver=1 ;; --json) _agsec_json=1 ;; esac
+done
+if [ "$_agsec_ver" = 1 ]; then
+  if [ "$_agsec_json" = 1 ]; then printf '{"version":"%s"}\n' "${AGSEC_PINNED_TAG#v}"; else printf '%s\n' "${AGSEC_PINNED_TAG#v}"; fi
+  exit 0
+fi
 
 # --- bash guard (must be POSIX-clean: NOTHING above this may use a bashism) -------------------
 # The README one-liner runs this via `bash -c "$(curl…)"`. If a user instead pipes it to `sh`
@@ -16,21 +104,29 @@
 # — so keying only on BASH_VERSION would SKIP the re-exec on the exact `sh` invocations we target
 # (verified: /bin/sh has BASH_VERSION set AND `shopt -qo posix` true). Re-exec when there is no bash at
 # all OR bash is in POSIX mode. AGSEC_REEXECED is a sentinel so the re-exec'd (non-POSIX) bash can never
-# loop. File case ($0 is a real path) re-execs in place; the curl-pipe case re-fetches (mirror override
-# via AGENT_SECRETS_INSTALL_URL). `shopt` never runs under a true POSIX sh: `[ -z BASH_VERSION ]` is
-# true there and short-circuits the `||`.
+# loop. File case ($0 is a real script path) re-execs in place; the curl-pipe case re-fetches (mirror
+# override via AGENT_SECRETS_INSTALL_URL, which replaces the trust root and is run unverified).
+# `shopt` never runs under a true POSIX sh: `[ -z BASH_VERSION ]` is true there and short-circuits the `||`.
 if [ -z "${AGSEC_REEXECED:-}" ] && { [ -z "${BASH_VERSION:-}" ] || shopt -qo posix 2>/dev/null; }; then
   AGSEC_REEXECED=1; export AGSEC_REEXECED
-  if [ -f "$0" ]; then exec bash "$0" "$@"; fi        # file case: re-exec in place, no re-download
-  # curl-pipe case ($0 is "sh", no file): re-fetch from the pinned raw-git channel and hand to bash.
+  # Under `curl … | sh` (or `| /bin/sh`), $0 names the SHELL, and a file of that name in the cwd (a
+  # planted ./sh) must never be run as the installer: a shell name always takes the re-fetch. The check is
+  # on the basename, not on a slash, because `sh install.sh` has no slash and `| /bin/sh` has one.
+  case "${0##*/}" in
+    sh|-sh|ash|-ash|dash|-dash|bash|-bash|ksh|-ksh|mksh|zsh|-zsh|busybox) ;;
+    *) if [ -f "$0" ]; then exec bash "$0" "$@"; fi ;;   # file case: re-exec in place, no re-download
+  esac
+  # curl-pipe case: re-fetch from the pinned raw-git channel and hand to bash.
   # Capture first so a failed re-fetch fails LOUD — `bash -c "$(curl…)"` inline would silently run an
   # empty program (exit 0) on a network error, a no-op masquerading as success.
-  _agsec_tag="v0.1.3"; _agsec_repo="renchris/agent-secrets"
-  _agsec_self_url="${AGENT_SECRETS_INSTALL_URL:-https://raw.githubusercontent.com/${_agsec_repo}/${_agsec_tag}/install.sh}"
+  _agsec_self_url="${AGENT_SECRETS_INSTALL_URL:-https://raw.githubusercontent.com/${_agsec_repo}/${AGSEC_PINNED_TAG}/install.sh}"
   _agsec_src="$(curl -fsSL "$_agsec_self_url")" || _agsec_src=""
   [ -n "$_agsec_src" ] || { printf 'ERROR: could not re-fetch install.sh to re-exec under bash. Re-run the README one-liner with bash (not sh) — it curl-pipes this URL: %s\n' "$_agsec_self_url" >&2; exit 1; }
   exec bash -c "$_agsec_src" bash "$@"
 fi
+# The sentinel has done its job (the re-exec'd bash skipped the guard). Exported, it would reach setup and
+# everything it runs, so drop it here.
+unset AGSEC_REEXECED
 
 set -euo pipefail
 
@@ -39,7 +135,7 @@ main() {
   # The tag is PINNED — never `main` (a moving ref is an unreviewed-code RCE). Repo-jacking guard:
   # if this project is ever renamed, the OLD GitHub name MUST be retained (a freed name can be
   # re-registered by an attacker and would serve this exact URL).
-  local PINNED_TAG="v0.1.3"
+  local PINNED_TAG="$AGSEC_PINNED_TAG"
   local REPO="renchris/agent-secrets"   # keep the old name reserved forever on any future rename
   local BASE_URL="${AGENT_SECRETS_BASE_URL:-https://github.com/${REPO}}"
   # EXPECTED_SHA256 is BAKED IN at release-tag time by the release runbook (README "Cut a release").
@@ -79,31 +175,115 @@ main() {
   _step() { printf '  → %s\n' "$*" >&2; }
   _die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
   _run()  { if [ "$DRY_RUN" -eq 1 ]; then _step "$*"; else _step "$*"; "$@"; fi; }
+  _debug() { if [ "$DEBUG" -eq 1 ]; then printf 'debug: %s\n' "$*" >&2; fi; }
 
-  # Flags. The setup-shaping ones are passed straight through to `agent-secrets setup`, which owns
-  # their meaning (see `agent-secrets setup --help`): --headless forces the prompt-free setup that an
-  # agent session / no-tty install gets anyway; --import-env seeds the store from env-var NAMES already
-  # set in this process (never a value on argv); --no-discovery skips the machine-wide agent rules
-  # that a headless setup writes by default.
-  local DRY_RUN=0 HEADLESS=0 IMPORT_ENV="" NO_DISCOVERY=0
-  while [ "$#" -gt 0 ]; do
+  # The command that re-runs THIS installer, printed in hints (never run). A real script file re-runs
+  # in place. Under `curl | bash` or the sh re-fetch there is no file, so print a download-then-run line;
+  # a set AGENT_SECRETS_BASE_URL shows only as a placeholder, because a mirror URL can hold credentials.
+  _self_cmd() {
+    local base=""
+    case "${0##*/}" in
+      sh|-sh|ash|-ash|dash|-dash|bash|-bash|ksh|-ksh|mksh|zsh|-zsh|busybox) ;;
+      *) if [ -f "$0" ]; then printf 'bash %q\n' "$0"; return 0; fi ;;
+    esac
+    [ -z "${AGENT_SECRETS_BASE_URL:-}" ] || base="AGENT_SECRETS_BASE_URL=<URL> "
+    # shellcheck disable=SC2016  # the $(...) and "$f" are printed for the reader to run, not expanded here
+    printf 'f="$(mktemp "${TMPDIR:-/tmp}/agent-secrets-install.XXXXXX")" && curl -fsSL %s -o "$f" && %sbash "$f"\n' \
+      "$(_agsec_show_url "${AGENT_SECRETS_INSTALL_URL:-https://raw.githubusercontent.com/${_agsec_repo}/${AGSEC_PINNED_TAG}/install.sh}")" "$base"
+  }
+  # A usage error exits 2 (the repo's convention: cmd/setup.sh, cmd/doctor.sh, lib/help.sh) and never
+  # echoes a value. The parse runs before any EXIT trap is armed, so nothing can overwrite the 2.
+  _usage_die() { printf 'ERROR: %s\n\nSee the options:\n    %s --help\n' "$*" "$(_self_cmd)" >&2; exit 2; }
+  # At most one close name for an unknown long option; it is printed, never run.
+  _close_option() {
     case "$1" in
-      --dry-run)      DRY_RUN=1 ;;
-      --headless)     HEADLESS=1 ;;
-      --no-discovery) NO_DISCOVERY=1 ;;
-      --import-env)   [ -n "${2:-}" ] || _die "--import-env needs NAME[,NAME…]"; IMPORT_ENV="$2"; shift ;;
-      --import-env=*) IMPORT_ENV="${1#--import-env=}" ;;
-      -h|--help)
-        _say "usage: install.sh [--dry-run] [--headless] [--import-env NAME[,NAME…]] [--no-discovery]"
-        _say "  --dry-run       show the plan, change nothing"
-        _say "  --headless      prompt-free setup with real keys (automatic in an agent session / with no tty)"
-        _say "  --import-env    seed the store from env-var NAMES set in this shell (never a value on argv)"
-        _say "  --no-discovery  do not write the machine-wide agent rules (headless writes them by default)"
-        return 0 ;;
-      *) _die "unknown argument '$1' (see: install.sh --help)" ;;
+      --deb*|--dbg*)                    printf '%s\n' --debug ;;
+      --no-dry*|--nodry*)               printf '%s\n' --no-dry-run ;;
+      --no-head*|--nohead*)             printf '%s\n' --no-headless ;;
+      --no-disc*|--nodisc*)             printf '%s\n' --no-discovery ;;
+      --no-col*|--nocol*)               printf '%s\n' --no-color ;;
+      --dry*|--dr-*)                    printf '%s\n' --dry-run ;;
+      --head*|--hed*)                   printf '%s\n' --headless ;;
+      --disc*|--disk*)                  printf '%s\n' --discovery ;;
+      --imp*|--inport*|--env*)          printf '%s\n' --import-env ;;
+      --hel*|--hlp*)                    printf '%s\n' --help ;;
+      --ver*|--vre*)                    printf '%s\n' --version ;;
+    esac
+  }
+  # Same rule as cmd/setup.sh's _import_env_valid (common.sh is not sourced yet), plus at least one name:
+  # setup's '' arm is dead, because word-splitting yields no iterations, so `,` alone would pass there.
+  _import_env_valid() {
+    local n count=0
+    for n in $(printf '%s' "$1" | tr ',' ' '); do
+      case "$n" in [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]* | '') return 1 ;; esac
+      count=$((count + 1))
+    done
+    [ "$count" -gt 0 ]
+  }
+
+  # Flags. The setup-shaping ones are forwarded to `agent-secrets setup`, which owns their meaning (see
+  # `agent-secrets setup --help`): --headless forces the prompt-free setup that an agent session / no-tty
+  # install gets anyway; --import-env seeds the store from env-var NAMES already set in this process
+  # (never a value on argv); --no-discovery skips the machine-wide agent rules that a headless setup
+  # writes by default. --discovery is NEVER forwarded (setup --discovery is a standalone screen): it only
+  # pre-answers install's own interactive offer, and headless setup writes the rules anyway.
+  # Boolean flags take an optional =true|false; each is tri-state ("" = not given) so a flag and its
+  # opposite together are a usage error, never last-wins (an appended flag must not turn a preview into
+  # a mutation). Repeating the same value is idempotent.
+  local DRY_RUN=0 HEADLESS=0 IMPORT_ENV="" NO_DISCOVERY=0 DISCOVERY_YES=0 DEBUG=0
+  local _f_dry="" _f_headless="" _f_disc="" _f_import=0 _flag _val
+  _bool() {  # FLAG VALUE-AFTER-= → prints 1 or 0, or dies
+    case "$2" in true) printf '1' ;; false) printf '0' ;; *) _usage_die "Use $1=true or $1=false." ;; esac
+  }
+  _set_tri() {  # VAR NEW — VAR is one of _f_dry/_f_headless/_f_disc; $_flag names the flag in hand
+    local cur; eval "cur=\"\${$1}\""
+    if [ -n "$cur" ] && [ "$cur" != "$2" ]; then _usage_die "Can't use $_flag together with its opposite."; fi
+    eval "$1=\"\$2\""
+  }
+  while [ "$#" -gt 0 ]; do
+    _flag="${1%%=*}"
+    case "$1" in
+      --dry-run)         _set_tri _f_dry 1 ;;
+      --no-dry-run)      _set_tri _f_dry 0 ;;
+      --dry-run=*)       _val="$(_bool --dry-run "${1#*=}")" || exit 2; _set_tri _f_dry "$_val" ;;
+      --headless)        _set_tri _f_headless 1 ;;
+      --no-headless)     _set_tri _f_headless 0 ;;
+      --headless=*)      _val="$(_bool --headless "${1#*=}")" || exit 2; _set_tri _f_headless "$_val" ;;
+      --discovery)       _set_tri _f_disc 1 ;;
+      --discovery=*)     _val="$(_bool --discovery "${1#*=}")" || exit 2; _set_tri _f_disc "$_val" ;;
+      --no-discovery)    _set_tri _f_disc 0 ;;
+      --no-discovery=*)  _val="$(_bool --no-discovery "${1#*=}")" || exit 2
+                         _set_tri _f_disc "$((1 - _val))" ;;
+      --import-env)      [ -n "${2:-}" ] || _usage_die "Can't use --import-env without <NAME>."
+                         IMPORT_ENV="$2"; _f_import=1; shift ;;
+      --import-env=*)    IMPORT_ENV="${1#--import-env=}"; _f_import=1
+                         [ -n "$IMPORT_ENV" ] || _usage_die "Can't use --import-env without <NAME>." ;;
+      --no-color)        NO_COLOR=1; export NO_COLOR ;;
+      --debug)           DEBUG=1 ;;
+      -h|--help|help)    _agsec_usage; return 0 ;;   # the pre-scan above normally answers first
+      --)                shift; [ "$#" -eq 0 ] || _usage_die "Unexpected argument for install.sh. It takes no positional arguments."; break ;;
+      -*)                _val="$(_close_option "$_flag")"
+                         _usage_die "Unknown option '$_flag' for install.sh.${_val:+ Did you mean $_val?}" ;;
+      *)                 _usage_die "install.sh takes no positional arguments." ;;
     esac
     shift
   done
+  [ "$_f_dry" != 1 ] || DRY_RUN=1
+  [ "$_f_headless" != 1 ] || HEADLESS=1
+  case "$_f_disc" in 1) DISCOVERY_YES=1 ;; 0) NO_DISCOVERY=1 ;; esac
+  # Validated on the FINAL value (last one wins), before the plan can print it. Glob characters are
+  # refused before the unquoted word-split, so the verdict never depends on what the cwd holds. Spaces
+  # stay valid as separators, because setup's own word-split accepts them. The value is never echoed.
+  if [ "$_f_import" -eq 1 ]; then
+    case "$IMPORT_ENV" in
+      *[!A-Za-z0-9_,[:space:]]*) _usage_die "--import-env takes env-var NAMES (letters, digits, _; not starting with a digit), comma-separated." ;;
+    esac
+    _import_env_valid "$IMPORT_ENV" \
+      || _usage_die "--import-env takes env-var NAMES (letters, digits, _; not starting with a digit), comma-separated."
+  fi
+  _debug "parsed: dry_run=$DRY_RUN headless=$HEADLESS discovery=${_f_disc:-default} import_env=$([ "$_f_import" -eq 1 ] && printf given || printf none)"
+  # Parse-only seam: validate the argv, then stop before any TTY attach, prompt, fetch or write.
+  [ -z "${AGSEC_PARSE_ONLY:-}" ] || return 0
 
   # Is this a coding-agent session? Inlined (common.sh is not sourced until after unpack) and kept
   # identical in intent to agsec_in_agent_session — a transcript-bearing session must never be
@@ -129,7 +309,7 @@ main() {
     exec 0</dev/tty || return 1
     [ -t 0 ]
   }
-  _attach_tty || true
+  if _attach_tty; then _debug "stdin: a terminal"; else _debug "stdin: no terminal (setup will run headless)"; fi
 
   # --- the plan (rendered identically for consent + dry-run) -------------------
   _render_plan() {
@@ -141,7 +321,9 @@ main() {
     _say "  • add a marker-delimited PATH block to $RC_FILE${BASH_RC_FILE:+ (and $BASH_RC_FILE — your login shell is bash)}"
     _say "  • install a weekly launchd smoke job ($SMOKE_LABEL)"
     _say "  • (via 'agent-secrets setup') back up an existing ~/.claude/settings.json as the revert point for its apiKeyHelper edit (wired only once ANTHROPIC_API_KEY is stored)"
-    if [ -t 0 ] && [ "$HEADLESS" -eq 0 ]; then
+    if [ -t 0 ] && [ "$HEADLESS" -eq 0 ] && [ "$DISCOVERY_YES" -eq 1 ]; then
+      _say "  • add agent-secrets rules to ~/.claude/CLAUDE.md (+ each present agent CLI's file) so agents in EVERY repo know to use it — advisory, reversible (--discovery, no offer)"
+    elif [ -t 0 ] && [ "$HEADLESS" -eq 0 ]; then
       _say "  • OFFER (opt-in) to add agent-secrets rules to ~/.claude/CLAUDE.md so agents in EVERY repo know to use it"
     elif [ "$NO_DISCOVERY" -eq 1 ]; then
       _say "  • skip the machine-wide agent rules (--no-discovery)"
@@ -216,12 +398,12 @@ main() {
   if [ -n "$EXPECTED_SHA256" ]; then
     # Production path: the digest was baked into THIS script (git-ref channel) at release-tag time, so a
     # swapped release-asset tarball fails here — real release-asset tamper-evidence, not same-origin trust.
-    expect="$EXPECTED_SHA256"
+    expect="$EXPECTED_SHA256"; _debug "digest: baked into this install.sh"
   elif [ -n "${AGENT_SECRETS_BASE_URL:-}" ]; then
     # Dev/mirror convenience ONLY (BASE_URL overridden): trust a sibling .sha256 from the mirror you
     # control. This is transport integrity (corruption/partial-download), NOT release-asset tamper-evidence.
     _run curl -fsSL "$url.sha256" -o "$pkg.sha256"
-    expect="$(awk '{print $1}' "$pkg.sha256")"
+    expect="$(awk '{print $1}' "$pkg.sha256")"; _debug "digest: the mirror's sibling .sha256 (AGENT_SECRETS_BASE_URL is set)"
   else
     _die "this install.sh carries no baked release digest (EXPECTED_SHA256 empty) — it was not cut by the release runbook. Refusing a same-origin .sha256 fallback on the default production URL (it cannot detect a swapped release asset). Install from a published release tag, or set AGENT_SECRETS_BASE_URL to use a dev/mirror."
   fi
@@ -232,6 +414,7 @@ main() {
   # Was $INSTALL_DIR created by THIS run? A re-run over an existing (live) install must never have its
   # tool dir deleted by the pre-manifest abort trap below (RT6), so only arm that trap when fresh.
   local FRESH_INSTALL=0; [ -d "$INSTALL_DIR" ] || FRESH_INSTALL=1
+  _debug "fresh install: $FRESH_INSTALL (1 = an abort removes the unpacked tool)"
   _run mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$STATE_DIR"
   _run tar -xzf "$pkg" -C "$INSTALL_DIR" --strip-components=1
   # Fail LOUDLY on a mis-cut tarball (wrong/missing top-level prefix flattens the layout and would
@@ -348,13 +531,18 @@ main() {
     if [ -z "$_plan" ]; then
       _say "  → no writable agent surfaces detected (or all are org/MDM-managed) — machine-wide discovery skipped"
     else
-      printf '\nMake every coding agent on this Mac aware of agent-secrets?\n' >&2
-      printf 'This writes a short, reversible, advisory block into EACH of these files (uninstall removes them):\n' >&2
-      printf '%s\n' "$_plan" | while IFS="$(printf '\t')" read -r _lbl _pth; do printf '   • %s\n' "$_pth" >&2; done
-      printf 'The block (advisory — makes agents aware of the tool; not an enforced guarantee):\n' >&2
-      agsec_render_rules claude-md | sed 's/^/     │ /' >&2
-      printf '[y = yes, write them (recommended) · Enter = skip]: ' >&2
-      local dreply=''; read -r dreply || dreply=''
+      local dreply=''
+      if [ "$DISCOVERY_YES" -eq 1 ]; then
+        dreply=y   # --discovery pre-answered the offer, so it is not asked
+      else
+        printf '\nMake every coding agent on this Mac aware of agent-secrets?\n' >&2
+        printf 'This writes a short, reversible, advisory block into EACH of these files (uninstall removes them):\n' >&2
+        printf '%s\n' "$_plan" | while IFS="$(printf '\t')" read -r _lbl _pth; do printf '   • %s\n' "$_pth" >&2; done
+        printf 'The block (advisory — makes agents aware of the tool; not an enforced guarantee):\n' >&2
+        agsec_render_rules claude-md | sed 's/^/     │ /' >&2
+        printf '[y = yes, write them (recommended) · Enter = skip]: ' >&2
+        read -r dreply || dreply=''
+      fi
       case "$dreply" in
         [yY]*)
           local _wrote; _wrote="$(agsec_discovery_install_all)"
@@ -364,7 +552,8 @@ main() {
             _say "  → nothing written (targets became unwritable)"
           fi ;;
         *)
-          _say "  → skipped machine-wide discovery (add later by re-running the installer)" ;;
+          _say "  → skipped the agent rules. Add them later:"
+          _say "      $(printf '%q' "$BIN_DIR/agent-secrets") setup --discovery" ;;
       esac
     fi
   fi
@@ -382,6 +571,7 @@ main() {
   if [ -n "$IMPORT_ENV" ]; then setup_args+=(--import-env "$IMPORT_ENV"); fi
   if [ "$NO_DISCOVERY" -eq 1 ]; then setup_args+=(--no-discovery); fi
   _say "Installed. Running setup…"
+  _debug "setup flags: ${setup_args[*]+${setup_args[*]}}"
   _run "$BIN_DIR/agent-secrets" setup ${setup_args[@]+"${setup_args[@]}"}
 }
 
