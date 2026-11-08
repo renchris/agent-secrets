@@ -5,6 +5,7 @@
 # lifecycle lives in tests/egress-probe.sh (foreground + self-cleaning) so bats never hangs on a
 # lingering background process.
 load test_helper
+load mode_matrix
 
 PROBE() { bash "$BATS_TEST_DIRNAME/egress-probe.sh" "$@"; }
 
@@ -90,4 +91,121 @@ PROBE() { bash "$BATS_TEST_DIRNAME/egress-probe.sh" "$@"; }
   [ "$status" -eq 0 ]
   [[ "$output" == *"corp.example:3128"* ]] || return 1       # ambient proxy preserved…
   [[ "$output" != *"127.0.0.1"* ]] || return 1               # …NOT rewritten to our loopback
+}
+
+# ---- the run child contract ---------------------------------------------------------------------
+# NOPROXY strips an ambient corporate proxy so the allowlist path is the one under test.
+NOPROXY=(env -u HTTPS_PROXY -u https_proxy -u AGENT_SECRETS_NO_EGRESS)
+
+@test "run passes a child's exit 42 through, with and without the egress bound" {
+  setup_store
+  run "${NOPROXY[@]}" bash "$REPO_ROOT/bin/agent-secrets" run -- sh -c 'exit 42'
+  [ "$status" -eq 42 ]
+  [ -x /usr/bin/perl ] || skip "no /usr/bin/perl"
+  printf '127.0.0.1\n' >"$(agsec_config_dir)/egress.allow"
+  run "${NOPROXY[@]}" bash "$REPO_ROOT/bin/agent-secrets" run -- sh -c 'exit 42'
+  [ "$status" -eq 42 ]
+  [[ "$output" == *"egress allowlist active"* ]] || return 1     # the managed path really ran
+}
+
+@test "run keeps argv intact (space, newline, single quote), with and without the egress bound" {
+  setup_store
+  local want="[a b][x"$'\n'"y][it's]"
+  run "${NOPROXY[@]}" bash "$REPO_ROOT/bin/agent-secrets" run -- sh -c 'printf "[%s]" "$@"' sh 'a b' $'x\ny' "it's"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$want" ]
+  [ -x /usr/bin/perl ] || skip "no /usr/bin/perl"
+  printf '127.0.0.1\n' >"$(agsec_config_dir)/egress.allow"
+  # The managed path prints its note on stderr, so the child writes its argv to a file.
+  run "${NOPROXY[@]}" bash "$REPO_ROOT/bin/agent-secrets" run -- sh -c 'printf "[%s]" "$@" >"$0"' "$AGENT_SECRETS_HOME/argv.out" 'a b' $'x\ny' "it's"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$AGENT_SECRETS_HOME/argv.out")" = "$want" ]
+}
+
+@test "run with a missing command exits 2 before launch" {
+  setup_store
+  run "${NOPROXY[@]}" bash "$REPO_ROOT/bin/agent-secrets" run -- agsec-no-such-command-b1
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"command not found"* ]] || return 1
+}
+
+@test "egress-bound run: SIGTERM to the wrapper exits 143 and leaves no child or proxy" {
+  [ -x /usr/bin/perl ] || skip "no /usr/bin/perl"
+  setup_store
+  printf '127.0.0.1\n' >"$(agsec_config_dir)/egress.allow"
+  # A duration no other process on the machine uses, so ps can tell this child apart.
+  local dur="30.$$${RANDOM}" w rc=0 deadline
+  # ps is read whole before grep: common.sh sets pipefail, so `ps | grep -q` fails when ps takes a
+  # SIGPIPE. Whole-line match, so a grep's own argv never counts as the child.
+  _child_up() { local all; all="$(ps -axo command=)"; grep -qxF "sleep $dur" <<<"$all"; }
+  _proxy_up() { local all; all="$(ps -axo command=)"; [ "$(grep -F egress-proxy.pl <<<"$all" | grep -cF "$AGENT_SECRETS_HOME")" -gt 0 ]; }
+  "${NOPROXY[@]}" bash "$REPO_ROOT/bin/agent-secrets" run -- sleep "$dur" 3>&- &
+  w=$!
+  deadline=$((SECONDS + 120))
+  until _child_up; do
+    [ "$SECONDS" -lt "$deadline" ] || { kill -KILL "$w"; return 1; }
+    sleep 0.2
+  done
+  # The proxy's argv carries the synthetic HOME's allowlist path, so this is our proxy and the
+  # managed path (not the exec fallback, where TERM would hit the child directly) is under test.
+  _proxy_up
+  kill -TERM "$w"
+  wait "$w" || rc=$?
+  [ "$rc" -eq 143 ]
+  deadline=$((SECONDS + 60))
+  while _proxy_up || _child_up; do
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 0.2
+  done
+}
+
+@test "store_exec -- true still succeeds (doctor gate d)" {
+  setup_store
+  run bash -c '. "$AGENT_SECRETS_LIB/common.sh"; . "$AGENT_SECRETS_LIB/keychain.sh"; . "$AGENT_SECRETS_LIB/store.sh"; store_exec -- true'
+  [ "$status" -eq 0 ]
+}
+
+@test "run: an unknown option exits 2 naming it; --no-egress is accepted in any position before --" {
+  setup_store
+  run bash "$REPO_ROOT/bin/agent-secrets" run --bogus -- true
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Unknown option '--bogus' for run."* ]] || return 1
+  printf '127.0.0.1\n' >"$(agsec_config_dir)/egress.allow"
+  run "${NOPROXY[@]}" bash "$REPO_ROOT/bin/agent-secrets" run --no-egress --no-egress -- printenv HTTPS_PROXY
+  [ "$status" -eq 1 ]                                           # opted out: no proxy in the child env
+  [[ "$output" != *"egress allowlist active"* ]] || return 1
+}
+
+@test "run: AGSEC_PARSE_ONLY exits 0 after parsing, before reading the store" {
+  run env AGSEC_PARSE_ONLY=1 bash "$REPO_ROOT/bin/agent-secrets" run --no-egress -- true
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+  run env AGSEC_PARSE_ONLY=1 bash "$REPO_ROOT/bin/agent-secrets" run --bogus -- true
+  [ "$status" -eq 2 ]
+}
+
+@test "mode matrix: run with a missing command exits 2 with the error on stderr in every mode" {
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"
+  mkdir -p "$(agsec_config_dir)"; : >"$(agsec_store_file)"   # existence is all run checks before launch
+  local m cmd=(bash "$REPO_ROOT/bin/agent-secrets" run -- agsec-no-such-command-b1)
+  for m in tty noninteractive-tty ci-tty; do
+    mm_run "$m" -- "${cmd[@]}"
+    [ "$mm_status" -eq 2 ] || { echo "mode $m: status $mm_status"; return 1; }
+    [[ "$mm_pty" == *"command not found"* ]] || { echo "mode $m: $mm_pty"; return 1; }
+  done
+  mm_run stdout-redirected -- "${cmd[@]}"
+  [ "$mm_status" -eq 2 ]
+  [ -z "$mm_stdout" ]
+  [[ "$mm_pty" == *"command not found"* ]] || return 1
+  for m in stdin-piped agent; do
+    mm_run "$m" -- "${cmd[@]}"
+    [ "$mm_status" -eq 2 ] || { echo "mode $m: status $mm_status"; return 1; }
+    [ -z "$mm_stdout" ]
+    [[ "$mm_stderr" == *"command not found"* ]] || { echo "mode $m: $mm_stderr"; return 1; }
+  done
+  # run has no --json, so json-tty is a usage error.
+  mm_run json-tty -- bash "$REPO_ROOT/bin/agent-secrets" run --json -- agsec-no-such-command-b1
+  [ "$mm_status" -eq 2 ]
+  [[ "$mm_pty" == *"Unknown option '--json' for run."* ]] || return 1
 }

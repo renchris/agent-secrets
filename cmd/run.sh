@@ -10,10 +10,21 @@ case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render ru
 . "$AGENT_SECRETS_LIB/keychain.sh"
 
 # --no-egress (or AGENT_SECRETS_NO_EGRESS=1) opts out of the allowlist bound for a tool that breaks
-# behind a proxy. Parsed BEFORE the required `--` separator.
-if [ "${1:-}" = "--no-egress" ]; then export AGENT_SECRETS_NO_EGRESS=1; shift; fi
+# behind a proxy. Options are parsed only BEFORE the required `--` separator; everything after it is
+# the child's argv, untouched. A bare word before `--` means the separator was forgotten, so it gets
+# the usage line that shows where `--` goes.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --) break ;;
+    --no-egress) export AGENT_SECRETS_NO_EGRESS=1; shift ;;
+    -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render run; exit 0 ;;
+    -*) agsec_unknown_option run "$1" ;;
+    *) agsec_die "usage: agent-secrets run [--no-egress] -- <cmd> [args...]" 2 ;;
+  esac
+done
 [ "${1:-}" = "--" ] || agsec_die "usage: agent-secrets run [--no-egress] -- <cmd> [args...]" 2
 [ "$#" -ge 2 ] || agsec_die "usage: agent-secrets run [--no-egress] -- <cmd> [args...]" 2   # a command must follow --
+agsec_parse_only_exit
 [ -f "$(agsec_store_file)" ] || agsec_die "no store found — run: agent-secrets setup"
 # shellcheck source=lib/egress.sh
 . "$AGENT_SECRETS_LIB/egress.sh"

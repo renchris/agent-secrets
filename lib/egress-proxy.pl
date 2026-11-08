@@ -105,15 +105,24 @@ sub _write_all {
 # ONLY, returning (head, leftover-bytes). Mixing buffered `<$client>` readline with relay()'s sysread
 # strands any body bytes that arrived coalesced with the head in the PerlIO buffer — relay() reads the
 # raw fd and never sees them, so a plain-HTTP POST/PUT body is silently dropped and the upstream hangs
-# awaiting Content-Length bytes. Returns () on EOF before a complete head, or on a runaway (>64KB) head.
+# awaiting Content-Length bytes. Returns () on EOF before a complete head, on a runaway (>64KB) head,
+# or when no complete head arrives within 30 s (a silent client would otherwise pin a forked child).
 sub read_head {
   my ($client) = @_;
   my $buf = '';
-  while ($buf !~ /\r?\n\r?\n/) {
-    my $n = sysread($client, $buf, 8192, length $buf);
-    return () if !defined $n || $n == 0;
-    return () if length($buf) > 65536;
-  }
+  my $complete = eval {
+    local $SIG{ALRM} = sub { die "head timeout\n" };
+    alarm 30;
+    my $ok = 1;
+    while ($buf !~ /\r?\n\r?\n/) {
+      my $n = sysread($client, $buf, 8192, length $buf);
+      if (!defined $n || $n == 0 || length($buf) > 65536) { $ok = 0; last; }
+    }
+    alarm 0;
+    $ok;
+  };
+  alarm 0;
+  return () unless $complete;
   $buf =~ /^(.*?\r?\n\r?\n)(.*)\z/s;
   return ($1, $2);
 }
@@ -129,7 +138,7 @@ sub handle {
   if ($line =~ m{^CONNECT\s+([^:\s]+):(\d+)\s+HTTP/}i) {
     my ($host, $rport) = ($1, $2);
     return refuse($client, 403, 'Forbidden') unless host_allowed($host, $rport);
-    my $remote = IO::Socket::INET->new(PeerAddr => $host, PeerPort => $rport, Proto => 'tcp')
+    my $remote = IO::Socket::INET->new(PeerAddr => $host, PeerPort => $rport, Proto => 'tcp', Timeout => 10)
       or return refuse($client, 502, 'Bad Gateway');
     print $client "HTTP/1.1 200 Connection established\r\n\r\n";
     _write_all($remote, $rest) if length $rest;   # forward any early client data (compliant clients wait for the 200)
@@ -140,7 +149,7 @@ sub handle {
   if ($line =~ m{^(\S+)\s+http://([^/:\s]+)(?::(\d+))?(\S*)\s+HTTP/(\S+)}i) {
     my ($method, $host, $hport, $path, $ver) = ($1, $2, ($3 || 80), ($4 || '/'), $5);
     return refuse($client, 403, 'Forbidden') unless host_allowed($host, $hport);
-    my $remote = IO::Socket::INET->new(PeerAddr => $host, PeerPort => $hport, Proto => 'tcp')
+    my $remote = IO::Socket::INET->new(PeerAddr => $host, PeerPort => $hport, Proto => 'tcp', Timeout => 10)
       or return refuse($client, 502, 'Bad Gateway');
     $remote->autoflush(1);
     # Origin-form request line + the ORIGINAL headers (everything after the request line in $head),

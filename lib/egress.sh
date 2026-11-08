@@ -82,6 +82,9 @@ _egress_reap() {
 egress_run() {
   [ "${1:-}" = "--" ] && shift
   [ "$#" -ge 1 ] || agsec_die "egress_run: usage: egress_run -- <cmd> [args...]"
+  # Before any launch, so `run` and both wrappers report a typo'd command the same way, and before a
+  # proxy starts that would only have to be torn down again.
+  command -v "$1" >/dev/null 2>&1 || agsec_fail missing_command "Can't run $1: command not found."
   if [ -n "${AGENT_SECRETS_NO_EGRESS:-}" ] || ! egress_enabled; then
     store_exec -- "$@"                       # exec; unchanged behavior when no bound is configured / opted out
   fi
@@ -100,9 +103,39 @@ egress_run() {
   # loopback forwarder (Cntlm/px/ZTNA on 127.0.0.1) that just happens to be on loopback too.
   export AGENT_SECRETS_EGRESS_PROXY="$HTTPS_PROXY"
   agsec_note "egress allowlist active (proxy 127.0.0.1:$EGRESS_PORT; $(egress_rule_count) rule(s)) — non-allowlisted hosts refused"
-  trap '_egress_reap' EXIT INT TERM
+  # EXIT stays the reap backstop. TERM and HUP are forwarded to the child; INT is not, because the
+  # terminal already sent it to the whole foreground process group and a second INT makes TUIs like
+  # claude quit. The trapped INT only stops this shell from dying under its child.
+  AGSEC_CHILD_PID=""; _EGRESS_FWD_AT=""
+  trap '_egress_reap' EXIT
+  trap '_egress_forward TERM' TERM
+  trap '_egress_forward HUP' HUP
+  trap ':' INT
   store_exec_managed -- "$@"
-  local rc=$?
+  local pid="$AGSEC_CHILD_PID" rc=0
+  # A trapped signal interrupts `wait`, so loop while the child lives. Once a signal was forwarded, poll
+  # instead, so a child that ignores it is killed after 10 s rather than waited on forever.
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ -z "$_EGRESS_FWD_AT" ]; then
+      wait "$pid" 2>/dev/null || true
+    elif [ $((SECONDS - _EGRESS_FWD_AT)) -ge 10 ]; then
+      kill -KILL "$pid" 2>/dev/null || true
+      sleep 0.1
+    else
+      sleep 0.1
+    fi
+  done
+  # bash keeps a reaped child's status, so this reads its real exit code (128+n for a signal death).
+  wait "$pid" 2>/dev/null || rc=$?
   _egress_reap
   exit "$rc"
+}
+
+# Before the child exists there is nothing to forward to, so the signal ends this shell (EXIT reaps).
+_egress_forward() {  # SIG
+  if [ -z "${AGSEC_CHILD_PID:-}" ]; then
+    case "$1" in HUP) exit 129 ;; *) exit 143 ;; esac
+  fi
+  kill -s "$1" "$AGSEC_CHILD_PID" 2>/dev/null || true
+  [ -n "${_EGRESS_FWD_AT:-}" ] || _EGRESS_FWD_AT=$SECONDS
 }

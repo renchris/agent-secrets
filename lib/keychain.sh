@@ -45,7 +45,7 @@ kc_add() {
   local key; key="$(cat)"
   agsec_secure_umask
   local f; f="$(agsec_age_key_file)"; mkdir -p "$(dirname "$f")"
-  printf '%s' "$key" >"$f"; chmod 600 "$f" 2>/dev/null || true      # primary custody: 0600 file
+  printf '%s' "$key" | agsec_atomic_write "$f" 600                   # primary custody: 0600 file
   unset key
   kc_populate_stdin >/dev/null 2>&1 || true
 }
@@ -66,8 +66,7 @@ kc_write_selector() {
   local path; path="$(age_key_cmd_path)"; mkdir -p "$(dirname "$path")"
   { printf '#!/bin/sh\n# agent-secrets age-key selector (Keychain primary, 0600 file fallback).\n'
     printf 'security find-generic-password -s "%s" -w 2>/dev/null \\\n' "$AGENT_SECRETS_KC_SERVICE"
-    printf '  || cat "%s"\n' "$(agsec_age_key_file)"; } >"$path"
-  chmod 700 "$path" 2>/dev/null || true
+    printf '  || cat "%s"\n' "$(agsec_age_key_file)"; } | agsec_atomic_write "$path" 700
 }
 
 # Custody status for doctor — names/status ONLY, never the key.

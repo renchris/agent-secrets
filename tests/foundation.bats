@@ -58,3 +58,71 @@ load test_helper
   [[ "$output" != *"$secret"* ]] || return 1                             # the refusal message carries no value
   run grep -c "$secret" "$(agsec_store_file)"; [ "$output" -eq 0 ]   # nothing stored
 }
+
+@test "two concurrent store_add calls keep both names" {
+  setup_store
+  local a b
+  ( printf 'fake-a' | store_add LOCK_A ) 3>&- & a=$!
+  ( printf 'fake-b' | store_add LOCK_B ) 3>&- & b=$!
+  wait "$a"; wait "$b"
+  run store_names
+  [ "$status" -eq 0 ]
+  grep -qx LOCK_A <<<"$output"
+  grep -qx LOCK_B <<<"$output"
+  [ ! -e "$(agsec_config_dir)/.store.lock" ]                 # released
+}
+
+@test "store_names returns 2 with empty output when the store can't be decrypted" {
+  setup_store
+  rm -f "$(agsec_age_key_file)"
+  age-keygen -o "$(agsec_age_key_file)" 2>/dev/null         # a key the store was never encrypted to
+  run store_names
+  [ "$status" -eq 2 ]
+  [ -z "$output" ]
+  run store_has "$AGENT_SECRETS_CANARY_NAME"
+  [ "$status" -eq 2 ]
+  local before; before="$(cat "$(agsec_store_file)")"
+  run store_canary_insert                                    # must not re-seed over the real store
+  [ "$status" -eq 2 ]
+  [ "$(cat "$(agsec_store_file)")" = "$before" ]
+}
+
+@test "store_names returns 1 when there is no store yet; store_has matches a name exactly" {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck source=/dev/null
+  . "$REPO_ROOT/lib/common.sh"; . "$REPO_ROOT/lib/store.sh"
+  run store_names
+  [ "$status" -eq 1 ]
+  setup_store
+  printf 'fake' | store_add MY_API_KEY
+  store_has MY_API_KEY
+  run store_has MY.API.KEY                                   # '.' is not a wildcard
+  [ "$status" -eq 1 ]
+  run store_has MY_API
+  [ "$status" -eq 1 ]
+}
+
+@test "store_add drops one trailing CR from a CRLF line, keeps a CR at EOF" {
+  setup_store
+  printf 'v1\r\n' | store_add CR_LINE
+  printf 'v1\r' | store_add CR_EOF
+  run bash "$REPO_ROOT/bin/agent-secrets" run --no-egress -- sh -c 'printf %s "$CR_LINE" | wc -c'
+  [ "$status" -eq 0 ]
+  [ "$((output))" -eq 2 ]
+  run bash "$REPO_ROOT/bin/agent-secrets" run --no-egress -- sh -c 'printf %s "$CR_EOF" | wc -c'
+  [ "$status" -eq 0 ]
+  [ "$((output))" -eq 3 ]
+}
+
+@test "store and key files are written with the right modes and leave no temp behind" {
+  setup_store
+  printf 'fake' | store_add MODE_K
+  [ "$(stat -f %Lp "$(agsec_store_file)")" = 600 ]
+  [ "$(stat -f %Lp "$(agsec_sops_config)")" = 600 ]
+  [ "$(stat -f %Lp "$(age_key_cmd_path)")" = 700 ]
+  printf 'AGE-SECRET-KEY-FAKE' | kc_add
+  [ "$(stat -f %Lp "$(agsec_age_key_file)")" = 600 ]
+  [ "$(cat "$(agsec_age_key_file)")" = AGE-SECRET-KEY-FAKE ]
+  run find "$(agsec_config_dir)" -name '.secrets.env.*' -o -name '.agsec.*' -o -name '*.new' -o -name '.age.key.*'
+  [ -z "$output" ]
+}
