@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # cmd/list.sh — `list`: print secret NAMES + manifest.toml metadata (rotate_by). Never values.
-# Optional --format=json.
+# Optional --json.
 set -euo pipefail
 . "${AGENT_SECRETS_LIB:?run via bin/agent-secrets}/common.sh"
 case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render list; exit 0 ;; esac
@@ -9,12 +9,25 @@ case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render li
 # shellcheck source=lib/keychain.sh
 . "$AGENT_SECRETS_LIB/keychain.sh"
 
+# Scan first so a usage error after --json still comes out as the JSON error document.
+agsec_scan_json "$@"
 fmt=text
-case "${1:-}" in
-  ''|--format=text) fmt=text ;;
-  --format=json) fmt=json ;;
-  *) agsec_die "usage: agent-secrets list [--format=json]" 2 ;;
-esac
+# --format=json/--format=text are the old spellings, kept as hidden aliases. The space form
+# `--format json` was never accepted and still is not. Any JSON selector wins, as in agsec_scan_json.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --json) fmt=json ;;
+    --format=json) agsec_deprecated --format=json --json; fmt=json ;;
+    --format=text) agsec_deprecated --format=text "no flag (text is the default)" ;;
+    -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render list; exit 0 ;;
+    --) shift; [ "$#" -eq 0 ] || agsec_unexpected_argument list; break ;;
+    -*) agsec_unknown_option list "$1" ;;
+    *) agsec_unexpected_argument list ;;
+  esac
+  shift
+done
+agsec_parse_only_exit
+agsec_json_signal_traps
 
 man="$(agsec_manifest_toml)"
 # `|| true`: a name with no manifest row makes grep exit 1; under `set -euo pipefail` a bare
@@ -26,7 +39,8 @@ if [ ! -f "$(agsec_store_file)" ]; then
   exit 0
 fi
 
-names="$(store_names 2>/dev/null || true)"
+# A store we cannot decrypt is an error, never an empty list: stdout stays empty for `list | grep -q`.
+names="$(store_names)" || agsec_die_undecryptable
 
 if [ "$fmt" = json ]; then
   agsec_require jq   # jq is provisioned by the installer; clean diagnostic (not a raw 127) if it's absent
@@ -37,7 +51,7 @@ if [ "$fmt" = json ]; then
     done <<EOF
 $names
 EOF
-  } | jq -s '.'
+  } | jq -cs '.' | agsec_json_out
 else
   printf '%sSecrets (names only — values are never shown):%s\n' "$C_BOLD" "$C_RESET"
   while IFS= read -r n; do

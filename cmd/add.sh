@@ -11,11 +11,20 @@ case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render ad
 # shellcheck source=lib/ui.sh
 . "$AGENT_SECRETS_LIB/ui.sh"
 
-name="${1:-}"
+name="" npos=0
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render add; exit 0 ;;
+    -*) agsec_unknown_option add "$arg" ;;
+    *) [ "$npos" -eq 0 ] || agsec_unexpected_argument add   # a surplus token may be the value: never echoed
+       name="$arg"; npos=1 ;;
+  esac
+done
 [ -n "$name" ] || agsec_die "usage: agent-secrets add <NAME>" 2
 case "$name" in
   [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*) agsec_die "invalid name '$name' — use letters, digits, underscore (start with a letter/_)" 2;;
 esac
+agsec_parse_only_exit
 [ -f "$(agsec_store_file)" ] || agsec_die "no store yet — run: agent-secrets setup"
 
 # Defensive-consistency with setup/share (which refuse in-session): `add` is argv-safe — the value is read
@@ -26,12 +35,14 @@ if agsec_in_agent_session; then
   printf 'note: inside an agent session — pipe the value from a variable/file, never a literal in the command; for interactive entry, use a real terminal.\n' >&2
 fi
 
-if [ -t 0 ]; then
+# Stdin alone decides where the value comes from: with CI=1 or stderr redirected, a terminal stdin
+# must still get the hidden prompt, never an echoing plain read.
+if agsec_stdin_is_tty; then
   ui_read_secret "Value for $name" | store_add "$name"
 else
   store_add "$name"          # value already on the pipe
 fi
-agsec_ok "stored $name (value never shown or logged)"
+agsec_receipt "stored $name (value never shown or logged)"
 
 # Storing ANTHROPIC_API_KEY is what makes the Claude Code apiKeyHelper safe to wire (lib/wire.sh: a
 # wired helper with nothing to print breaks Claude Code's auth), so setup leaves it unwired until now
@@ -44,3 +55,6 @@ if [ "$name" = ANTHROPIC_API_KEY ]; then
   . "$AGENT_SECRETS_LIB/wire.sh"
   agsec_wire_apikeyhelper || true
 fi
+
+# The stored NAME is the only stdout, and only once everything above has succeeded.
+printf '%s\n' "$name"

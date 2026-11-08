@@ -7,12 +7,18 @@ set -euo pipefail
 . "${AGENT_SECRETS_LIB:?run via bin/agent-secrets}/common.sh"
 case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render pubkey; exit 0 ;; esac
 
-copy=0
-case "${1:-}" in
-  ''|-) : ;;
-  --copy) copy=1 ;;
-  *) agsec_die "usage: agent-secrets pubkey [--copy]" 2 ;;
-esac
+copy=0 dash_warned=0
+for arg in "$@"; do
+  case "$arg" in
+    --copy) copy=1 ;;
+    -) [ "$dash_warned" -eq 1 ] || agsec_warn "pubkey: '-' is ignored and will be rejected in a future release"
+       dash_warned=1 ;;
+    -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render pubkey; exit 0 ;;
+    -*) agsec_unknown_option pubkey "$arg" ;;
+    *) agsec_unexpected_argument pubkey ;;
+  esac
+done
+agsec_parse_only_exit
 
 pub="$(agsec_age_pub_file)"
 [ -s "$pub" ] || agsec_die "no public key yet — run: agent-secrets setup"
@@ -21,9 +27,10 @@ recip="$(tr -d '[:space:]' < "$pub")"
 [ -n "$recip" ] || agsec_die "no public key yet — run: agent-secrets setup"
 fp="$(printf '%s' "$recip" | agsec_digest)"
 
-printf '%sYour age recipient (public key — safe to share):%s\n' "$C_BOLD" "$C_RESET"
-printf '  %s\n' "$recip"
-printf '  %sfingerprint: %s%s\n' "$C_DIM" "$fp" "$C_RESET"
+# The recipient is the only stdout, so `pubkey | pbcopy` and `$(agent-secrets pubkey)` get just the key.
+printf '%sYour age recipient (public key — safe to share):%s\n' "$E_BOLD" "$E_RESET" >&2
+printf '%s\n' "$recip"
+agsec_plan "fingerprint: $fp"   # an ID, so never faint
 agsec_note "hand this to whoever will \`share\` a secret with you — it carries no secret."
 
 if [ "$copy" -eq 1 ]; then
