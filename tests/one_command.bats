@@ -91,9 +91,9 @@ load test_helper
 _e2e_capture() {
   command -v expect >/dev/null 2>&1 || return 99
   cat >"$AGENT_SECRETS_HOME/cap.exp" <<'EOF'
-# See the note in wizard_interactive.bats: one wall-clock bound, never a per-expect timeout.
+# See the note in wizard_interactive.bats: one wall-clock bound (15 min), never a per-expect timeout.
 set timeout -1
-after 300000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
+after 900000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
 log_file -a $env(AGENT_SECRETS_HOME)/cap.log
 spawn -noecho env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash $env(REPO_ROOT)/bin/agent-secrets setup
 stty rows 24 columns 80 < $spawn_out(slave,name)

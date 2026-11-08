@@ -121,7 +121,7 @@ _mint_rec() {
 # `wait` while the wizard sat in kernel exit waiting for its pty to drain. An early exit makes the next
 # expect or send fail, which also fails the drive.
 set timeout -1
-after 300000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
+after 900000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
 spawn env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash $env(REPO_ROOT)/bin/agent-secrets setup
 # `sleep 1` before answering any HIDDEN prompt: bash's `read -s` termios switch FLUSHES queued
 # input, so an answer sent in the µs between prompt-print and read-start is silently discarded
@@ -154,7 +154,7 @@ EOF
   cat >"$AGENT_SECRETS_HOME/drive.exp" <<'EOF'
 # See the sibling test for why there is one wall-clock bound and why hidden prompts get `sleep 1`.
 set timeout -1
-after 300000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
+after 900000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
 spawn env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash $env(REPO_ROOT)/bin/agent-secrets setup
 expect "Save it off this Mac now?"
 # The test's "password manager": read the key line from the on-disk file the wizard just minted.

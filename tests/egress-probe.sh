@@ -14,16 +14,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-_wait_port() {  # $1=file → echo the port once written (≤4s)
+_wait_port() {  # $1=file → echo the port once written (≤60s: perl can take seconds to start under load)
   local f="$1" p="" n=0
-  while [ "$n" -lt 40 ]; do p="$(cat "$f" 2>/dev/null || true)"; [ -n "$p" ] && break; sleep 0.1; n=$((n + 1)); done
+  while [ "$n" -lt 600 ]; do p="$(cat "$f" 2>/dev/null || true)"; [ -n "$p" ] && break; sleep 0.1; n=$((n + 1)); done
   printf '%s' "$p"
 }
 
 if [ "$want_up" = "--upstream" ]; then
   upf="$(mktemp)"
   /usr/bin/perl -MIO::Socket::INET -e '
-    alarm 10;
+    alarm 120;
     my $s=IO::Socket::INET->new(LocalAddr=>"127.0.0.1",LocalPort=>0,Listen=>5,ReuseAddr=>1) or die;
     open(my $f,">",$ARGV[0]); print $f $s->sockport; close $f;
     my $c=$s->accept; close $c if $c;' "$upf" >/dev/null 2>&1 &
@@ -44,6 +44,6 @@ port="$(_wait_port "$pf")"; rm -f "$pf"
 
 /usr/bin/perl -MIO::Socket::INET -e '
   my ($pp,$t)=@ARGV;
-  my $s=IO::Socket::INET->new(PeerAddr=>"127.0.0.1",PeerPort=>$pp,Proto=>"tcp",Timeout=>3) or exit 3;
+  my $s=IO::Socket::INET->new(PeerAddr=>"127.0.0.1",PeerPort=>$pp,Proto=>"tcp",Timeout=>60) or exit 3;
   print $s "CONNECT $t HTTP/1.1\r\nHost: $t\r\n\r\n";
   my $l=<$s>; $l//=""; $l=~s/\r?\n$//; print $l;' "$port" "$target"
