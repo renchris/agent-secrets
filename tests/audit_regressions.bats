@@ -2,6 +2,7 @@
 # tests/audit_regressions.bats — regression locks for the exhaustive audit-wave fixes.
 # Each test names the finding it guards. Synthetic-HOME isolated (never touches the real machine).
 load test_helper
+load mode_matrix
 
 _load_manifest() {
   export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
@@ -102,7 +103,7 @@ _load_manifest() {
   ( cd "$REPO_ROOT" && git archive --prefix="agent-secrets-v0.1.1/" HEAD -o "$MIRROR/agent-secrets-v0.1.1.tar.gz" )
   printf '%s  agent-secrets-v0.1.1.tar.gz\n' "$(shasum -a 256 "$MIRROR/agent-secrets-v0.1.1.tar.gz" | awk '{print $1}')" > "$MIRROR/agent-secrets-v0.1.1.tar.gz.sha256"
   printf 'i am a file\n' > "$AGENT_SECRETS_HOME/bin"                    # ~/bin is a regular FILE
-  run env AGSEC_MOCK_DL_DIR="$MIRROR" AGENT_SECRETS_BASE_URL="https://mirror.example" \
+  run mm_no_ctty env AGSEC_MOCK_DL_DIR="$MIRROR" AGENT_SECRETS_BASE_URL="https://mirror.example" \
     bash -c "bash '$REPO_ROOT/install.sh' </dev/null"
   rm -rf "$MIRROR"
   [ "$status" -ne 0 ]

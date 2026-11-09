@@ -3,6 +3,7 @@
 # Every assertion here corresponds to a defect MEASURED over a PTY on 2026-09-11 and recorded in
 # docs/plans/ONE_COMMAND_SETUP_V2.md. They exist so the claim cannot rot back.
 load test_helper
+load mode_matrix
 
 # ---- B3: a declared default must be the default, and must be visible --------------------------
 
@@ -42,7 +43,7 @@ load test_helper
 # ---- B2: the installer must not leak a bash error onto the consent screen ----------------------
 
 @test "B2: install.sh --dry-run renders the plan with no shell error and no unbound variable" {
-  run bash -c 'AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" bash "$REPO_ROOT/install.sh" --dry-run 2>&1'
+  run mm_no_ctty bash -c 'AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" bash "$REPO_ROOT/install.sh" --dry-run 2>&1'
   [ "$status" -eq 0 ]
   [[ "$output" != *"unbound variable"* ]] || return 1
   [[ "$output" != *"line "*": "* ]] || return 1

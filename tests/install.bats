@@ -25,7 +25,7 @@ load mode_matrix
   _build_mirror
   # No AGENT_SECRETS_BASE_URL → default production URL; install.sh on main carries an empty
   # EXPECTED_SHA256 → it must DIE rather than trust a same-origin sibling .sha256.
-  run bash -c "printf '\n' | AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$REPO_ROOT/install.sh'"
+  run mm_no_ctty bash -c "printf '\n' | AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$REPO_ROOT/install.sh'"
   [ "$status" -ne 0 ]
   [[ "$output" == *"no baked release digest"* ]] || return 1
   [ ! -d "$AGENT_SECRETS_HOME/.agent-secrets" ]   # nothing unpacked
@@ -35,7 +35,7 @@ load mode_matrix
   _build_mirror
   # Corrupt the served .sha256 so got != expect on the dev-mirror path (BASE_URL set).
   printf '%s  %s\n' "0000000000000000000000000000000000000000000000000000000000000000" "$PKG" >"$MIRROR/$PKG.sha256"
-  run bash -c "printf '\n' | AGENT_SECRETS_BASE_URL='https://mirror.example' AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$REPO_ROOT/install.sh'"
+  run mm_no_ctty bash -c "printf '\n' | AGENT_SECRETS_BASE_URL='https://mirror.example' AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$REPO_ROOT/install.sh'"
   [ "$status" -ne 0 ]
   [[ "$output" == *"SHA-256 mismatch"* ]] || return 1
   [ ! -d "$AGENT_SECRETS_HOME/.agent-secrets" ]
@@ -46,7 +46,7 @@ load mode_matrix
   # Simulate the released install.sh: bake the real tarball digest in (git-ref channel), production URL.
   local baked="$MIRROR/install.sh"
   sed "s/EXPECTED_SHA256=\"[a-f0-9]*\"/EXPECTED_SHA256=\"$BUILT_SHA\"/" "$REPO_ROOT/install.sh" >"$baked"
-  run bash -c "printf '\nfake-value\n' | AGENT_SECRETS_UNATTENDED=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked'"
+  run mm_no_ctty bash -c "printf '\nfake-value\n' | AGENT_SECRETS_UNATTENDED=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked'"
   [[ "$output" == *"SHA-256 verified"* ]] || return 1
   # Baked gate passed → the tool unpacked with the expected single-prefix layout, dispatcher symlinked.
   [ -f "$AGENT_SECRETS_HOME/.agent-secrets/lib/common.sh" ]
@@ -61,7 +61,7 @@ load mode_matrix
   # skip the re-exec and die on lib/manifest.sh's process substitution. Drive a REAL (non-dry-run)
   # install via /bin/sh: it must re-exec and run to completion (past manifest_init + symlink wiring),
   # not merely render --dry-run (which returns before manifest.sh is ever sourced — false confidence).
-  run bash -c "printf 'fake-value\n' | AGENT_SECRETS_UNATTENDED=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' /bin/sh '$baked'"
+  run mm_no_ctty bash -c "printf 'fake-value\n' | AGENT_SECRETS_UNATTENDED=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' /bin/sh '$baked'"
   [ "$status" -eq 0 ]
   [[ "$output" == *"SHA-256 verified"* ]] || return 1
   [ -L "$AGENT_SECRETS_HOME/bin/agent-secrets" ]                                 # wrappers wired ⇒ got past manifest.sh
@@ -101,7 +101,7 @@ load mode_matrix
   local baked="$MIRROR/install.sh"
   sed "s/EXPECTED_SHA256=\"[a-f0-9]*\"/EXPECTED_SHA256=\"$BUILT_SHA\"/" "$REPO_ROOT/install.sh" >"$baked"
   mkdir -p "$AGENT_SECRETS_HOME/.claude"
-  run bash -c "SEEDED_TOKEN=env-seed-install-3c1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked' --headless --import-env SEEDED_TOKEN --no-discovery </dev/null"
+  run mm_no_ctty bash -c "SEEDED_TOKEN=env-seed-install-3c1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked' --headless --import-env SEEDED_TOKEN --no-discovery </dev/null"
   [ "$status" -eq 0 ]
   [[ "$output" == *"imported SEEDED_TOKEN"* ]] || return 1
   [[ "$output" != *"env-seed-install-3c1"* ]] || return 1        # the value never surfaces
@@ -111,7 +111,7 @@ load mode_matrix
 }
 
 @test "install --dry-run renders the headless plan when there is no tty (no deferral sentence anywhere)" {
-  run bash -c "AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$REPO_ROOT/install.sh' --dry-run </dev/null"
+  run mm_no_ctty bash -c "AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$REPO_ROOT/install.sh' --dry-run </dev/null"
   [ "$status" -eq 0 ]
   [[ "$output" == *"setup --headless"* ]] || return 1
   [[ "$output" != *"real terminal"* ]] || return 1
@@ -124,7 +124,7 @@ load mode_matrix
   # The corporate failure: no age/sops/gum on PATH, no Homebrew, dep downloads blocked (age is not in the
   # mock mirror). deps_ensure aborts on the REQUIRED age AFTER the tool is unpacked. The cleanup trap must
   # remove ~/.agent-secrets so `agent-secrets uninstall` is never left with un-rollback-able residue.
-  run bash -c "PATH='$BATS_TEST_DIRNAME/mocks:/usr/bin:/bin:/usr/sbin:/sbin' AGSEC_MOCK_DL_DIR='$MIRROR' AGENT_SECRETS_DEPS_NO_BREW=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked' </dev/null"
+  run mm_no_ctty bash -c "PATH='$BATS_TEST_DIRNAME/mocks:/usr/bin:/bin:/usr/sbin:/sbin' AGSEC_MOCK_DL_DIR='$MIRROR' AGENT_SECRETS_DEPS_NO_BREW=1 AGENT_SECRETS_HOME='$AGENT_SECRETS_HOME' bash '$baked' </dev/null"
   [ "$status" -ne 0 ]                                           # required dep unresolved → abort
   [ ! -d "$AGENT_SECRETS_HOME/.agent-secrets" ]                 # trap removed the unpacked tool
   [ ! -e "$AGENT_SECRETS_HOME/bin/agent-secrets" ]             # nothing left wired
@@ -138,7 +138,7 @@ load mode_matrix
   # trap's stored command — expand-now single-quoting would abort with an unmatched-quote parse error and
   # leave residue. Force the required-dep failure and assert the tool is still removed.
   local qhome; qhome="$(mktemp -d)/o'brien"; mkdir -p "$qhome"
-  run env "PATH=$BATS_TEST_DIRNAME/mocks:/usr/bin:/bin:/usr/sbin:/sbin" "AGSEC_MOCK_DL_DIR=$MIRROR" \
+  run mm_no_ctty env "PATH=$BATS_TEST_DIRNAME/mocks:/usr/bin:/bin:/usr/sbin:/sbin" "AGSEC_MOCK_DL_DIR=$MIRROR" \
       AGENT_SECRETS_DEPS_NO_BREW=1 "AGENT_SECRETS_HOME=$qhome" bash "$baked" </dev/null
   [ "$status" -ne 0 ]
   [ ! -d "$qhome/.agent-secrets" ]                              # trap ran cleanly despite the quote
@@ -424,7 +424,7 @@ _expect_parse_ok() {
   local baked argv="$BATS_TEST_TMPDIR/setup.argv" envl="$BATS_TEST_TMPDIR/setup.env"
   baked="$(_bake_install)"
   # /bin/sh takes the guard's file case, which sets and exports the sentinel before the re-exec.
-  run env -u NO_COLOR AGSEC_SETUP_ARGV_LOG="$argv" AGSEC_SETUP_ENV_LOG="$envl" \
+  run mm_no_ctty env -u NO_COLOR AGSEC_SETUP_ARGV_LOG="$argv" AGSEC_SETUP_ENV_LOG="$envl" \
       /bin/sh "$baked" --discovery --no-color </dev/null
   [ "$status" -eq 0 ]
   [ "$(cat "$argv")" = setup ]                    # no --discovery forwarded on a no-TTY run
