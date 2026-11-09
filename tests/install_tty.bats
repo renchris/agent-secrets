@@ -15,7 +15,7 @@ _TTY=(env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TER
 
 # Prompt patterns, matched exactly.
 CONSENT='[Y/n] '
-OFFER='Enter = skip]: '
+OFFER='Enter = skip (default)]: '
 OFFER_TEXT='Make every coding agent'
 
 # _on PATTERN REPLY: queue one answer for the next _drive. An EOF before PATTERN fails the drive (91).
@@ -126,7 +126,7 @@ _line_of() { printf '%s\n' "$out" | grep -nF -- "$1" | head -1 | cut -d: -f1; }
   _drive_status 130 bash "$REPO_ROOT/install.sh" --import-env B10_SEED
   [[ "$out" == *"run 'agent-secrets setup --headless' at the end"*"; import from env: B10_SEED"* ]] || return 1
   [[ "$out" != *"the interactive wizard"* ]] || return 1
-  [[ "$out" != *"OFFER"* ]] || return 1
+  [[ "$out" != *"offer (opt-in)"* ]] || return 1
   _untouched
 }
 
@@ -184,7 +184,7 @@ _line_of() { printf '%s\n' "$out" | grep -nF -- "$1" | head -1 | cut -d: -f1; }
   mkdir -p "$AGENT_SECRETS_HOME/.claude"                        # a surface, so the offer has targets
   _on "$CONSENT" 'y\r'; _wizard; _on "$OFFER" '\r'
   _drive_status 0 bash "$BAKED"
-  [[ "$out" == *"run 'agent-secrets setup' at the end — the interactive wizard"* ]] || return 1
+  [[ "$out" == *"run 'agent-secrets setup' at the end: the interactive wizard"* ]] || return 1
   [[ "$out" == *"== agent-secrets setup =="* ]] || return 1    # the plan's wizard is the setup that ran
   [[ "$out" != *"(headless)"* ]] || return 1
   [[ "$out" == *"You're set up"* ]] || return 1
@@ -201,7 +201,7 @@ _line_of() { printf '%s\n' "$out" | grep -nF -- "$1" | head -1 | cut -d: -f1; }
   _on "$CONSENT" '\r'; _wizard; _on "$OFFER" 'y\r'
   _drive_status 0 bash "$BAKED"
   local done_at offer_at aware_at
-  done_at="$(_line_of "You're set up")"; offer_at="$(_line_of "$OFFER_TEXT")"; aware_at="$(_line_of '→ aware:')"
+  done_at="$(_line_of "You're set up")"; offer_at="$(_line_of "$OFFER_TEXT")"; aware_at="$(_line_of '-> aware:')"
   { [ -n "$done_at" ] && [ -n "$offer_at" ] && [ -n "$aware_at" ]; } || return 1
   { [ "$done_at" -lt "$offer_at" ] && [ "$offer_at" -lt "$aware_at" ]; } || return 1
   grep -q 'agent-secrets' "$AGENT_SECRETS_HOME/.claude/CLAUDE.md"
@@ -388,7 +388,7 @@ _parse_ok() {  # CMDLINE: run the printed command under the parse-only seam: exi
   for c in 40 80 120; do
     mm_run tty -- env COLUMNS="$c" bash "$REPO_ROOT/install.sh" --dry-run
     [ "$mm_status" -eq 0 ] || return 1
-    [[ "$mm_pty" == *"agent-secrets installer — this will:"* ]] || return 1
+    [[ "$mm_pty" == *"The agent-secrets installer will:"* ]] || return 1
     printf '%s\n' "$mm_pty" >"$BATS_TEST_TMPDIR/plan-$c.txt"
   done
 }

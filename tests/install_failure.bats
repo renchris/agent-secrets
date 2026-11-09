@@ -119,11 +119,11 @@ _group_gone() {
   [ "$status" -eq 0 ]
   [[ "$output" != *"fake-pw-placeholder"* ]] || return 1
   [[ "$output" == *"curl https://***@mirror.example/releases/download/"* ]] || return 1
-  [[ "$output" == *"Retrying automatically…"* ]] || return 1
+  [[ "$output" == *"Retrying automatically..."* ]] || return 1
   [[ "$output" != *"Will retry"* ]] || return 1
   # The real URL still reaches curl's argv: the mock serves by it.
   grep -q 'fake-pw-placeholder@mirror.example' "$log"
-  [[ "$output" == *"Tool installed at $AGENT_SECRETS_HOME/.agent-secrets. Changes recorded in $AGENT_SECRETS_HOME/.local/state/agent-secrets/install-manifest.json. Running setup…"* ]] || return 1
+  [[ "$output" == *"Tool installed at $AGENT_SECRETS_HOME/.agent-secrets. Changes recorded in $AGENT_SECRETS_HOME/.local/state/agent-secrets/install-manifest.json. Running setup..."* ]] || return 1
   [ "$(printf '%s\n' "$output" | tail -n 1)" = "Installed agent-secrets v$(cat "$REPO_ROOT/VERSION")." ]
   _tmp_empty
 }
@@ -297,4 +297,102 @@ _group_gone() {
   [ -L "$AGENT_SECRETS_HOME/bin/agent-secrets" ]
   [ "$(cat "$BATS_TEST_TMPDIR/setup.argv")" = setup ]
   _tmp_empty
+}
+
+# ---- error copy (C7.1): a short headline, then a runnable recovery --------------------------------
+
+# The command printed on the row after the row that is exactly $1, without its 4-space indent.
+_cmd_after() { printf '%s\n' "$output" | grep -A1 -xF -- "$1" | sed -n '2s/^    //p'; }
+
+@test "the digest refusal has a short headline and two recoveries that each pass the parse-only seam" {
+  local head cmd dl="$BATS_TEST_TMPDIR/dl"
+  run mm_no_ctty "${_CLEAN[@]}" bash "$REPO_ROOT/install.sh" </dev/null
+  [ "$status" -eq 1 ]
+  head="$(printf '%s\n' "$output" | grep '^ERROR: ')"
+  [ "${#head}" -le 100 ] || { echo "headline is ${#head} chars: $head"; return 1; }
+  [[ "$head" == *"no baked release digest"* ]] || return 1
+  cmd="$(_cmd_after 'Install the published release:')"
+  [[ "$cmd" == *"https://raw.githubusercontent.com/renchris/agent-secrets/v$(cat "$REPO_ROOT/VERSION")/install.sh"* ]] || return 1
+  mkdir -p "$dl"; cp "$REPO_ROOT/install.sh" "$dl/install.sh"
+  run env AGSEC_PARSE_ONLY=1 AGSEC_MOCK_DL_DIR="$dl" bash -c "$cmd" </dev/null
+  [ "$status" -eq 0 ] || { echo "release command: exit $status"; return 1; }
+  run mm_no_ctty "${_CLEAN[@]}" bash "$REPO_ROOT/install.sh" </dev/null
+  cmd="$(_cmd_after 'Or install from a mirror you control:')"
+  [ "$cmd" = 'AGENT_SECRETS_BASE_URL=<MIRROR_URL> bash install.sh' ]
+  cmd="${cmd//<MIRROR_URL>/https://mirror.example}"
+  run bash -c "cd \"\$1\" && AGSEC_PARSE_ONLY=1 $cmd" _ "$dl" </dev/null
+  [ "$status" -eq 0 ] || { echo "mirror command: exit $status"; return 1; }
+}
+
+@test "a SHA-256 mismatch names the file, URL, expected and actual digests, and the re-run, exit 1" {
+  local head
+  _tmpd
+  _build_mirror
+  printf '%s  %s\n' "$(printf '0%.0s' $(seq 64))" "$PKG" >"$MIRROR/$PKG.sha256"
+  _mirror_install
+  [ "$status" -eq 1 ]
+  head="$(printf '%s\n' "$output" | grep '^ERROR: ')"
+  [ "$head" = "ERROR: Couldn't verify $PKG. SHA-256 mismatch." ]
+  [ "${#head}" -le 100 ]
+  printf '%s\n' "$output" | grep -qxF "  URL:      https://mirror.example/releases/download/$TAG/$PKG"
+  printf '%s\n' "$output" | grep -qxF "  Expected: $(printf '0%.0s' $(seq 64))"
+  printf '%s\n' "$output" | grep -qxF "  Actual:   $BUILT_SHA"
+  [[ "$(_cmd_after 'Nothing was installed. Re-run the installer:')" == "bash "*"install.sh" ]] || return 1
+  [[ "$output" != *"Failed to install agent-secrets"* ]] || return 1   # one report, not two
+  _no_residue
+  _tmp_empty
+}
+
+@test "a path in the way gets a short headline, one mv per path and the re-run" {
+  local head
+  mkdir -p "$AGENT_SECRETS_HOME"; : >"$AGENT_SECRETS_HOME/bin"
+  run mm_no_ctty "${_CLEAN[@]}" bash "$REPO_ROOT/install.sh" </dev/null
+  [ "$status" -eq 1 ]
+  head="$(printf '%s\n' "$output" | grep '^ERROR: ')"
+  [ "${#head}" -le 100 ]
+  [[ "$head" != *"not a directory"* ]] || return 1          # the per-path rows carry it, counted elsewhere
+  printf '%s\n' "$output" | grep -qxF "    mv $(printf '%q %q' "$AGENT_SECRETS_HOME/bin" "$AGENT_SECRETS_HOME/bin.bak")"
+  [[ "$(_cmd_after 'Then re-run the installer:')" == "bash "*"install.sh" ]] || return 1
+}
+
+@test "a mis-cut release points end users at the issues page; git archive is only for a mirror" {
+  local x
+  _tmpd
+  _build_mirror
+  x="$BATS_TEST_TMPDIR/recut"; mkdir -p "$x/wrap"
+  tar -xzf "$MIRROR/$PKG" -C "$x/wrap"
+  ( cd "$x" && COPYFILE_DISABLE=1 tar -czf "$MIRROR/$PKG" wrap )
+  _mirror_digest
+  _mirror_install
+  [ "$status" -eq 1 ]
+  [ "$(_cmd_after 'Report it, so the release can be re-cut:')" = "https://github.com/renchris/agent-secrets/issues" ]
+  [[ "$(_cmd_after 'If you run a mirror, rebuild with:')" == "git archive --prefix=agent-secrets-$TAG/ "* ]] || return 1
+  [ "$(printf '%s\n' "$output" | grep -c 'git archive')" -eq 1 ]
+  [[ "$output" != *'${TAG}'* ]] || return 1
+}
+
+@test "a failed sh re-fetch prints ASCII only, and the download-then-bash recovery" {
+  run env -u AGSEC_REEXECED AGENT_SECRETS_INSTALL_URL='https://raw.example/install.sh' AGSEC_MOCK_CURL_EXIT=22 \
+      /bin/sh -s <"$REPO_ROOT/install.sh"
+  [ "$status" -eq 1 ]
+  [ -z "$(printf '%s\n' "$output" | LC_ALL=C grep '[^ -~]')" ]
+  [ "$(_cmd_after 'Download it, then run it with bash (not sh):')" = "curl -fsSLo install.sh https://raw.example/install.sh && bash install.sh" ]
+}
+
+# ---- F28 (C7.3): setup finished, but its health check found a ✗ row ------------------------------
+
+@test "when setup's health check finds a ✗ row, install says setup finished with problems and exits 1" {
+  _tmpd
+  _build_mirror
+  # A settings.json helper wired with no ANTHROPIC_API_KEY stored is a doctor ✗ (tests/headless.bats).
+  mkdir -p "$AGENT_SECRETS_HOME/.claude"
+  jq -n --arg h "$AGENT_SECRETS_HOME/bin/apiKeyHelper" '{apiKeyHelper:$h}' >"$AGENT_SECRETS_HOME/.claude/settings.json"
+  run mm_no_ctty "${_CLEAN[@]}" AGENT_SECRETS_BASE_URL=https://mirror.example AGSEC_MOCK_DL_DIR="$MIRROR" \
+      TMPDIR="$T" bash "$REPO_ROOT/install.sh" --no-discovery </dev/null
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"Setup finished with problems. Run: agent-secrets doctor"* ]] || return 1
+  printf '%s\n' "$output" | grep -qF "    $AGENT_SECRETS_HOME/bin/agent-secrets doctor"
+  [[ "$output" != *"Setup failed"* ]] || return 1
+  [[ "$output" != *"Installed agent-secrets"* ]] || return 1
+  grep -qx checked "$AGENT_SECRETS_HOME/.local/state/agent-secrets/wizard-state.json"
 }

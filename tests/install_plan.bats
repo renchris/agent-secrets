@@ -235,21 +235,21 @@ _plan_mode() { case "$1" in *"the interactive wizard"*) echo wizard ;; *"setup -
   [ "$mm_status" -eq 0 ]
   [ "$(_plan_mode "$mm_pty")" = wizard ]
   s="$(printf '%s\n' "$mm_pty" | grep -n "run 'agent-secrets setup' at the end" | cut -d: -f1)"
-  o="$(printf '%s\n' "$mm_pty" | grep -n 'after setup, OFFER (opt-in)' | cut -d: -f1)"
+  o="$(printf '%s\n' "$mm_pty" | grep -n 'after setup, offer (opt-in)' | cut -d: -f1)"
   { [ -n "$s" ] && [ -n "$o" ] && [ "$s" -lt "$o" ]; } || return 1
   mm_run tty -- bash "$REPO_ROOT/install.sh" --dry-run --discovery
   [[ "$mm_pty" == *"(--discovery, no offer)"* ]] || return 1
-  [[ "$mm_pty" != *"OFFER"* ]] || return 1
+  [[ "$mm_pty" != *"offer (opt-in)"* ]] || return 1
   # --import-env makes setup headless (and it writes the rules itself), so neither wizard nor offer.
   mm_run tty -- bash "$REPO_ROOT/install.sh" --dry-run --import-env SOME_NAME
   [ "$(_plan_mode "$mm_pty")" = headless ]
-  [[ "$mm_pty" != *"OFFER"* ]] || return 1
+  [[ "$mm_pty" != *"offer (opt-in)"* ]] || return 1
   mm_run tty -- bash "$REPO_ROOT/install.sh" --dry-run --no-discovery
   [[ "$mm_pty" == *"skip the machine-wide agent rules (--no-discovery)"* ]] || return 1
-  [[ "$mm_pty" != *"OFFER"* ]] || return 1
+  [[ "$mm_pty" != *"offer (opt-in)"* ]] || return 1
   mm_run tty -- bash "$REPO_ROOT/install.sh" --dry-run --headless
   [ "$(_plan_mode "$mm_pty")" = headless ]
-  [[ "$mm_pty" != *"OFFER"* ]] || return 1
+  [[ "$mm_pty" != *"offer (opt-in)"* ]] || return 1
 }
 
 @test "install's plan announces the setup mode setup_resolve_mode really picks, in every mode" {
@@ -376,4 +376,46 @@ _plan_mode() { case "$1" in *"the interactive wizard"*) echo wizard ;; *"setup -
   [[ "$mm_pty" == *"(unattended: proceeding with the plan above"* ]] || return 1
   [[ "$mm_pty" != *"$seed"* ]] || return 1
   [ "$(env AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" "$AGENT_SECRETS_HOME/bin/apiKeyHelper" 2>/dev/null)" = "$seed" ]
+}
+
+# ---- presentation (C7.2) ------------------------------------------------------------------------
+
+# The lines of TEXT holding a byte outside printable ASCII once the test home (user data) is cut out.
+_non_ascii() { printf '%s\n' "${1//"$AGENT_SECRETS_HOME"/}" | LC_ALL=C grep -n '[^ -~]' || true; }
+# A dry run on a terminal (a pty), with neither plain-output variable inherited from test_helper.
+_dry_tty() { mm_run tty -- env -u AGENT_SECRETS_PLAIN -u NO_COLOR "$@" bash "$REPO_ROOT/install.sh" --dry-run; }
+
+@test "plain output is ASCII apart from user paths, puts rows at column 0 and calls them agent rules" {
+  DRY_ENV=(TERM=dumb)
+  _dry
+  [ "$status" -eq 0 ]
+  [ -z "$(_non_ascii "$output")" ] || { _non_ascii "$output"; return 1; }
+  [[ "$output" == *"Showing the install plan. Nothing will change."* ]] || return 1
+  printf '%s\n' "$output" | grep -q '^- install the tool under '
+  [[ "$output" == *"add agent rules so agents in every repo"* ]] || return 1
+  [[ "$output" != *"agent-secrets rules"* ]] || return 1
+}
+
+@test "on a terminal NO_COLOR alone, AGENT_SECRETS_PLAIN, --no-color and TERM=dumb each select plain glyphs" {
+  local v
+  for v in NO_COLOR=1 AGENT_SECRETS_PLAIN=1 TERM=dumb; do
+    _dry_tty "$v"
+    [ "$mm_status" -eq 0 ] || { echo "$v: exit $mm_status"; return 1; }
+    [ -z "$(_non_ascii "$mm_pty")" ] || { echo "$v:"; _non_ascii "$mm_pty"; return 1; }
+  done
+  mm_run tty -- env -u AGENT_SECRETS_PLAIN -u NO_COLOR bash "$REPO_ROOT/install.sh" --dry-run --no-color
+  [ "$mm_status" -eq 0 ]
+  [ -z "$(_non_ascii "$mm_pty")" ] || { _non_ascii "$mm_pty"; return 1; }
+}
+
+@test "on a terminal the plan uses the rich glyphs and wraps at COLUMNS=80 with a 4-space continuation" {
+  local long
+  _dry_tty COLUMNS=80
+  [ "$mm_status" -eq 0 ]
+  [[ "$mm_pty" == *"  • install the tool under"* ]] || return 1
+  printf '%s\n' "$mm_pty" | grep -q '^    [^ ]'                  # a continuation row
+  # Count characters, not bytes: each glyph is one column. A row may pass 80 only as one unbreakable word.
+  long="$(printf '%s\n' "$mm_pty" | sed 's/•/*/g; s/…/./g; s/→/>/g; s/│/|/g; s/·/./g' \
+          | awk 'length($0) > 80 && NF > 1')"
+  [ -z "$long" ] || { printf 'over 80 columns:\n%s\n' "$long"; return 1; }
 }

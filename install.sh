@@ -125,7 +125,12 @@ if [ -z "${AGSEC_REEXECED:-}" ] && { [ -z "${BASH_VERSION:-}" ] || shopt -qo pos
   # No --retry on this `$(curl …)` capture: a retried stall after a partial body can exit 0 with the
   # partial text captured, and that text would reach `exec bash -c`.
   _agsec_src="$(curl -fsSL "$_agsec_self_url")" || _agsec_src=""
-  [ -n "$_agsec_src" ] || { printf 'ERROR: could not re-fetch install.sh to re-exec under bash. Re-run the README one-liner with bash (not sh) — it curl-pipes this URL: %s\n' "$(_agsec_show_url "$_agsec_self_url")" >&2; exit 1; }
+  # ASCII only: this runs before any helper, so it cannot pick glyphs.
+  if [ -z "$_agsec_src" ]; then
+    _agsec_u="$(_agsec_show_url "$_agsec_self_url")"
+    printf 'ERROR: could not re-fetch install.sh to re-exec under bash.\n  URL: %s\n\nDownload it, then run it with bash (not sh):\n    curl -fsSLo install.sh %s && bash install.sh\n' "$_agsec_u" "$_agsec_u" >&2
+    exit 1
+  fi
   exec bash -c "$_agsec_src" bash "$@"
 fi
 # The sentinel has done its job (the re-exec'd bash skipped the guard). Exported, it would reach setup and
@@ -145,6 +150,18 @@ _AGSEC_REPORTED=0; _AGSEC_SIGNALED=0; _AGSEC_RERUN=""; _AGSEC_TOOL_CMD=""; _AGSE
 # A subshell per write: a closed stderr (`… 2>&1 | head -1`) then kills only the subshell, so the default
 # SIGPIPE disposition, which skips the EXIT trap, never reaches this shell or its children.
 _agsec_err() { ( printf '%s\n' "$@" >&2 ) || true; }
+# Glyphs (C7.2). Rich only when stderr is a terminal and nothing asks for plain output: AGENT_SECRETS_PLAIN,
+# NO_COLOR (--no-color sets it) or TERM=dumb. NO_COLOR alone selects plain glyphs, the contract AGENTS.md
+# and lib/help.sh document (D26, option A). Every glyph goes to stderr, so the test is on fd 2. Inlined, as
+# _agent_session is: lib/common.sh is not unpacked yet. Only templates use these; user data keeps its bytes.
+_agsec_glyphs() {
+  if [ -t 2 ] && [ -z "${AGENT_SECRETS_PLAIN:-}" ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
+    _G_RICH=1 _G_ARROW='→' _G_DOT='•' _G_BULLET='  • ' _G_SEP=' · ' _G_BAR='│' _G_ELL='…' _G_OK='✓ '
+  else
+    _G_RICH=0 _G_ARROW='->' _G_DOT='-' _G_BULLET='- ' _G_SEP=', ' _G_BAR='|' _G_ELL='...' _G_OK=''
+  fi
+}
+_agsec_glyphs
 _agsec_on_signal() {
   _AGSEC_SIGNALED=1
   case "$_AGSEC_PHASE" in
@@ -221,10 +238,16 @@ main() {
 
   # Every write is a subshell (see _agsec_err): a closed stderr must never kill this shell mid-install.
   _say()  { ( printf '%s\n' "$*" >&2 ) || true; }
-  _step() { ( printf '  → %s\n' "$*" >&2 ) || true; }
+  # A step: "  → cmd" on a terminal, the bare command at column 0 in plain output.
+  _step() {
+    if [ "$_G_RICH" -eq 1 ]; then ( printf '  %s %s\n' "$_G_ARROW" "$*" >&2 ) || true
+    else ( printf '%s\n' "$*" >&2 ) || true; fi
+  }
   # shellcheck disable=SC2059  # a printf wrapper: the callers pass literal formats
   _eprintf() { ( printf "$@" >&2 ) || true; }
-  _die()  { ( printf 'ERROR: %s\n' "$*" >&2 ) || true; exit 1; }
+  # _die HEADLINE [LINE...]: the headline after the ERROR: prefix (kept until D6 is answered), then each
+  # LINE as given: detail rows, a blank line, an instruction ending in ":", the command indented 4 (C7.1).
+  _die()  { ( printf 'ERROR: %s\n' "$1" >&2; shift; [ "$#" -eq 0 ] || printf '%s\n' "$@" >&2 ) || true; exit 1; }
   _run()  { _step "$*"; "$@"; }
   _debug() { if [ "$DEBUG" -eq 1 ]; then ( printf 'debug: %s\n' "$*" >&2 ) || true; fi; }
 
@@ -242,6 +265,33 @@ main() {
     printf 'f="$(mktemp "${TMPDIR:-/tmp}/agent-secrets-install.XXXXXX")" && curl -fsSL %s -o "$f" && %sbash "$f"\n' \
       "$(_agsec_show_url "${AGENT_SECRETS_INSTALL_URL:-https://raw.githubusercontent.com/${_agsec_repo}/${AGSEC_PINNED_TAG}/install.sh}")" "$base"
   }
+  # The published release's own installer (it carries the baked digest), as a download-then-run command.
+  _release_cmd() {
+    # shellcheck disable=SC2016  # printed for the reader to run, not expanded here
+    printf 'f="$(mktemp "${TMPDIR:-/tmp}/agent-secrets-install.XXXXXX")" && curl -fsSL %s -o "$f" && bash "$f"\n' \
+      "https://raw.githubusercontent.com/${_agsec_repo}/${AGSEC_PINNED_TAG}/install.sh"
+  }
+  # _wrap PREFIX CONT TEXT: on a terminal, TEXT after PREFIX wrapped at ${COLUMNS:-80}, with CONT before each
+  # further piece; a word longer than the width (a long path) stays whole. Plain output keeps each row on
+  # one physical row, so a log or a grep sees it whole.
+  _wrap() {
+    local prefix="$1" cont="$2" width="${COLUMNS:-80}" out w n=0
+    shift 2
+    if [ "$_G_RICH" -eq 0 ]; then _say "$prefix$*"; return 0; fi
+    case "$width" in ''|*[!0-9]*) width=80 ;; esac
+    local -a words=()
+    read -r -a words <<<"$*" || true
+    out="$prefix"
+    for w in ${words[@]+"${words[@]}"}; do
+      if [ "$n" -gt 0 ] && [ $(( ${#out} + 1 + ${#w} )) -gt "$width" ]; then
+        _say "$out"; out="$cont"; n=0
+      fi
+      if [ "$n" -eq 0 ]; then out="$out$w"; else out="$out $w"; fi
+      n=$((n + 1))
+    done
+    _say "$out"
+  }
+  _row() { _wrap "$_G_BULLET" "    " "$*"; }
   # A usage error exits 2 (the repo's convention: cmd/setup.sh, cmd/doctor.sh, lib/help.sh) and never
   # echoes a value. The parse runs before any EXIT trap is armed, so nothing can overwrite the 2.
   _usage_die() { printf 'ERROR: %s\n\nSee the options:\n    %s --help\n' "$*" "$(_self_cmd)" >&2; exit 2; }
@@ -322,6 +372,7 @@ main() {
   [ "$_f_dry" != 1 ] || DRY_RUN=1
   [ "$_f_headless" != 1 ] || HEADLESS=1
   case "$_f_disc" in 1) DISCOVERY_YES=1 ;; 0) NO_DISCOVERY=1 ;; esac
+  _agsec_glyphs   # again: --no-color has set NO_COLOR
   # Validated on the FINAL value (last one wins), before the plan can print it. Glob characters are
   # refused before the unquoted word-split, so the verdict never depends on what the cwd holds. Spaces
   # stay valid as separators, because setup's own word-split accepts them. The value is never echoed.
@@ -423,80 +474,82 @@ main() {
     else
       claude="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; codex="${CODEX_HOME:-$HOME/.codex}"
     fi
-    _say "      $claude/CLAUDE.md   (Claude Code and VS Code Copilot, if either is present)"
-    [ "$claude" = "$HOME_DIR/.claude" ] || _say "      $HOME_DIR/.claude/CLAUDE.md   (the copy VS Code Copilot reads)"
-    _say "      $codex/AGENTS.md   $gate"
-    _say "      $HOME_DIR/.gemini/GEMINI.md   $gate"
-    _say "      $HOME_DIR/.config/zed/AGENTS.md   $gate"
-    _say "      $HOME_DIR/.agents/AGENTS.md   $gate"
-    _say "      (nothing is written on an org/MDM-managed machine: its managed layer owns these rules)"
+    local c="        "
+    _wrap "      " "$c" "$claude/CLAUDE.md   (Claude Code and VS Code Copilot, if either is present)"
+    [ "$claude" = "$HOME_DIR/.claude" ] || _wrap "      " "$c" "$HOME_DIR/.claude/CLAUDE.md   (the copy VS Code Copilot reads)"
+    _wrap "      " "$c" "$codex/AGENTS.md   $gate"
+    _wrap "      " "$c" "$HOME_DIR/.gemini/GEMINI.md   $gate"
+    _wrap "      " "$c" "$HOME_DIR/.config/zed/AGENTS.md   $gate"
+    _wrap "      " "$c" "$HOME_DIR/.agents/AGENTS.md   $gate"
+    _wrap "      " "$c" "(nothing is written on an org/MDM-managed machine: its managed layer owns these rules)"
   }
   _render_plan() {
     local f old replacing=0 at=""
     _say ""
-    _say "agent-secrets installer — this will:"
-    if [ -n "${AGENT_SECRETS_BASE_URL:-}" ]; then _say "  Source: $(_agsec_show_url "$BASE_URL") (AGENT_SECRETS_BASE_URL)"; fi
-    if [ -n "${AGENT_SECRETS_HOME:-}" ]; then _say "  Source: $HOME_DIR (AGENT_SECRETS_HOME)"; fi
+    _say "The agent-secrets installer will:"
+    if [ -n "${AGENT_SECRETS_BASE_URL:-}" ]; then _wrap "  " "    " "Source: $(_agsec_show_url "$BASE_URL") (AGENT_SECRETS_BASE_URL)"; fi
+    if [ -n "${AGENT_SECRETS_HOME:-}" ]; then _wrap "  " "    " "Source: $HOME_DIR (AGENT_SECRETS_HOME)"; fi
     if [ -f "$INSTALL_DIR/VERSION" ]; then
       replacing=1
       old="$(_installed_version)"
       if [ "$old" = unknown ]; then
-        _say "  agent-secrets is already installed at $INSTALL_DIR (version unknown). Replacing it with $PINNED_TAG."
+        _wrap "  " "    " "agent-secrets is already installed at $INSTALL_DIR (version unknown). Replacing it with $PINNED_TAG."
       else
         case "$(_ver_cmp "$old" "${PINNED_TAG#v}")" in
-          eq) _say "  agent-secrets $PINNED_TAG is already installed. Re-applying it to repair dependencies, wiring and agent rules." ;;
+          eq) _wrap "  " "    " "agent-secrets $PINNED_TAG is already installed. Re-applying it to repair dependencies, wiring and agent rules." ;;
           lt) _say "  Upgrading agent-secrets v$old to $PINNED_TAG." ;;
           gt) _say "  Warning: this downgrades agent-secrets v$old to $PINNED_TAG." ;;
         esac
       fi
     fi
-    _say "  • ensure age, sops, jq (reuse yours · 'brew install' of any not on PATH when Homebrew is present · else pinned, SHA-256-verified downloads — no sudo)"
+    _row "ensure age, sops and jq: reuse yours, else 'brew install' any missing one when Homebrew is present, else download pinned, SHA-256-verified binaries (no sudo)"
     # Trust keys on the baked digest, not on the mirror: a baked digest is verified even on a mirror.
     if [ -n "$EXPECTED_SHA256" ]; then
-      _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG, SHA-256 verified)"
-      _say "  • verify the download against the baked SHA-256 digest"
+      _row "install the tool under $INSTALL_DIR   (pinned $PINNED_TAG, SHA-256 verified)"
+      _row "verify the download against the baked SHA-256 digest"
     elif [ -n "${AGENT_SECRETS_BASE_URL:-}" ]; then
-      _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG; checked only against the mirror's own .sha256)"
-      _say "  • verify against the mirror's .sha256 (transport integrity only, not tamper evidence)"
+      _row "install the tool under $INSTALL_DIR   (pinned $PINNED_TAG; checked only against the mirror's own .sha256)"
+      _row "verify against the mirror's .sha256 (transport integrity only, not tamper evidence)"
     else
-      _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG)"
-      _say "  • REFUSE: this install.sh has no baked release digest; install from a published release tag"
+      _row "install the tool under $INSTALL_DIR   (pinned $PINNED_TAG)"
+      _row "REFUSE: this install.sh has no baked release digest; install from a published release tag"
     fi
-    _say "  • symlink the command + wrappers into $BIN_DIR   (agent-secrets, claude-agent, cursor-agent, apiKeyHelper)"
+    _row "symlink the command + wrappers into $BIN_DIR   (agent-secrets, claude-agent, cursor-agent, apiKeyHelper)"
     for f in agent-secrets claude-agent cursor-agent apiKeyHelper; do
       _target_is_foreign "$f" || continue
       if [ -L "$BIN_DIR/$f" ]; then
-        _say "  • replace your existing symlink $BIN_DIR/$f (backed up to $STATE_DIR/$f.preinstall.bak; uninstall restores it)"
+        _row "replace your existing symlink $BIN_DIR/$f (backed up to $STATE_DIR/$f.preinstall.bak; uninstall restores it)"
       elif [ -f "$BIN_DIR/$f" ]; then
-        _say "  • replace your existing $BIN_DIR/$f (backed up to $STATE_DIR/$f.preinstall.bak; uninstall restores it)"
+        _row "replace your existing $BIN_DIR/$f (backed up to $STATE_DIR/$f.preinstall.bak; uninstall restores it)"
       fi
     done
-    _say "  • add a marker-delimited PATH block to $RC_FILE${BASH_RC_FILE:+ (and $BASH_RC_FILE — your login shell is bash)}"
-    _say "  • install a weekly launchd smoke job ($SMOKE_LABEL)"
+    _row "add a marker-delimited PATH block to $RC_FILE${BASH_RC_FILE:+ (and to $BASH_RC_FILE, because your login shell is bash)}"
+    _row "install a weekly launchd smoke job ($SMOKE_LABEL)"
     # lib/wire.sh writes under the install home and ignores CLAUDE_CONFIG_DIR, so name that path.
     [ "$HOME_DIR" = "$HOME" ] || at=" (at $HOME_DIR/.claude/settings.json)"
-    _say "  • (via 'agent-secrets setup') back up an existing ~/.claude/settings.json$at as the revert point for its apiKeyHelper edit (wired only once ANTHROPIC_API_KEY is stored)"
-    _say "  • record each file, PATH block, launchd job and settings.json edit in $STATE_DIR/install-manifest.json ('agent-secrets uninstall' rolls back recorded entries; Homebrew-installed tools are not recorded)"
+    _row "back up an existing ~/.claude/settings.json$at as the revert point for setup's apiKeyHelper edit"
+    _row "wire apiKeyHelper into that settings.json only once ANTHROPIC_API_KEY is stored"
+    _row "record each file, PATH block, launchd job and settings.json edit in $STATE_DIR/install-manifest.json ('agent-secrets uninstall' rolls back recorded entries; Homebrew-installed tools are not recorded)"
     if _wizard_path; then
-      _say "  • run 'agent-secrets setup' at the end — the interactive wizard (keys, first secret, wiring)"
+      _row "run 'agent-secrets setup' at the end: the interactive wizard (keys, first secret, wiring)"
     else
-      _say "  • run 'agent-secrets setup --headless' at the end — real keys, Keychain custody, wiring, NO prompts and no secret on any output${IMPORT_ENV:+; import from env: $IMPORT_ENV}"
+      _row "run 'agent-secrets setup --headless' at the end: real keys, Keychain custody, wiring, no prompts and no secret on any output${IMPORT_ENV:+; import from env: $IMPORT_ENV}"
     fi
     if [ "$NO_DISCOVERY" -eq 1 ]; then
-      _say "  • skip the machine-wide agent rules (--no-discovery)"
+      _row "skip the machine-wide agent rules (--no-discovery)"
     elif _wizard_path && [ "$DISCOVERY_YES" -eq 1 ]; then
-      _say "  • after setup, add agent-secrets rules so agents in every repo know to use it: advisory; recorded in the manifest (--discovery, no offer)"
+      _row "after setup, add agent rules so agents in every repo know to use it: advisory; recorded in the manifest (--discovery, no offer)"
       _plan_discovery_paths
     elif _wizard_path; then
-      _say "  • after setup, OFFER (opt-in) to add agent-secrets rules so agents in every repo know to use it, to:"
+      _row "after setup, offer (opt-in) to add agent rules so agents in every repo know to use it, to:"
       _plan_discovery_paths
     else
-      _say "  • add agent-secrets rules so agents in every repo know to use it: advisory; recorded in the manifest; --no-discovery skips"
+      _row "add agent rules so agents in every repo know to use it: advisory; recorded in the manifest; --no-discovery skips"
       _plan_discovery_paths
     fi
     if [ "$replacing" -eq 1 ]; then
       _say ""
-      _say "Some effects cannot be undone: the existing $INSTALL_DIR is replaced, with no backup."
+      _wrap "" "    " "Some effects cannot be undone: the existing $INSTALL_DIR is replaced, with no backup."
     fi
     _say ""
   }
@@ -521,38 +574,44 @@ main() {
   # because `[ -e ]` is false beneath a regular-file parent. The rc files take the inverse test: only a
   # directory there is a conflict (a symlinked ~/.zshenv is healthy).
   _preflight_dirs() {
-    local d n=0 list=""
+    local d n=0 list="" mv=""
     for d in "$HOME_DIR/.local" "$HOME_DIR/.local/state" "$STATE_DIR" "$HOME_DIR/Library" \
              "$HOME_DIR/Library/LaunchAgents" "$INSTALL_DIR" "$BIN_DIR"; do
       if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then
         n=$((n + 1))
-        if [ "$n" -le 5 ]; then list="$list  $d already exists and is not a directory"$'\n'; fi
+        if [ "$n" -le 5 ]; then
+          list="$list  $d already exists and is not a directory"$'\n'
+          mv="$mv    mv $(printf '%q %q' "$d" "$d.bak")"$'\n'
+        fi
       fi
     done
     for d in "$RC_FILE" ${BASH_RC_FILE:+"$BASH_RC_FILE"}; do
       if [ -d "$d" ]; then
         n=$((n + 1))
-        if [ "$n" -le 5 ]; then list="$list  $d is a directory, where the PATH block needs a file"$'\n'; fi
+        if [ "$n" -le 5 ]; then
+          list="$list  $d is a directory, where the PATH block needs a file"$'\n'
+          mv="$mv    mv $(printf '%q %q' "$d" "$d.bak")"$'\n'
+        fi
       fi
     done
     if [ "$n" -gt 0 ]; then
-      _eprintf 'ERROR: %s path(s) are in the way of the install:\n%s' "$n" "$list"
-      if [ "$n" -gt 5 ]; then _eprintf '  …and %s more\n' "$((n - 5))"; fi
-      _eprintf 'Move each aside, then re-run the installer.\n'
+      _eprintf "ERROR: Can't install agent-secrets: %s path(s) are in the way.\n%s" "$n" "$list"
+      if [ "$n" -gt 5 ]; then _eprintf '  %sand %s more\n' "$_G_ELL" "$((n - 5))"; fi
+      _eprintf '\nMove each aside:\n%sThen re-run the installer:\n    %s\n' "$mv" "$(_self_cmd)$(_rerun_flags)"
       exit 1
     fi
   }
 
   # --- consent gate — FIRST screen, nothing mutates before it ------------------
   if [ "$DRY_RUN" -eq 1 ]; then
-    _say "DRY RUN — showing the plan, changing nothing."
+    _say "Showing the install plan. Nothing will change."
     _render_plan
     _preflight_dirs
     # Only the local checks ran: the download and the dependency steps need network and writes.
     if [ -z "$EXPECTED_SHA256" ] && [ -z "${AGENT_SECRETS_BASE_URL:-}" ]; then
       _say "Install from a published release tag, or set AGENT_SECRETS_BASE_URL."
     else
-      _say "Local checks passed. To install with this plan (download and dependency steps were not checked):"
+      _wrap "" "    " "Local checks passed. To install with this plan (download and dependency steps were not checked):"
       _say "    $(_self_cmd)$(_rerun_flags)"
     fi
     return 0
@@ -589,7 +648,11 @@ main() {
   # Refuse before any download: on the default production URL a missing baked digest can never pass the
   # SHA-256 gate below. After consent (the plan is the first screen) and after the dry-run return.
   if [ -z "$EXPECTED_SHA256" ] && [ -z "${AGENT_SECRETS_BASE_URL:-}" ]; then
-    _die "this install.sh carries no baked release digest (EXPECTED_SHA256 empty) — it was not cut by the release runbook. Refusing a same-origin .sha256 fallback on the default production URL (it cannot detect a swapped release asset). Install from a published release tag, or set AGENT_SECRETS_BASE_URL to use a dev/mirror."
+    _die "Can't verify this installer. It carries no baked release digest." \
+      "  Why: EXPECTED_SHA256 is empty, so this copy was not cut by the release runbook, and a .sha256 from" \
+      "       the same origin cannot detect a swapped release asset." \
+      "" "Install the published release:" "    $(_release_cmd)" \
+      "Or install from a mirror you control:" "    AGENT_SECRETS_BASE_URL=<MIRROR_URL> bash install.sh"
   fi
 
   # --- toolchain: resolved AFTER unpack, from the tool's own lib/deps.sh -----------------------------
@@ -619,7 +682,7 @@ main() {
     local line="" last="" n=0
     while IFS= read -r line || [ -n "$line" ]; do
       case "$line" in
-        *"Will retry"*) n=$((n + 1)); _say "Retrying automatically…" ;;
+        *"Will retry"*) n=$((n + 1)); _say "Retrying automatically$_G_ELL" ;;
         *) _say "$line" ;;
       esac
       last="$line"; line=""
@@ -653,7 +716,7 @@ main() {
   trap '_agsec_on_signal 129' HUP
   local pkg="$work/agent-secrets-${PINNED_TAG}.tar.gz"
   local url="$BASE_URL/releases/download/${PINNED_TAG}/agent-secrets-${PINNED_TAG}.tar.gz"
-  _say "Downloading ${PINNED_TAG}…"
+  _say "Downloading ${PINNED_TAG}$_G_ELL"
   _fetch "$url" "$pkg" || _fetch_die "$url" "$?"
   _AGSEC_PHASE=verify
   local got expect
@@ -670,7 +733,13 @@ main() {
     _AGSEC_PHASE=verify
     expect="$(awk '{print $1}' "$pkg.sha256")"; _debug "digest: the mirror's sibling .sha256 (AGENT_SECRETS_BASE_URL is set)"
   fi
-  [ "$got" = "$expect" ] || _die "SHA-256 mismatch — refusing to run the downloaded artifact"
+  if [ "$got" != "$expect" ]; then
+    _AGSEC_REPORTED=1   # this report carries its own recovery; the EXIT handler still cleans up
+    _die "Couldn't verify $(basename "$pkg"). SHA-256 mismatch." \
+      "  URL:      $(_agsec_show_url "$url")" "  Expected: $expect" "  Actual:   $got" \
+      "" "Nothing was installed. Re-run the installer:" "    $_AGSEC_RERUN" \
+      "If it fails the same way again, report it:" "    https://github.com/renchris/agent-secrets/issues"
+  fi
   if [ -n "$EXPECTED_SHA256" ]; then
     _say "SHA-256 verified."
   else
@@ -742,7 +811,7 @@ main() {
       exit 1
     fi
     if [ "$said" -eq 0 ]; then
-      _say "Another agent-secrets install is running (pid ${holder:-unknown}); waiting up to 60 s for it to finish…"
+      _say "Another agent-secrets install is running (pid ${holder:-unknown}); waiting up to 60 s for it to finish$_G_ELL"
       said=1
     fi
     sleep 1
@@ -778,7 +847,11 @@ main() {
   # the cleanup trap is disarmed → half-wired install with no rollback. Checked on staging, so a bad
   # tarball never touches a live install.
   { [ -f "$staging/lib/common.sh" ] && [ -f "$staging/bin/agent-secrets" ]; } \
-    || _die "unexpected tarball layout (need one top-level prefix dir with bin/ + lib/) — re-cut with: git archive --prefix=agent-secrets-\${TAG}/ \${TAG}"
+    || _die "This release is mis-cut (unexpected tarball layout)." \
+      "  Expected: one top-level directory holding bin/ and lib/" \
+      "" "Report it, so the release can be re-cut:" "    https://github.com/renchris/agent-secrets/issues" \
+      "If you run a mirror, rebuild with:" \
+      "    git archive --prefix=agent-secrets-$PINNED_TAG/ -o agent-secrets-$PINNED_TAG.tar.gz $PINNED_TAG"
   # The vendored jq, age and sops live in the tool dir (lib/deps.sh), not in the tarball: carry them over.
   if [ -d "$INSTALL_DIR/vendor" ] && [ ! -e "$staging/vendor" ]; then
     _run cp -Rp "$INSTALL_DIR/vendor" "$staging/vendor" \
@@ -926,7 +999,7 @@ main() {
   if [ "$NO_DISCOVERY" -eq 1 ]; then setup_args+=(--no-discovery); fi
   local not_loaded=""
   [ "$smoke_loaded" -eq 1 ] || not_loaded=" (weekly smoke job not loaded)"
-  _say "Tool installed at $INSTALL_DIR$not_loaded. Changes recorded in $(agsec_install_manifest). Running setup…"
+  _say "Tool installed at $INSTALL_DIR$not_loaded. Changes recorded in $(agsec_install_manifest). Running setup$_G_ELL"
   _debug "setup flags: ${setup_args[*]+${setup_args[*]}}"
   printf -v _AGSEC_BIN_CMD '%q' "$BIN_DIR/agent-secrets"
   _AGSEC_PHASE=setup
@@ -936,6 +1009,19 @@ main() {
     _AGSEC_REPORTED=1
     case "$setup_rc" in
       129|130|143) _agsec_err "Installed; setup was interrupted. Re-run it:" "    $_AGSEC_BIN_CMD setup" ;;
+      1)
+        # Setup ran to the end but its health check found a ✗ row: it records `checked`, never `done`
+        # (cmd/setup.sh, F28). Any other exit 1 is a step that failed.
+        if [ "$(cat "$(agsec_wizard_state)" 2>/dev/null)" = checked ]; then
+          _say "Setup finished with problems. Run: agent-secrets doctor"
+          _say "    $_AGSEC_BIN_CMD doctor   (by path, until you open a new shell)"
+        else
+          _say "✗ Setup failed (exit $setup_rc). The tool is installed but not configured."
+          _say "Finish setup:"
+          _say "    $_AGSEC_BIN_CMD setup"
+          _say "Or remove it:"
+          _say "    $_AGSEC_BIN_CMD uninstall"
+        fi ;;
       *)
         _say "✗ Setup failed (exit $setup_rc). The tool is installed but not configured."
         _say "Finish setup:"
@@ -961,7 +1047,7 @@ main() {
   if _wizard_path && [ "$NO_DISCOVERY" -eq 0 ]; then
     local _plan; _plan="$(agsec_discovery_plan)"
     if [ -z "$_plan" ]; then
-      _say "  → no writable agent surfaces detected (or all are org/MDM-managed) — machine-wide discovery skipped"
+      _say "  $_G_ARROW no writable agent surfaces detected (or all are org/MDM-managed), so no agent rules were written"
     else
       local dreply=''
       if [ "$DISCOVERY_YES" -eq 1 ]; then
@@ -969,27 +1055,29 @@ main() {
       else
         _eprintf '\nMake every coding agent on this Mac aware of agent-secrets?\n'
         _eprintf 'This writes a short, advisory block into each of these files (recorded in the manifest; agent-secrets uninstall removes recorded blocks):\n'
-        printf '%s\n' "$_plan" | while IFS="$(printf '\t')" read -r _lbl _pth; do _eprintf '   • %s\n' "$_pth"; done
-        _eprintf 'The block (advisory — makes agents aware of the tool; not an enforced guarantee):\n'
-        agsec_render_rules claude-md | sed 's/^/     │ /' >&2 || true
-        _eprintf '[y = yes, write them (recommended) · Enter = skip]: '
+        printf '%s\n' "$_plan" | while IFS="$(printf '\t')" read -r _lbl _pth; do _eprintf '   %s %s\n' "$_G_DOT" "$_pth"; done
+        _eprintf 'The agent rules block (advisory: it makes agents aware of the tool; not an enforced guarantee):\n'
+        # The block itself is agsec_render_rules output, byte for byte (it carries an integrity marker);
+        # only the gutter in front of each of its rows is ours.
+        agsec_render_rules claude-md | sed "s/^/     $_G_BAR /" >&2 || true
+        _eprintf '[y = yes, write them (recommended)%sEnter = skip (default)]: ' "$_G_SEP"
         read -r dreply || dreply=''
       fi
       case "$dreply" in
         [yY]*)
           local _wrote; _wrote="$(agsec_discovery_install_all)"
           if [ -n "$_wrote" ]; then
-            printf '%s\n' "$_wrote" | while IFS= read -r _l; do _say "  → aware: $_l"; done
+            printf '%s\n' "$_wrote" | while IFS= read -r _l; do _say "  $_G_ARROW aware: $_l"; done
           else
-            _say "  → nothing written (targets became unwritable)"
+            _say "  $_G_ARROW nothing written (targets became unwritable)"
           fi ;;
         *)
-          _say "  → skipped the agent rules. Add them later:"
+          _say "  $_G_ARROW skipped the agent rules. Add them later:"
           _say "      $(printf '%q' "$BIN_DIR/agent-secrets") setup --discovery" ;;
       esac
     fi
   fi
-  _say "Installed agent-secrets $PINNED_TAG."
+  _say "${_G_OK}Installed agent-secrets $PINNED_TAG."
   return 0
 }
 
