@@ -2644,7 +2644,7 @@ Each one keeps the caller working and does not widen the change.
 
 ## 10. Wave C landing notes
 
-Wave C landed only its decision-free part. Both contract packets are still open, class B, and this wave follows their default course: ad226c7513ea ("keep today's behavior across all repos: documented exit codes stay and get listed in help, --yes is added as an alias, preview-by-default stays, JSON shapes stay; the contract-changing fixes do not land unless you choose change") and 8825ca436960 ("keep today's behavior for all of them; record the conflict in docs/plans/cli-conventions.md"). The units ran serially on the lead, because the machine's capacity gate refused the teammate spawns (8-9 sessions mid-turn against a ceiling of 8). Gate: `GATE_MAX_TRIES=600 bash /tmp/cli-conv-gate-run.sh` on the stack that was pushed.
+Wave C landed only its decision-free part. Both contract packets are still open, class B, and this wave follows their default course: ad226c7513ea ("keep today's behavior across all repos: documented exit codes stay and get listed in help, --yes is added as an alias, preview-by-default stays, JSON shapes stay; the contract-changing fixes do not land unless you choose change") and 8825ca436960 ("keep today's behavior for all of them; record the conflict in docs/plans/cli-conventions.md"). The units ran serially on the lead, because the machine's capacity gate refused the teammate spawns (8-9 sessions mid-turn against a ceiling of 8). Gate: `GATE_MAX_TRIES=600 bash /tmp/cli-conv-gate-run.sh` on the stack b258ec9 + 83672c5 + 46a950f + 113f785 + 01e1c8b + 0dc4f2e: GATES rc=0, bats 1..522, not ok 0, skip 1 (the R408 lint, as in Wave B), shellcheck, telemetry, bash 3.2 parse, `perl -c`, assets and the secret scan all green. The two later commits change only this section.
 
 | Item | What landed | Landed sha |
 |---|---|---|
@@ -2654,7 +2654,8 @@ Wave C landed only its decision-free part. Both contract packets are still open,
 | C7.2 (incl. pass 2) | Glyph selector on fd 2 next to `_say` (plain with `AGENT_SECRETS_PLAIN`, `NO_COLOR`, `--no-color`, no terminal on stderr, or `TERM=dumb`; D26 option A); plain pairs `->`, `-`, `,`, `|`, `...`; `✓ ` on the final receipt in rich mode only; plan rows at column 0 in plain mode and `_step` printing just the command; "agent rules" as the one noun; sentence case ("offer", "no prompts"); banner "Showing the install plan. Nothing will change."; the settings.json bullet split so "back up an existing ~/.claude/settings.json" starts a row; the offer prompt reads `[y = yes, write them (recommended) · Enter = skip (default)]: `. | 113f785 |
 | receive `-y`/`--yes` | `-y` and `--yes` are plain aliases of `--yes-i-reviewed`: same variable, no warning, no behavior change. share and backup unchanged. | 46a950f |
 | C6 (these items only) | help: receive's synopsis and flag row list the aliases (one boolean flag in `help --json`); setup's exit 1 covers a ✗ health check; setup's exit 130 (Ctrl-C at the hidden key paste of `--restore`, lib/restore.sh) was the one documented code help did not list, now listed. No README, AGENTS.md, llms.txt or FAQ text quotes any install copy C7 changed (grep), so no install doc changed. | 46a950f |
-| These notes | §10 of this plan | the docs commit after 113f785 |
+| C7.2 lint | tests/install_plan.bats: the terminal-test allowlist names `_agsec_glyphs`, which reads `[ -t 2 ]` only to pick plain or rich glyphs (mode decisions stay in `_attach_tty` and `_resolve_mode`; record E11). | 0dc4f2e |
+| These notes | §10 of this plan | 01e1c8b, plus the commit that records the gate |
 
 ### Deviations and recorded conflicts in the landed items
 
