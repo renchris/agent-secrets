@@ -138,8 +138,9 @@ set -euo pipefail
 # main()'s locals are gone by the time the EXIT trap fires while the shell unwinds through an `exit`
 # (verified under bash 3.2), so a handler may read only these globals. Each step updates them:
 # _AGSEC_CLEANUP_CMD holds %q-baked commands (rebuilt by each step), _AGSEC_PHASE names the step for
-# the report, and _AGSEC_RECORDED turns 1 once the manifest records the tool dir.
-_AGSEC_CLEANUP_CMD=""; _AGSEC_PHASE=""; _AGSEC_RECORDED=0; _AGSEC_FRESH=0
+# the report, _AGSEC_SWAPPED turns 1 once the new tree replaces the live one, and _AGSEC_RECORDED turns 1
+# once the manifest records the tool dir.
+_AGSEC_CLEANUP_CMD=""; _AGSEC_PHASE=""; _AGSEC_RECORDED=0; _AGSEC_FRESH=0; _AGSEC_SWAPPED=0
 _AGSEC_REPORTED=0; _AGSEC_SIGNALED=0; _AGSEC_RERUN=""; _AGSEC_TOOL_CMD=""; _AGSEC_BIN_CMD=""; _AGSEC_STATE_DIR=""
 # A subshell per write: a closed stderr (`… 2>&1 | head -1`) then kills only the subshell, so the default
 # SIGPIPE disposition, which skips the EXIT trap, never reaches this shell or its children.
@@ -155,6 +156,8 @@ _agsec_on_signal() {
           "See what uninstall would undo:" "    $_AGSEC_TOOL_CMD uninstall --dry-run"
       elif [ "$_AGSEC_FRESH" -eq 1 ]; then
         _agsec_err "Stopped. Removed the partial install."
+      elif [ "$_AGSEC_SWAPPED" -eq 0 ]; then
+        _agsec_err "Stopped. Your existing install was not changed."
       else
         _agsec_err "Stopped. Your existing install may be partly updated. Re-run the installer:" "    $_AGSEC_RERUN"
       fi ;;
@@ -463,7 +466,7 @@ main() {
     for f in agent-secrets claude-agent cursor-agent apiKeyHelper; do
       _target_is_foreign "$f" || continue
       if [ -L "$BIN_DIR/$f" ]; then
-        _say "  • replace your existing symlink $BIN_DIR/$f (it points elsewhere; the old link is not kept)"
+        _say "  • replace your existing symlink $BIN_DIR/$f (backed up to $STATE_DIR/$f.preinstall.bak; uninstall restores it)"
       elif [ -f "$BIN_DIR/$f" ]; then
         _say "  • replace your existing $BIN_DIR/$f (backed up to $STATE_DIR/$f.preinstall.bak; uninstall restores it)"
       fi
@@ -493,7 +496,7 @@ main() {
     fi
     if [ "$replacing" -eq 1 ]; then
       _say ""
-      _say "Some effects cannot be undone: the existing $INSTALL_DIR is replaced in place, with no backup."
+      _say "Some effects cannot be undone: the existing $INSTALL_DIR is replaced, with no backup."
     fi
     _say ""
   }
@@ -671,16 +674,16 @@ main() {
   fi
 
   # --- unpack the tool ---------------------------------------------------------
-  # The pre-manifest window: from the mkdir below until the manifest records $INSTALL_DIR, an abort (a
+  # The pre-manifest window: from the lock below until the manifest records $INSTALL_DIR, an abort (a
   # tar failure, the layout check, a REQUIRED dependency that can't be fetched on a locked-down network)
   # would strand the unpacked tool with NO manifest to roll back. So the cleanup string grows here to
-  # remove ONLY what this run creates: $INSTALL_DIR when it is fresh (a re-run over a live install must
-  # never be deleted by an abort, RT6), and each directory this run makes on the way to $STATE_DIR and
-  # $BIN_DIR, deepest first (a pre-existing empty ~/bin is not ours to remove). Once the manifest
-  # records $INSTALL_DIR the string drops back to the work dir, so the success path and uninstall are
-  # unaffected. The paths are %q-baked now because the handler cannot read main()'s locals.
-  local FRESH_INSTALL=0; [ -d "$INSTALL_DIR" ] || FRESH_INSTALL=1
-  _debug "fresh install: $FRESH_INSTALL (1 = an abort removes the unpacked tool)"
+  # remove ONLY what this run creates: the staging tree, $INSTALL_DIR when it is fresh (a re-run over a
+  # live install must never be deleted by an abort, RT6), and each directory this run makes on the way to
+  # $STATE_DIR and $BIN_DIR, deepest first (a pre-existing empty ~/bin is not ours to remove). Once the
+  # manifest records $INSTALL_DIR the string drops back to the work dir and the lock release, so the
+  # success path and uninstall are unaffected. The paths are %q-baked now because the handler cannot
+  # read main()'s locals. Each piece is kept apart so every rebuild keeps the order: work dir, lock
+  # release (before the state dir it lives in is removed), staging, tool dir, state dir, created dirs.
   # A string, not an array: an empty array under set -u aborts on bash 3.2.
   local _created=""
   _note_new() {
@@ -690,30 +693,115 @@ main() {
     done
   }
   _note_new "$STATE_DIR"; _note_new "$BIN_DIR"
-  local _q
-  if [ "$FRESH_INSTALL" -eq 1 ]; then
-    printf -v _q '%q' "$INSTALL_DIR"; _AGSEC_CLEANUP_CMD="$_AGSEC_CLEANUP_CMD; rm -rf -- $_q"
+  local _q _lock_rm="" _stage_rm="" _tool_rm="" _state_rm="" _dirs_rm=""
+  # A state dir this run creates holds only this run's files (the lock and, once initialised, the manifest).
+  if [ ! -e "$STATE_DIR" ]; then printf -v _q '%q' "$STATE_DIR"; _state_rm="; rm -rf -- $_q"; fi
+  if [ -n "$_created" ]; then _dirs_rm="; rmdir --$_created 2>/dev/null || true"; fi
+  _AGSEC_CLEANUP_CMD="$_work_rm$_state_rm$_dirs_rm"
+
+  # --- one install at a time -----------------------------------------------------------------------
+  # Two installs at once would unpack over each other, and an aborting fresh one removes the tool dir
+  # under its sibling; setup's key mint races the same way. So the rest of the run, setup included,
+  # holds a lock dir (mkdir is the atomic step). Inline, because lib/common.sh's agsec_lock is not
+  # unpacked yet; the steal follows its rules: a dead pid is reclaimed at once, a lock whose pid stays
+  # unreadable for 5 s lost its owner between the mkdir and the pid write, and the .steal mutex stops a
+  # second waiter from removing the lock the first waiter just took. Time is wall clock (SECONDS).
+  # The lock is released through the cleanup string, never a second trap.
+  local lock="$STATE_DIR/install.lock" holder="" no_pid_since="" said=0 deadline=$((SECONDS + 61))
+  _install_lock_steal() {  # SEEN_PID
+    mkdir "$lock.steal" 2>/dev/null || return 1
+    if [ "$(cat "$lock/pid" 2>/dev/null)" = "$1" ]; then rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null || true; fi
+    rmdir "$lock.steal" 2>/dev/null || true
+    return 0
+  }
+  while :; do
+    mkdir -p "$STATE_DIR" || _die "Couldn't create $STATE_DIR."
+    if mkdir "$lock" 2>/dev/null; then
+      printf -v _q '%q' "$lock"; _lock_rm="; rm -f -- $_q/pid; rmdir -- $_q 2>/dev/null"
+      _AGSEC_CLEANUP_CMD="$_work_rm$_lock_rm$_state_rm$_dirs_rm"
+      printf '%s\n' "$$" >"$lock/pid" || _die "Couldn't write the install lock $lock/pid."
+      break
+    fi
+    holder="$(cat "$lock/pid" 2>/dev/null)" || holder=""
+    case "$holder" in
+      ''|*[!0-9]*)
+        [ -n "$no_pid_since" ] || no_pid_since=$SECONDS
+        if [ $((SECONDS - no_pid_since)) -ge 5 ] && _install_lock_steal "$holder"; then no_pid_since=""; continue; fi ;;
+      *)
+        no_pid_since=""
+        if ! kill -0 "$holder" 2>/dev/null && _install_lock_steal "$holder"; then continue; fi ;;
+    esac
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      _AGSEC_REPORTED=1
+      _agsec_err "ERROR: Another agent-secrets install is running (pid ${holder:-unknown}); waited 60 s for it to finish." \
+        "Re-run the installer when it finishes:" "    $_AGSEC_RERUN"
+      exit 1
+    fi
+    if [ "$said" -eq 0 ]; then
+      _say "Another agent-secrets install is running (pid ${holder:-unknown}); waiting up to 60 s for it to finish…"
+      said=1
+    fi
+    sleep 1
+  done
+
+  # A run stopped between the two renames of the swap below leaves only $INSTALL_DIR.old: put it back
+  # before the fresh-install test, so that test sees the install that exists.
+  local old_tree="$INSTALL_DIR.old"
+  if [ ! -e "$INSTALL_DIR" ] && [ ! -L "$INSTALL_DIR" ] && [ -d "$old_tree" ] && [ ! -L "$old_tree" ]; then
+    _run mv "$old_tree" "$INSTALL_DIR"
+    _say "Recovered $INSTALL_DIR from an interrupted install."
   fi
-  # A state dir this run creates holds only this run's files (the manifest, once initialised).
-  if [ ! -e "$STATE_DIR" ]; then
-    printf -v _q '%q' "$STATE_DIR"; _AGSEC_CLEANUP_CMD="$_AGSEC_CLEANUP_CMD; rm -rf -- $_q"
-  fi
-  if [ -n "$_created" ]; then
-    _AGSEC_CLEANUP_CMD="$_AGSEC_CLEANUP_CMD; rmdir --$_created 2>/dev/null || true"
-  fi
+  local FRESH_INSTALL=0; [ -d "$INSTALL_DIR" ] || FRESH_INSTALL=1
+  _debug "fresh install: $FRESH_INSTALL (1 = an abort removes the unpacked tool)"
+  if [ "$FRESH_INSTALL" -eq 1 ]; then printf -v _q '%q' "$INSTALL_DIR"; _tool_rm="; rm -rf -- $_q"; fi
   _AGSEC_FRESH="$FRESH_INSTALL"
   _AGSEC_PHASE=unpack
-  _run mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$STATE_DIR"
-  _run tar -xzf "$pkg" -C "$INSTALL_DIR" --strip-components=1 \
+  # Staged unpack: the new version is unpacked and checked beside the live tree, then swapped in, so an
+  # interrupt or a mis-cut tarball never mixes versions in a live install, and files a newer version
+  # dropped do not linger. Same filesystem as $INSTALL_DIR, so the swap is two renames.
+  local staging
+  staging="$(mktemp -d "$HOME_DIR/.agent-secrets.staging.XXXXXX")" || _die "Couldn't create a staging directory in $HOME_DIR."
+  printf -v _q '%q' "$staging"; _stage_rm="; rm -rf -- $_q"
+  _AGSEC_CLEANUP_CMD="$_work_rm$_lock_rm$_stage_rm$_tool_rm$_state_rm$_dirs_rm"
+  _run mkdir -p "$BIN_DIR" "$STATE_DIR"
+  _run tar -xzf "$pkg" -C "$staging" --strip-components=1 \
     || _die "Couldn't unpack $(basename "$pkg") into $INSTALL_DIR."
   # Fail LOUDLY on a mis-cut tarball (wrong/missing top-level prefix flattens the layout and would
   # dangle every wrapper symlink) instead of a cryptic `set -e` abort on the first source below. The
   # release runbook pins `git archive --prefix=agent-secrets-${TAG}/` to guarantee the single prefix dir.
   # Check BOTH a lib and the dispatcher: a tarball missing bin/agent-secrets would otherwise dangle the
   # dispatcher symlink, and manifest_record_file (which follows the link) returns 1 → set -e abort AFTER
-  # the cleanup trap is disarmed → half-wired install with no rollback.
-  { [ -f "$INSTALL_DIR/lib/common.sh" ] && [ -f "$INSTALL_DIR/bin/agent-secrets" ]; } \
+  # the cleanup trap is disarmed → half-wired install with no rollback. Checked on staging, so a bad
+  # tarball never touches a live install.
+  { [ -f "$staging/lib/common.sh" ] && [ -f "$staging/bin/agent-secrets" ]; } \
     || _die "unexpected tarball layout (need one top-level prefix dir with bin/ + lib/) — re-cut with: git archive --prefix=agent-secrets-\${TAG}/ \${TAG}"
+  # The vendored jq, age and sops live in the tool dir (lib/deps.sh), not in the tarball: carry them over.
+  if [ -d "$INSTALL_DIR/vendor" ] && [ ! -e "$staging/vendor" ]; then
+    _run cp -Rp "$INSTALL_DIR/vendor" "$staging/vendor" \
+      || _die "Couldn't copy $INSTALL_DIR/vendor into the new version."
+  fi
+  # mktemp -d makes 0700; the manifest records the tool dir's mode, so keep the live mode, or for a fresh
+  # install the mode mkdir would give.
+  local dmode
+  if [ "$FRESH_INSTALL" -eq 1 ]; then
+    dmode="$(printf '%o' $((0777 & ~$(umask))))"
+  else
+    dmode="$(stat -f '%Lp' "$INSTALL_DIR")"
+  fi
+  _run chmod "$dmode" "$staging"
+  # A shell cannot exchange two directories atomically: a wrapper started between the two renames fails.
+  # An abort in that gap puts the old tree back; a stop that skips the trap leaves .old, recovered above.
+  if [ "$FRESH_INSTALL" -eq 0 ]; then
+    if [ -e "$old_tree" ] || [ -L "$old_tree" ]; then _run rm -rf -- "$old_tree"; fi   # a finished swap's leftover
+    local _oq _iq
+    printf -v _oq '%q' "$old_tree"; printf -v _iq '%q' "$INSTALL_DIR"
+    _AGSEC_CLEANUP_CMD="$_work_rm$_lock_rm; [ -e $_iq ] || mv -- $_oq $_iq$_stage_rm$_tool_rm$_state_rm$_dirs_rm"
+    _run mv "$INSTALL_DIR" "$old_tree" || _die "Couldn't move $INSTALL_DIR aside for the new version."
+  fi
+  _run mv "$staging" "$INSTALL_DIR" || _die "Couldn't move the new version into place at $INSTALL_DIR."
+  _AGSEC_SWAPPED=1
+  _AGSEC_CLEANUP_CMD="$_work_rm$_lock_rm$_tool_rm$_state_rm$_dirs_rm"
+  if [ "$FRESH_INSTALL" -eq 0 ]; then _run rm -rf -- "$old_tree" || true; fi
 
   # From here on the tool's own libs exist — source them to record artifacts.
   # shellcheck source=/dev/null
@@ -751,44 +839,48 @@ main() {
   # only the `||` keeps errexit from aborting there; the status still reflects the append. A failed
   # record dies while the pre-manifest cleanup is still armed, so the fresh tool dir goes too.
   manifest_record_file "$INSTALL_DIR" >/dev/null 2>&1 || _die "Couldn't record $INSTALL_DIR in the install manifest."
-  # $INSTALL_DIR is recorded → uninstall can roll it back; the cleanup drops back to the work dir.
-  _AGSEC_CLEANUP_CMD="$_work_rm"; _AGSEC_RECORDED=1
+  # $INSTALL_DIR is recorded → uninstall can roll it back; the cleanup drops back to the work dir and
+  # the lock release.
+  _AGSEC_CLEANUP_CMD="$_work_rm$_lock_rm"; _AGSEC_RECORDED=1
   printf -v _AGSEC_TOOL_CMD '%q' "$INSTALL_DIR/bin/agent-secrets"
   _AGSEC_PHASE="wire PATH"
-  # A pre-existing NON-symlink at a target on PATH is the USER'S own file — `ln -sf` clobbers it and
-  # uninstall's `rm -f` of the `file` record would finish the loss. Write-once backup + an `edit` record
-  # (appended BEFORE the file record: LIFO rollback removes the symlink first, then restores the file).
-  _bak_user_target() {
-    local t="$1" b
-    if [ -f "$t" ] && [ ! -L "$t" ]; then
-      b="$STATE_DIR/$(basename "$t").preinstall.bak"
-      [ -f "$b" ] || cp -p "$t" "$b"
-      manifest_record_edit "$t" "$b" >/dev/null 2>&1 || _die "Couldn't record the backup of $t in the install manifest."
-    fi
+  # Anything at a target that is not our own link is the USER'S: a file, a link elsewhere, a dangling
+  # link or a link to a directory. The link below replaces it and uninstall's `rm -f` of the `file`
+  # record would finish the loss, so manifest_backup_user_target copies it (a link as a link) and
+  # appends an `edit` record BEFORE the file record: LIFO rollback removes our link first, then restores
+  # theirs. A changed user file refreshes the backup and keeps the earlier one, timestamped. A failed
+  # backup or record stops before the link. `ln -n` replaces a link to a directory instead of dropping
+  # a stray link inside that directory.
+  _wire_bin() {
+    local t="$BIN_DIR/$1"
+    manifest_backup_user_target "$t" "$1.preinstall.bak" "$INSTALL_DIR/bin/$1" >/dev/null \
+      || _die "Couldn't record the backup of $t; nothing replaced. Your file is unchanged."
+    _run ln -sfn "$INSTALL_DIR/bin/$1" "$t"
+    manifest_record_file "$t" || _die "Couldn't record $t in the install manifest."
   }
   local f
-  _bak_user_target "$BIN_DIR/agent-secrets"
-  _run ln -sf "$INSTALL_DIR/bin/agent-secrets" "$BIN_DIR/agent-secrets"
-  manifest_record_file "$BIN_DIR/agent-secrets" || _die "Couldn't record $BIN_DIR/agent-secrets in the install manifest."
+  _wire_bin agent-secrets
   for f in claude-agent cursor-agent apiKeyHelper; do
     [ -f "$INSTALL_DIR/bin/$f" ] || continue
-    _bak_user_target "$BIN_DIR/$f"
-    _run ln -sf "$INSTALL_DIR/bin/$f" "$BIN_DIR/$f"
-    manifest_record_file "$BIN_DIR/$f" || _die "Couldn't record $BIN_DIR/$f in the install manifest."
+    _wire_bin "$f"
   done
 
-  # Idempotent, marker-delimited PATH block → shell rc (recorded for total rollback).
-  manifest_pathblock_install "$RC_FILE" "$PATH_MARKER" "export PATH=\"$BIN_DIR:\$PATH\""
+  # Idempotent, marker-delimited PATH block → shell rc (recorded for total rollback). The path is
+  # escaped for the double quotes it sits in, so a `"`, `$`, backquote or backslash in it stays literal
+  # when the rc is sourced; an ordinary path is unchanged.
+  _dq_escape() { local s=$1; s=${s//\\/\\\\}; s=${s//\"/\\\"}; s=${s//\$/\\\$}; s=${s//\`/\\\`}; printf '%s' "$s"; }
+  local path_line; path_line="export PATH=\"$(_dq_escape "$BIN_DIR"):\$PATH\""
+  manifest_pathblock_install "$RC_FILE" "$PATH_MARKER" "$path_line"
   # Bash-login users also get the block in their login rc (see BASH_RC_FILE above); recorded → uninstall
   # strips it via the same _manifest_rb_pathblock.
   if [ -n "$BASH_RC_FILE" ]; then
-    manifest_pathblock_install "$BASH_RC_FILE" "$PATH_MARKER" "export PATH=\"$BIN_DIR:\$PATH\""
+    manifest_pathblock_install "$BASH_RC_FILE" "$PATH_MARKER" "$path_line"
   fi
 
   # Weekly launchd smoke job. Written from the tool's own template.
   _AGSEC_PHASE=launchd
   _run mkdir -p "$HOME_DIR/Library/LaunchAgents"
-  _install_smoke_plist "$SMOKE_PLIST" "$SMOKE_LABEL" "$INSTALL_DIR"
+  _install_smoke_plist "$SMOKE_PLIST" "$SMOKE_LABEL" "$INSTALL_DIR" || _die "Couldn't write $SMOKE_PLIST."
   # A failed bootout is the normal first-install case. A failed bootstrap is legitimate over SSH or with
   # no GUI session, so it warns and goes on (doctor classes the job as optional) unless the job is
   # loaded anyway, the check doctor uses. The plist is recorded either way: uninstall needs the record.
@@ -903,10 +995,17 @@ main() {
 # scope here. (The former hand-maintained _discovery_block was deleted: it had silently drifted from
 # the canonical rule text, and doctor could not detect the drift.)
 
-# Weekly smoke launchd plist (runs the tool's own smoke command; no value ever printed).
+# Weekly smoke launchd plist (runs the tool's own smoke command; no value ever printed). Written to a
+# sibling temp file and moved into place, or written through a symlinked plist (agsec_commit) so a
+# dotfile manager's link survives. The temp file goes on failure and on a stop, or uninstall's rmdir of
+# LaunchAgents would find the directory non-empty. The install dir is XML-escaped (sed, because `&` in a
+# ${x//…} replacement means the match under newer bash); $label is a constant and needs none.
 _install_smoke_plist() {
-  local plist="$1" label="$2" install_dir="$3"
-  cat >"$plist" <<PLIST
+  local plist="$1" label="$2" install_dir="$3" install_dir_xml tmp q
+  install_dir_xml="$(printf '%s' "$install_dir" | LC_ALL=C sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')" || return 1
+  tmp="$(mktemp "$(dirname "$plist")/.smoke.XXXXXX")" || return 1
+  printf -v q '%q' "$tmp"; _AGSEC_CLEANUP_CMD="$_AGSEC_CLEANUP_CMD; rm -f -- $q"
+  if ! cat >"$tmp" <<PLIST; then
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -914,20 +1013,22 @@ _install_smoke_plist() {
   <key>Label</key><string>${label}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${install_dir}/bin/agent-secrets</string>
+    <string>${install_dir_xml}/bin/agent-secrets</string>
     <string>smoke</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>${install_dir}/vendor/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>${install_dir_xml}/vendor/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>StartCalendarInterval</key>
   <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>9</integer></dict>
 </dict>
 </plist>
 PLIST
-  chmod 0644 "$plist"
+    rm -f "$tmp"; return 1
+  fi
+  agsec_commit "$tmp" "$plist" 0644
 }
 
 main "$@"
