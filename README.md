@@ -55,7 +55,7 @@ questions; the installer chains straight into the setup wizard, which mints your
 first secret, and wires your tools:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.3/install.sh -o /tmp/agent-secrets-install.sh && bash /tmp/agent-secrets-install.sh
+f="$(mktemp "${TMPDIR:-/tmp}/agent-secrets-install.XXXXXX")" && curl -fsSL https://raw.githubusercontent.com/renchris/agent-secrets/v0.1.3/install.sh -o "$f" && bash "$f"
 ```
 
 <details>
@@ -75,8 +75,9 @@ curl: (56) The requested URL returned error: 404
 56                                                    # ← the truth
 ```
 
-The form above short-circuits on a failed download, leaves the script where you can read it, and
-costs you nothing. `curl … | bash` has the same silent-success flaw and is not recommended either —
+The form above short-circuits on a failed download, leaves the script at `"$f"` (a fresh, private
+`mktemp` file, so a parallel run or a file planted at a fixed `/tmp` path cannot interfere) where you
+can read it, and costs you nothing. `curl … | bash` has the same silent-success flaw and is not recommended either —
 though if you use it anyway, setup still works: it reads its prompts from your terminal, not from
 the pipe.
 
@@ -140,12 +141,13 @@ without requiring Homebrew** — it reuses any you already have, uses Homebrew o
 installed, and otherwise downloads pinned, SHA-256-verified static binaries into
 `~/.agent-secrets/vendor/` (~60 MB for all three — the price of the no-`sudo` guarantee; removed by
 uninstall); the `agent-secrets` command plus the `claude-agent`, `cursor-agent`, and
-`apiKeyHelper` wrappers in `~/bin`; an encrypted store at `~/.config/secrets/`; your age key in the
+`apiKeyHelper` wrappers in `~/bin` (a file or symlink of yours already at one of those paths is
+backed up first, named in the plan, and restored by uninstall); an encrypted store at `~/.config/secrets/`; your age key in the
 login Keychain (with a `0600` file fallback); one `PATH` line in `~/.zshenv`; a weekly `launchd`
 smoke job; and — **only once `ANTHROPIC_API_KEY` is in the store** — the `apiKeyHelper` line in
 `~/.claude/settings.json` (Claude Code ranks that helper above your claude.ai login and treats an
 empty one as an auth failure, so it is never wired with nothing to serve; `add ANTHROPIC_API_KEY`
-wires it). It also *offers* (opt-in, in a terminal) to write a short agent-discovery block into
+wires it). After setup, it also *offers* (opt-in, in a terminal) to write a short agent-discovery block into
 `~/.claude/CLAUDE.md` (read by Claude Code + VS Code Copilot, plus a per-tool file for any other agent
 CLI present); a headless install writes it by default (`--no-discovery` to skip). Every change is
 recorded in `install-manifest.json` and reversed by `agent-secrets uninstall` — all removable in one
@@ -155,8 +157,18 @@ command.
 > installer sees there is nobody to prompt and chains straight into `agent-secrets setup --headless`:
 > the same real setup with zero prompts. Keys go to files, the Keychain takes its key over a pipe, the
 > recovery key stays on disk (0600) for a human to save off-machine whenever they like, and no secret
-> is ever printed. Flags: `--headless` (force it), `--import-env NAME[,NAME…]` (seed the store from
-> variables already set in that shell — never a value on the command line), `--no-discovery`.
+> is ever printed. In that mode the installer asks for no keypress either: the plan it prints is the
+> disclosure. At a terminal it asks one `[Y/n]` before changing anything; `n` cancels with exit 130.
+>
+> Installer flags (`bash "$f" --help` prints them all): `--headless` (force it; `--no-headless` lets
+> setup pick), `--import-env <NAME>[,<NAME>…]` (seed the store from variables already set in that
+> shell — never a value on the command line), `--no-discovery` (skip the machine-wide agent rules) or
+> `--discovery` (pre-answer the offer), `--dry-run` / `--no-dry-run` (preview the plan and change
+> nothing), `--no-color`, `--debug` (extra diagnostics on stderr), `-v, --version`, `-h, --help`. The
+> boolean flags also take `=true|false` (`--dry-run=false`). Two installs at once take turns: the
+> second waits up to 60 s on a lock, then exits 1 with the command to re-run. The newer flags
+> (`--version`, `--no-color`, `--debug`, the `=true|false` forms, `--discovery`, `--no-dry-run`,
+> `--no-headless`) arrive with the next release; the pinned v0.1.3 `install.sh` does not accept them.
 
 > **Brand-new Mac?** Verified on a stock macOS PATH with no Homebrew, no Node, no Python, no
 > iTerm2 and no oh-my-zsh: the whole tool runs under the system `/bin/bash` 3.2, every command it
@@ -170,6 +182,9 @@ command.
 > comes from pinned GitHub-release binaries. If `raw.githubusercontent.com` is blocked, install from an
 > internal mirror: `AGENT_SECRETS_BASE_URL=<mirror> bash install.sh`, and mirror the dependency binaries
 > too with `AGENT_SECRETS_DEPS_BASE_URL=<mirror>` (see [FAQ](docs/FAQ.md) → corporate install).
+> `AGENT_SECRETS_INSTALL_URL=<mirror>/install.sh` sets where a run under `sh` re-fetches the
+> installer; that copy runs unverified, so it replaces the trust root. Keep credentials out of
+> mirror URLs (put them in `~/.curlrc` with `netrc`).
 
 ## How it works
 
@@ -314,9 +329,9 @@ flowchart LR
 |---|---|
 | `agent-secrets setup` | one-time onboarding wizard (idempotent — safe to re-run) |
 | `agent-secrets add <NAME>` | add or update one secret (value typed hidden, never shown) |
-| `agent-secrets list` | list secret **names** + rotation dates — never values |
+| `agent-secrets list` | list secret **names** + rotation dates — never values (`--json` for a machine-readable list) |
 | `agent-secrets run -- <cmd>` | run a command with secrets injected just for that process |
-| `agent-secrets doctor` | health check — `--gates`, `--summary`, `--format=json`, `--redact`, `--fix` |
+| `agent-secrets doctor` | health check — `--gates`, `--summary`, `--json`, `--redact`, `--fix` (`--format=json` still works, deprecated) |
 | `agent-secrets pubkey` | print your `age` recipient string + fingerprint — hand it to a sender (`--copy`) |
 | `agent-secrets share <NAME> --to <recipient>` | encrypt one secret to a colleague's key as a paste-able blob (last-rung — prefer the ladder) |
 | `agent-secrets receive` | decrypt a colleague's pasted blob into your store (confirms on the terminal) |
@@ -364,7 +379,7 @@ run from inside Claude Code or Cursor, chains into `agent-secrets setup --headle
 to files, the login Keychain populated over a pipe (primary, prompt-free custody), wrappers wired,
 discovery written, `doctor` green — and nothing secret printed, so the transcript holds only names
 and paths. The one thing an agent cannot do is *type* a secret; it seeds the store from values it
-already holds instead (`--import-env NAME`, or `printf '%s' "$NAME" | agent-secrets add NAME`),
+already holds instead (`--import-env <NAME>`, or `printf '%s' "$NAME" | agent-secrets add NAME`),
 naming a *source* in the command rather than a literal. What remains for a human is optional:
 saving the recovery key off the Mac (`agent-secrets setup` in a terminal proves it; `doctor`
 reminds), arming the canary, Cursor's User Rules paste. Only `share` (it extracts a plaintext value)

@@ -62,8 +62,11 @@ for Codex/Gemini/Zed/Cline). Treat this honestly:
   real binary, not a `PATH` impostor), carries a **self-guard** (inert if synced to a machine without the
   tool), and an invisible **version+integrity marker** so `agent-secrets doctor` flags a **tampered** or
   hidden-Unicode-laced block (a `bad` row that flips the exit code), distinct from a benign version
-  **stale**. Writes are opt-in, tty-only (never in a `curl | bash` pipe), per-file consented (each file
-  named + previewed), and reversible.
+  **stale**. Writes are never silent, and reversible. On the interactive (wizard) path they are opt-in:
+  the installer offers them after setup, per-file consented (each file named + previewed). On the
+  headless path (an agent session, CI, no terminal, or `--headless` / `--import-env`) setup writes
+  them by default and names each file as it writes it; `--no-discovery` skips them. (`curl | bash` at
+  a terminal reattaches to the terminal, so it takes the interactive path.)
 - **Managed fleets:** on an org/MDM-managed machine the installer **defers** and writes nothing — the
   machine-wide invariant belongs in the managed-policy tier your IT deploys. See
   [docs/enterprise-deployment.md](docs/enterprise-deployment.md).

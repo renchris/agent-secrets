@@ -11,11 +11,11 @@
 - Per-command help (side-effect-free): `agent-secrets <command> --help`.
 
 ## Commands
-- `setup [--headless] [--import-env NAME,…] [--no-discovery]` — one-time onboarding; headless (no prompts, no human) in an agent session; `--discovery` / `--keychain` / `--restore` run one step.
+- `setup [--headless] [--import-env <NAME>[,<NAME>…]] [--no-discovery]` — one-time onboarding; headless (no prompts, no human) in an agent session; `--discovery` / `--keychain` / `--restore` run one step.
 - `add <NAME>` — store/update one secret; value via STDIN, never argv.
-- `list [--format=json]` — list secret names + rotate dates (never values).
+- `list [--json]` — list secret names + rotate dates (never values); `--format=json` still works, deprecated.
 - `run -- <cmd>` — run a command with secrets JIT-injected into its process.
-- `doctor [--format=json] [--gates]` — health check; exit 0 healthy, 1 if any failure.
+- `doctor [--json] [--gates]` — health check; exit 0 healthy, 1 if any failure; `--format=json` still works, deprecated.
 - `pubkey [--copy]` — print your age recipient key + fingerprint (public key only; safe in agent sessions).
 - `share <NAME> --to <recipient>` — encrypt one secret to a colleague's key as a paste-able blob (human-gated; refuses in agent sessions).
 - `receive` — decrypt a colleague's pasted blob into your store (tty-gated; blob on STDIN, confirm on /dev/tty).

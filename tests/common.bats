@@ -410,14 +410,14 @@ on_pty() {
   [ "$output" = 9.9.9 ]
 }
 
-@test "the dispatcher's -V parse of common.sh still yields exactly one version line" {
+@test "lib/common.sh keeps exactly one unindented AGENT_SECRETS_VERSION fallback, a semver" {
   run sed -n 's/^AGENT_SECRETS_VERSION="\(.*\)".*/\1/p' "$REPO_ROOT/lib/common.sh"
   [ "$status" -eq 0 ]
   [[ "$output" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
 }
 
 @test "lint: TTY and CI checks live only in lib/common.sh" {
-  skip "enabled by B8"
+  skip "cmd/setup.sh:557 still tests [ ! -t 2 ] in setup_resolve_mode; enable once that check moves to lib/common.sh"
   cd "$REPO_ROOT"
   run bash -c "grep -rnE '\[ !? ?-t [012] \]|\\\$\{?CI\b' cmd lib bin/apiKeyHelper bin/claude-agent bin/cursor-agent | grep -v '^lib/common.sh'"
   [ -z "$output" ]

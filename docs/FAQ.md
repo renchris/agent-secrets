@@ -67,10 +67,21 @@ AGENT_SECRETS_DEPS_BASE_URL=https://git.internal.example/mirror \
   bash install.sh
 ```
 
-The installer verifies each downloaded binary against a **pinned SHA-256** regardless of source, so a
-mirror can't substitute a different binary. (`AGENT_SECRETS_INSTALL_URL` overrides where a re-exec
-under `bash` re-fetches `install.sh` itself; `AGENT_SECRETS_DEPS_NO_BREW=1` forces the pinned downloads
-even when Homebrew is present.)
+The installer verifies each downloaded dependency binary against a **pinned SHA-256** regardless of
+source, so a mirror can't substitute a different binary. The release tarball is checked against the
+digest baked into a released `install.sh`; an `install.sh` with no baked digest checks a mirror's
+tarball only against the mirror's own `.sha256`, which proves transport integrity, not tamper
+evidence. `AGENT_SECRETS_DEPS_NO_BREW=1` forces the pinned downloads even when Homebrew is present.
+
+`AGENT_SECRETS_INSTALL_URL` sets where a run under `sh` re-fetches `install.sh` before re-running it
+under `bash`. That re-fetched copy runs **unverified**: the installer is itself the trust root, so
+pointing this variable elsewhere replaces the trust root with whatever that URL serves. Set it only
+to a mirror you control as tightly as the release itself.
+
+**Never put credentials in a mirror URL** (`https://user:token@…`): a URL can end up in shell
+history, process listings and logs. If your mirror needs authentication, put it in `~/.curlrc` (or
+`$CURL_HOME/.curlrc`) with a `netrc` line, and the credentials in `~/.netrc`, because `install.sh`
+passes no `--netrc` of its own.
 
 Get IT/security approval first; keep your store + manifest on the **internal** git host (names-only
 is still internal-sensitive); and note that corporate endpoint detection and response (EDR) or an
