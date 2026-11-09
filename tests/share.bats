@@ -1,7 +1,9 @@
 #!/usr/bin/env bats
 # tests/share.bats — the `share` verb + the don't-share ladder (design §3.4-3.10, §6).
 # Names-only: every assertion checks NAMES/metadata/ciphertext; a secret VALUE must never surface.
+bats_require_minimum_version 1.5.0
 load test_helper
+load mode_matrix
 
 # The bats runner may itself be inside an agent session (CLAUDECODE set), which share correctly
 # refuses. Strip the agent-session env for the ordinary-terminal cases; the CLAUDECODE-refusal test
@@ -10,6 +12,28 @@ load test_helper
 _sh() {  # _sh <share args…>  → sets $status/$output via `run`
   run env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM \
     bash "$REPO_ROOT/bin/agent-secrets" share "$@"
+}
+_sh_sep() {  # like _sh, with stdout in $output and stderr in $stderr
+  run --separate-stderr env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM \
+    bash "$REPO_ROOT/bin/agent-secrets" share "$@"
+}
+
+# _drive PROMPT ANSWER SHELL-CMD: run SHELL-CMD on a fresh pty with the file confirm seam off, answer the
+# first PROMPT with ANSWER, and set $output to the pty transcript and $status to the command's exit.
+_drive() {
+  command -v expect >/dev/null 2>&1 || skip "expect not available"
+  cat >"$BATS_TEST_TMPDIR/drive.exp" <<'EOF'
+# One wall-clock bound and no per-expect timeout: see tests/wizard_interactive.bats.
+set timeout -1
+after 900000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
+spawn env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM -u CI -u AGENT_SECRETS_NONINTERACTIVE -u AGSEC_TEST_CONFIRM -u AGSEC_CONFIRM_SRC bash -c $env(DRIVE_SH)
+expect -ex $env(DRIVE_PROMPT) { send -- "$env(DRIVE_ANSWER)\r" }
+expect eof { }
+catch wait result
+if {[llength $result] > 4} { puts "\nDRIVE-KILLED $result"; exit 92 }
+exit [lindex $result 3]
+EOF
+  run env DRIVE_PROMPT="$1" DRIVE_ANSWER="$2" DRIVE_SH="$3" expect "$BATS_TEST_TMPDIR/drive.exp"
 }
 
 # Generate a fresh age recipient; echo its age1… recipient string. Identity file at $1.
@@ -65,7 +89,7 @@ _share_fixture() {
 @test "the confirm is read from AGSEC_CONFIRM_SRC; 'n' aborts with nothing shared" {
   _share_fixture; _confirm n
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 130 ]
   [[ "$output" == *"aborted"* ]] || return 1
   [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1
 }
@@ -203,7 +227,7 @@ EOF
   _share_fixture
   export AGSEC_CONFIRM_SRC="$AGENT_SECRETS_HOME/nope/missing"
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *"interactive terminal"* ]] || return 1
 }
 
@@ -227,7 +251,7 @@ EOF
   _share_fixture
   export AGSEC_CONFIRM_SRC="$AGENT_SECRETS_HOME/nope/missing" AGENT_SECRETS_UNATTENDED=1
   _sh ANTHROPIC_API_KEY --to "$RECIP" --singleton
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *"interactive terminal"* ]] || return 1
   [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1     # nothing shared with no controlling tty
 }
@@ -241,7 +265,7 @@ EOF
   run env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM -u AGSEC_TEST_CONFIRM \
     AGSEC_CONFIRM_SRC="$AGENT_SECRETS_HOME/y" AGENT_SECRETS_UNATTENDED=1 \
     bash "$REPO_ROOT/bin/agent-secrets" share ANTHROPIC_API_KEY --to "$RECIP" --singleton
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *"interactive terminal"* ]] || return 1
   [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1   # no ciphertext exfiltrated
 }
@@ -260,4 +284,102 @@ EOF
   [ "$status" -ne 0 ]
   [[ "$output" == *"not a valid name"* ]] || return 1
   [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1
+}
+
+# --- streams, exit codes and usage wording -------------------------------------
+@test "share stdout is only the fenced envelope" {
+  _share_fixture; _confirm y
+  _sh_sep TEAM_WEBHOOK_SECRET --to "$RECIP"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"✓"* ]] || return 1
+  [ "$(printf '%s\n' "$output" | head -1)" = '```' ]
+  [ "$(printf '%s\n' "$output" | tail -1)" = '```' ]
+  [[ "$output" != *"Share the VALUE"* ]] || return 1
+  [[ "$stderr" == *"encrypted "* ]] || return 1
+}
+
+@test "share --verify asks whether the recipient confirmed the digest" {
+  _share_fixture; _confirm y
+  _sh_sep TEAM_WEBHOOK_SECRET --to "$RECIP" --verify
+  [ "$status" -eq 0 ]
+  [[ "$stderr" == *"Did the recipient confirm this digest matches? [y/N]"* ]] || return 1
+  [[ "$stderr" != *"Proceed?"* ]] || return 1
+}
+
+@test "share --to github:a/b exits 2 and never fetches" {
+  _share_fixture; _confirm y
+  local log="$AGENT_SECRETS_HOME/curl.log"
+  AGSEC_MOCK_CURL_LOG="$log" _sh TEAM_WEBHOOK_SECRET --to 'github:a/b'
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"is not a valid GitHub login"* ]] || return 1
+  [ ! -s "$log" ]
+}
+
+@test "share on an undecryptable store says so, not 'no such secret'" {
+  _share_fixture; _confirm y
+  printf 'NOT_A_SOPS_FILE=1\n' >"$(agsec_store_file)"
+  _sh TEAM_WEBHOOK_SECRET --to "$RECIP"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"decrypt the store"* ]] || return 1
+  [[ "$output" != *"no such secret"* ]] || return 1
+}
+
+@test "share's usage errors name the option but never echo a surplus argument" {
+  _share_fixture; _confirm y
+  _sh TEAM_WEBHOOK_SECRET --to self --bogus=fake-placeholder
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Unknown option '--bogus' for share."* ]] || return 1
+  [[ "$output" != *"fake-placeholder"* ]] || return 1
+  _sh TEAM_WEBHOOK_SECRET fake-placeholder --to self
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Unexpected argument for share."* ]] || return 1
+  [[ "$output" != *"fake-placeholder"* ]] || return 1
+}
+
+@test "AGSEC_PARSE_ONLY stops share after parsing, before the agent and terminal gates" {
+  _share_fixture
+  run env CLAUDECODE=1 AGSEC_PARSE_ONLY=1 bash "$REPO_ROOT/bin/agent-secrets" share TEAM_WEBHOOK_SECRET --to self
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# --- mode matrix around the share confirm ----------------------------------------
+@test "share confirm, mode matrix: only a real terminal is asked; every other mode refuses" {
+  _share_fixture
+  unset AGSEC_CONFIRM_SRC
+  local cmd=(bash "$REPO_ROOT/bin/agent-secrets" share TEAM_WEBHOOK_SECRET --to self)
+  local out="$AGENT_SECRETS_HOME/envelope.out"
+  local sh="exec bash \"\$REPO_ROOT/bin/agent-secrets\" share TEAM_WEBHOOK_SECRET --to self"
+
+  _drive '[y/N]' y "$sh"                                  # tty, answered y
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Share the VALUE of TEAM_WEBHOOK_SECRET"* ]] || return 1
+  [[ "$output" == *"BEGIN AGENT-SECRETS SHARE v1"* ]] || return 1
+
+  _drive '[y/N]' y "$sh >\"$out\""                        # stdout-redirected, answered y
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Share the VALUE of TEAM_WEBHOOK_SECRET"* ]] || return 1
+  [[ "$output" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1
+  grep -q 'BEGIN AGENT-SECRETS SHARE v1' "$out"
+  if grep -q 'Share the VALUE' "$out"; then return 1; fi
+
+  local mode
+  for mode in stdin-piped ci-tty noninteractive-tty; do
+    mm_run "$mode" -- "${cmd[@]}"
+    [ "$mm_status" -eq 2 ] || { echo "$mode: status $mm_status"; return 1; }
+    [[ "$mm_pty$mm_stderr" == *"share needs an interactive terminal"* ]] || { echo "$mode: no refusal"; return 1; }
+    [[ "$mm_pty$mm_stdout$mm_stderr" != *"Share the VALUE"* ]] || { echo "$mode: prompted"; return 1; }
+    [ -z "$mm_stdout" ] || { echo "$mode: stdout not empty"; return 1; }
+  done
+
+  mm_run agent -- "${cmd[@]}"
+  [ "$mm_status" -eq 1 ]
+  [[ "$mm_stderr" == *"agent session"* ]] || return 1
+  [[ "$mm_stdout$mm_stderr" != *"Share the VALUE"* ]] || return 1
+  [ -z "$mm_stdout" ]
+
+  mm_run json-tty -- "${cmd[@]}" --json
+  [ "$mm_status" -eq 2 ]
+  [[ "$mm_pty" != *"Share the VALUE"* ]] || return 1
+  [[ "$mm_pty" != *"BEGIN AGE ENCRYPTED FILE"* ]] || return 1
 }

@@ -22,8 +22,8 @@ while [ "$#" -gt 0 ]; do
     --rename)    [ "$#" -ge 2 ] || agsec_die "share: --rename <NEW> requires a value" 2; rename="$2"; shift 2 ;;
     --rename=*)  rename="${1#--rename=}"; shift ;;
     # (--rename value is grammar-checked after the loop, once we know whether it was given)
-    -*)          agsec_die "share: unknown flag '$1'" 2 ;;
-    *)           if [ -z "$name" ]; then name="$1"; else agsec_die "share: unexpected argument '$1'" 2; fi; shift ;;
+    -*)          agsec_unknown_option share "$1" ;;
+    *)           if [ -z "$name" ]; then name="$1"; else agsec_unexpected_argument share; fi; shift ;;
   esac
 done
 [ -n "$name" ] || agsec_die "usage: agent-secrets share <NAME> --to <age1…|github:user|self> [--singleton] [--verify] [--sign] [--rename NEW]" 2
@@ -36,6 +36,7 @@ if [ -n "$rename" ]; then
     [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*) agsec_die "share: --rename '$rename' is not a valid name — use letters, digits, underscore (start with a letter/_)" 2 ;;
   esac
 fi
+agsec_parse_only_exit
 
 # --- work area (0700; holds only the temp github keyfile + armor) ---------------
 workdir="$(mktemp -d "${TMPDIR:-/tmp}/agsec-share.XXXXXX")"; chmod 700 "$workdir"
@@ -48,8 +49,11 @@ confirm_src="${AGSEC_CONFIRM_SRC:-/dev/tty}"
 # tests `[ -t ]` on the opened fd), NOT mere openability — `( : < file )` passes for any readable "y"
 # file, so an `env -u CLAUDECODE …` agent could set AGSEC_CONFIRM_SRC to one and slip past, printing the
 # ciphertext into its transcript. NOT gated by AGENT_SECRETS_UNATTENDED — that flag only auto-answers
-# the y/N confirm (step 7), never this gate.
-agsec_src_is_tty "$confirm_src" || agsec_die "share needs an interactive terminal"
+# the y/N confirm (step 7), never this gate. CI / AGENT_SECRETS_NONINTERACTIVE turn the confirm into this
+# refusal too: non-interactive mode never grants consent.
+if agsec_noninteractive_requested || ! agsec_src_is_tty "$confirm_src"; then
+  agsec_fail missing_input "share needs an interactive terminal — run it in Terminal.app (no flag skips this gate, by design)"
+fi
 
 # --- 3. canary refuse (hard, no confirm) ----------------------------------------
 [ "$name" = "$AGENT_SECRETS_CANARY_NAME" ] \
@@ -73,7 +77,12 @@ elif [ -n "$self_key" ] && [ "$to" = "$self_key" ]; then recipient_kind=self; fi
 ladder_gate "$name" "$recipient_kind" "$singleton" || exit 1
 
 # --- 5. name-exists -------------------------------------------------------------
-store_has "$name" || agsec_die "no such secret: $name"
+rc=0; store_has "$name" || rc=$?
+case "$rc" in
+  0) ;;
+  2) agsec_die_undecryptable ;;
+  *) agsec_die "no such secret: $name" ;;
+esac
 
 # --- 6. resolve recipient -------------------------------------------------------
 # recip = the recipient string we fingerprint + confirm; age_args = the `age` recipient flags.
@@ -90,6 +99,9 @@ case "$to" in
   github:*)
     ghuser="${to#github:}"
     [ -n "$ghuser" ] || agsec_die "share --to github:<user>: empty user"
+    # GitHub's login grammar; rejects / ? # . before the handle reaches the fetch URL.
+    gh_login_re='^[A-Za-z0-9](-?[A-Za-z0-9]){0,38}$'
+    [[ "$ghuser" =~ $gh_login_re ]] || agsec_die "share --to github:<user>: '$ghuser' is not a valid GitHub login" 2
     keyfile="$workdir/gh.keys"; usable="$workdir/gh.usable"
     ( umask 177; : >"$keyfile" )
     curl -fsSL --connect-timeout 5 --max-time 20 "https://github.com/${ghuser}.keys" >"$keyfile" 2>/dev/null \
@@ -116,7 +128,7 @@ fingerprint="$(printf '%s' "$recip" | agsec_digest)"
 if [ -z "${AGENT_SECRETS_UNATTENDED:-}" ]; then
   printf 'Share the VALUE of %s → "%s" (%s)? [y/N] ' "$name" "$label" "$fingerprint" >&2
   read -r _ans < "$confirm_src" || _ans=""
-  case "$_ans" in [yY]*) : ;; *) agsec_die "aborted — nothing shared" ;; esac
+  case "$_ans" in [yY]*) : ;; *) agsec_canceled "aborted — nothing shared (canceled; nothing was changed)" ;; esac
 fi
 
 # --- 8. encrypt (value: STDIN → age → armor; never argv/var/stdout) -------------
@@ -130,9 +142,9 @@ digest="$(sed -n '/-----BEGIN AGE ENCRYPTED FILE-----/,/-----END AGE ENCRYPTED F
 
 # --- advisory --verify readback (a second y/N over the value-blob digest) -------
 if [ -n "$verify" ] && [ -z "${AGENT_SECRETS_UNATTENDED:-}" ]; then
-  printf 'Read this digest to the recipient out-of-band; they must confirm it matches: %s\n  Proceed? [y/N] ' "$digest" >&2
+  printf 'Read this digest to the recipient out-of-band; they must confirm it matches: %s\nDid the recipient confirm this digest matches? [y/N] ' "$digest" >&2
   read -r _v < "$confirm_src" || _v=""
-  case "$_v" in [yY]*) : ;; *) agsec_die "aborted — digest not confirmed" ;; esac
+  case "$_v" in [yY]*) : ;; *) agsec_canceled "aborted — digest not confirmed (canceled; nothing was shared)" ;; esac
 fi
 
 # --- 10. emit the envelope inside a code fence ----------------------------------
@@ -178,4 +190,4 @@ if [ "$recipient_kind" != self ]; then
     shared_with="$fingerprint" shared_at="$(date +%F)" direction="sent" 2>/dev/null || true
 fi
 
-agsec_ok "encrypted $name → \"$label\" ($fingerprint) — envelope printed above (no auto-rotate)"
+agsec_receipt "encrypted $name → \"$label\" ($fingerprint) — envelope printed above (no auto-rotate)"

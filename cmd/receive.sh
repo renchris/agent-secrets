@@ -24,10 +24,12 @@ while [ "$#" -gt 0 ]; do
     --rename) shift; rename="${1:-}"; [ -n "$rename" ] || agsec_die "--rename needs a NAME" 2;;
     --rename=*) rename="${1#--rename=}";;
     --yes-i-reviewed) yes_reviewed=1;;
-    *) agsec_die "unknown flag: $1" 2;;
+    -*) agsec_unknown_option receive "$1";;
+    *) agsec_unexpected_argument receive;;
   esac
   shift
 done
+agsec_parse_only_exit
 [ -f "$(agsec_store_file)" ] || agsec_die "no store yet — run: agent-secrets setup"
 
 # --- confirm-source seam (design §3.7) ------------------------------------------
@@ -44,19 +46,24 @@ _receive_confirm_yes() {
 # No CONTROLLING TERMINAL and no CI escape → hard-refuse (never auto-default the gate). A genuine tty is
 # required, not mere openability: `( : < file )` passes for any readable "y" file, which an agent could
 # point AGSEC_CONFIRM_SRC at to slip the confirm. agsec_src_is_tty tests `[ -t ]` on the opened fd.
-if [ -z "$yes_reviewed" ] && ! agsec_src_is_tty "$CONFIRM_SRC"; then
-  agsec_die "receive needs a controlling terminal (or pass --yes-i-reviewed for CI)"
+# CI / AGENT_SECRETS_NONINTERACTIVE refuse here as well: non-interactive mode never grants consent.
+if [ -z "$yes_reviewed" ] && { agsec_noninteractive_requested || ! agsec_src_is_tty "$CONFIRM_SRC"; }; then
+  agsec_fail missing_input "receive needs a controlling terminal (or pass --yes-i-reviewed for CI)"
 fi
 
 # --- ingest the blob from STDIN (mirror restore.sh:21-25) -----------------------
 # The blob is envelope TEXT (not a secret value), so holding it in a var is fine; the decrypted VALUE
 # is what must stay out of vars/argv (below). tty-vs-cat branch survives bracketed-paste corruption.
-if [ -t 0 ]; then
-  printf '%sPaste the share envelope, then press Ctrl-D:%s\n' "$C_DIM" "$C_RESET" >&2
-  blob="$(cat)"
-else
-  blob="$(cat)"
+# The read stops one byte past twice the cap, so an endless stream is refused without being buffered.
+# 2× because a CRLF chat paste can exceed the cap raw yet fit under it once normalized (cap 1 below).
+read_max=$((AGSEC_RECEIVE_MAX_ENVELOPE * 2))
+if agsec_stdin_is_tty; then
+  printf 'Paste the share envelope, then press Ctrl-D:\n' >&2
 fi
+blob="$(head -c "$((read_max + 1))")"
+read_bytes="$(printf '%s' "$blob" | wc -c | tr -d ' ')"
+[ "$read_bytes" -le "$read_max" ] \
+  || agsec_die "envelope too large (more than $read_max bytes) — refusing before decode"
 # Normalize CRLF: a Windows/cross-platform chat paste carries \r, which the anchored `^…-----$` parses
 # below would reject outright (the whole flow is "paste through chat"). Strip carriage returns.
 blob="${blob//$'\r'/}"
@@ -89,7 +96,10 @@ body="$(printf '%s\n' "$armor" | sed '1d;$d')"
 name="${rename:-$env_name}"
 [ -n "$name" ] || agsec_die "envelope has no name and no --rename given"
 case "$name" in
-  [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*) agsec_die "invalid name '$name' — use letters, digits, underscore (start with a letter/_)";;
+  [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]*)
+    # An envelope name is untrusted pasted text (it can carry ESC sequences), so it is never echoed.
+    [ -n "$rename" ] || agsec_die "the envelope's name isn't a valid secret name — re-run with --rename NEW (letters, digits, underscore; start with a letter/_)"
+    agsec_die "invalid name '$name' — use letters, digits, underscore (start with a letter/_)";;
 esac
 
 # --- secure temps + shred-on-every-exit (design §3.7: value/key never persist) --
@@ -115,9 +125,12 @@ local_digest="$(agsec_digest <"$dbody")"
 # Only claim a match when the in-band digest actually equals the local one — the old note asserted
 # "matches" unconditionally, contradicting the mismatch warning below on a corrupt envelope.
 if [ -z "$embedded_digest" ]; then
-  agsec_note "digest $local_digest — no in-band 'digest:' line to compare; have the sender read theirs to you (share --verify)"
+  agsec_plan "digest $local_digest — no in-band 'digest:' line to compare; have the sender read theirs to you (share --verify)"
 elif [ "$embedded_digest" = "$local_digest" ]; then
-  agsec_note "digest $local_digest — matches the 'digest:' line in the block you pasted (a --verify sender reads it aloud)"
+  agsec_plan "digest $local_digest — matches the 'digest:' line in the block you pasted (a --verify sender reads it aloud)"
+elif ! [[ "$embedded_digest" =~ ^sha256:[0-9a-f]{12}$ ]]; then
+  # Untrusted pasted text: echo it only once it has the digest's exact shape.
+  agsec_warn "envelope 'digest:' line is malformed — possible corruption (local value $local_digest)"
 else
   agsec_warn "envelope digest hint ($embedded_digest) differs from the locally computed value ($local_digest) — possible corruption"
 fi
@@ -135,12 +148,14 @@ agsec_warn "sender unverified — you are trusting whoever pasted this"
   || agsec_die "refusing to receive the in-store canary name ($AGENT_SECRETS_CANARY_NAME) — sharing the tripwire poisons whole-store-sweep detection"
 
 # --- existing-NAME hard-stop (design §3.7) --------------------------------------
-if store_has "$name"; then
+rc=0; store_has "$name" || rc=$?
+[ "$rc" -ne 2 ] || agsec_die_undecryptable
+if [ "$rc" -eq 0 ]; then
   if [ -n "$yes_reviewed" ]; then
     agsec_die "$name already exists — refusing to overwrite under --yes-i-reviewed (use --rename NEW)"
   fi
   agsec_warn "$name already exists in your store — overwrite?"
-  _receive_confirm_yes || agsec_die "aborted — $name left unchanged (use --rename NEW to keep both)"
+  _receive_confirm_yes || agsec_canceled "aborted — $name left unchanged (use --rename NEW to keep both)"
 fi
 
 # --- decrypt → store (names-only; value never in a shell var/argv) --------------
@@ -176,4 +191,5 @@ rm -f "$pt"; pt=""
 # make receive exit non-zero (a caller would retry and hit the NAME-collision refusal). Match share's guard.
 store_manifest_set_sharing "$name" direction="received" source="received:peer" 2>/dev/null || true
 
-agsec_ok "received $name (value never shown)"
+agsec_receipt "received $name (value never shown)"
+printf '%s\n' "$name"

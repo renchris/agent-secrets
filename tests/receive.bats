@@ -2,7 +2,9 @@
 # tests/receive.bats — the `receive` verb: tty-gated ingest, local digest, canary + collision guards,
 # dual byte caps, multi-line safety, value-never-in-argv. Blobs are built INLINE (no dependency on the
 # `share` verb) by encrypting a test value to the recipient's OWN age key (setup_store writes age.pub).
+bats_require_minimum_version 1.5.0
 load test_helper
+load mode_matrix
 
 # Build a valid v1 envelope on STDOUT: encrypt VALUE to the local age.pub, wrap with the exact headers
 # and the LOCALLY-correct digest (over base64-decoded ciphertext bytes) — same computation receive does.
@@ -31,6 +33,30 @@ make_blob_ver() {
 
 receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
 
+# _drive PASTE-FILE PROMPT ANSWER SHELL-CMD: run SHELL-CMD on a fresh pty with the file confirm seam off,
+# paste PASTE-FILE at the envelope prompt and end it with Ctrl-D, answer PROMPT with ANSWER, and set
+# $output to the pty transcript and $status to the command's exit.
+_drive() {
+  command -v expect >/dev/null 2>&1 || skip "expect not available"
+  cat >"$BATS_TEST_TMPDIR/drive.exp" <<'EOF'
+# One wall-clock bound and no per-expect timeout: see tests/wizard_interactive.bats.
+set timeout -1
+after 900000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
+spawn env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM -u CI -u AGENT_SECRETS_NONINTERACTIVE -u AGSEC_TEST_CONFIRM -u AGSEC_CONFIRM_SRC bash -c $env(DRIVE_SH)
+expect -ex "Paste the share envelope"
+set fh [open $env(DRIVE_PASTE) r]
+while {[gets $fh l] >= 0} { send -- "$l\r" }
+close $fh
+send "\004"
+expect -ex $env(DRIVE_PROMPT) { send -- "$env(DRIVE_ANSWER)\r" }
+expect eof { }
+catch wait result
+if {[llength $result] > 4} { puts "\nDRIVE-KILLED $result"; exit 92 }
+exit [lindex $result 3]
+EOF
+  run env DRIVE_PASTE="$1" DRIVE_PROMPT="$2" DRIVE_ANSWER="$3" DRIVE_SH="$4" expect "$BATS_TEST_TMPDIR/drive.exp"
+}
+
 @test "round-trip: single-line value ingests from STDIN and stores names-only" {
   setup_store
   make_blob MY_TOKEN 'sk-secret-abc123' > "$BATS_TEST_TMPDIR/blob"
@@ -47,7 +73,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   setup_store
   make_blob MY_TOKEN 'v' > "$BATS_TEST_TMPDIR/blob"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/does-not-exist" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 2 ]
   [[ "$output" == *"controlling terminal"* ]] || return 1
   run store_has MY_TOKEN
   [ "$status" -ne 0 ]                          # nothing stored
@@ -85,7 +111,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   setup_store
   run bash "$(receive_bin)" receive --bogus </dev/null
   [ "$status" -eq 2 ]
-  [[ "$output" == *"unknown flag"* ]] || return 1
+  [[ "$output" == *"Unknown option"* ]] || return 1
 }
 
 @test "unknown envelope version is rejected" {
@@ -103,7 +129,7 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   make_blob DUPE 'incoming' > "$BATS_TEST_TMPDIR/blob"
   printf 'n\n' > "$BATS_TEST_TMPDIR/confirm"
   run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/confirm" bash "$(receive_bin)" receive < "$BATS_TEST_TMPDIR/blob"
-  [ "$status" -ne 0 ]
+  [ "$status" -eq 130 ]
   [[ "$output" == *"aborted"* ]] || return 1
   run store_extract DUPE
   [ "$output" = "keep-me" ]                    # confirm was HONORED, not defaulted to yes
@@ -274,4 +300,110 @@ receive_bin() { printf '%s\n' "$REPO_ROOT/bin/agent-secrets"; }
   [[ "$output" == *"could not decrypt"* ]] || return 1
   [[ "$output" != *"age:"* ]] || return 1                 # no raw age diagnostic leaked
   [[ "$output" != *"no identity matched"* ]] || return 1
+}
+
+# --- streams, untrusted envelope text, read bound ------------------------------
+@test "receive prints only NAME on stdout" {
+  setup_store
+  make_blob CI_TOKEN 'fake-placeholder' > "$BATS_TEST_TMPDIR/blob"
+  run --separate-stderr bash "$(receive_bin)" receive --yes-i-reviewed < "$BATS_TEST_TMPDIR/blob"
+  [ "$status" -eq 0 ]
+  [ "$output" = CI_TOKEN ]
+  [[ "$stderr" == *"received CI_TOKEN"* ]] || return 1
+}
+
+@test "receive on a malformed envelope exits non-zero with empty stdout" {
+  setup_store
+  printf 'not an envelope\n' > "$BATS_TEST_TMPDIR/blob"
+  run --separate-stderr bash "$(receive_bin)" receive --yes-i-reviewed < "$BATS_TEST_TMPDIR/blob"
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+  [[ "$stderr" == *"unknown or unsupported share envelope"* ]] || return 1
+}
+
+@test "receive never echoes an ESC from the envelope name or digest" {
+  setup_store
+  local esc=$'\e' blob
+  make_blob "BAD${esc}[2JNAME" 'fake-placeholder' > "$BATS_TEST_TMPDIR/blob"
+  run bash "$(receive_bin)" receive --yes-i-reviewed < "$BATS_TEST_TMPDIR/blob"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"--rename NEW"* ]] || return 1
+  [[ "$output" != *$'\e'* ]] || return 1
+  blob="$(make_blob DIGEST_ESC 'fake-placeholder')"
+  printf '%s\n' "${blob/digest: sha256:/digest: sha256:${esc}[2J}" > "$BATS_TEST_TMPDIR/blob"
+  run bash "$(receive_bin)" receive --yes-i-reviewed < "$BATS_TEST_TMPDIR/blob"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"'digest:' line is malformed"* ]] || return 1
+  [[ "$output" != *$'\e'* ]] || return 1
+}
+
+@test "receive refuses an endless stream without buffering it" {
+  setup_store
+  run bash -c 'head -c 200000 /dev/zero | tr "\0" A | bash "$1" receive --yes-i-reviewed' _ "$(receive_bin)"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"too large"* ]] || return 1
+  [[ "$output" == *"before decode"* ]] || return 1
+}
+
+@test "receive on an undecryptable store stops before age decrypt" {
+  setup_store
+  make_blob UNREADABLE 'fake-placeholder' > "$BATS_TEST_TMPDIR/blob"
+  printf 'NOT_A_SOPS_FILE=1\n' > "$(agsec_store_file)"
+  local real_age shim="$BATS_TEST_TMPDIR/shim" log="$BATS_TEST_TMPDIR/age-argv.log"
+  real_age="$(command -v age)"
+  mkdir -p "$shim"
+  { printf '#!/usr/bin/env bash\n'
+    printf 'printf "%%s\\n" "$*" >> "%s"\n' "$log"
+    printf 'exec "%s" "$@"\n' "$real_age"; } > "$shim/age"
+  chmod +x "$shim/age"
+  run env PATH="$shim:$PATH" bash "$(receive_bin)" receive --yes-i-reviewed < "$BATS_TEST_TMPDIR/blob"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"decrypt the store"* ]] || return 1
+  [ ! -s "$log" ]                                        # age -d never ran
+}
+
+@test "AGSEC_PARSE_ONLY stops receive after parsing, before the store and terminal checks" {
+  run env AGSEC_PARSE_ONLY=1 bash "$(receive_bin)" receive --rename NEW_NAME </dev/null
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+# --- mode matrix around the overwrite prompt ---------------------------------------
+@test "receive overwrite prompt, mode matrix: only a real terminal is asked; every other mode refuses" {
+  setup_store
+  printf 'keep-me' | store_add DUPE
+  make_blob DUPE 'fake-incoming' > "$BATS_TEST_TMPDIR/blob"
+  local sh="exec bash \"\$REPO_ROOT/bin/agent-secrets\" receive"
+  local out="$BATS_TEST_TMPDIR/receive.out"
+
+  _drive "$BATS_TEST_TMPDIR/blob" 'overwrite?' y "$sh"        # tty, answered y
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"DUPE already exists in your store — overwrite?"* ]] || return 1
+  run store_extract DUPE
+  [ "$output" = fake-incoming ]
+
+  printf 'keep-me' | store_add DUPE
+  _drive "$BATS_TEST_TMPDIR/blob" 'overwrite?' y "$sh >\"$out\""   # stdout-redirected, answered y
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"overwrite?"* ]] || return 1
+  [ "$(cat "$out")" = DUPE ]
+  run store_extract DUPE
+  [ "$output" = fake-incoming ]
+
+  printf 'keep-me' | store_add DUPE
+  local cmd=(bash "$REPO_ROOT/bin/agent-secrets" receive) mode
+  # receive is not env-gated (design §3.10), so the agent row refuses at the terminal gate: exit 2.
+  for mode in stdin-piped ci-tty noninteractive-tty agent; do
+    MM_INPUT="$(cat "$BATS_TEST_TMPDIR/blob")" mm_run "$mode" -- "${cmd[@]}"
+    [ "$mm_status" -eq 2 ] || { echo "$mode: status $mm_status"; return 1; }
+    [[ "$mm_pty$mm_stderr" == *"receive needs a controlling terminal"* ]] || { echo "$mode: no refusal"; return 1; }
+    [[ "$mm_pty$mm_stdout$mm_stderr" != *"overwrite?"* ]] || { echo "$mode: prompted"; return 1; }
+    [ -z "$mm_stdout" ] || { echo "$mode: stdout not empty"; return 1; }
+  done
+
+  mm_run json-tty -- "${cmd[@]}" --json
+  [ "$mm_status" -eq 2 ]
+  [[ "$mm_pty" != *"overwrite?"* ]] || return 1
+  run store_extract DUPE
+  [ "$output" = keep-me ]
 }
