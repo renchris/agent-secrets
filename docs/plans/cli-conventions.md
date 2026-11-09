@@ -2553,3 +2553,91 @@ Updated in round 2. The "Est. LOC" column gives the round-2 estimate, with round
 - New units: B11, B12, B13, C8. Existing rows corrected: 22 (counted by hand from `grep -n 'Pass 2'`): B9.1-B9.13, A.12, B4.7, B4.9, B8.13, C7.3, D5, D10, D13, E1.
 - New decisions: D17-D26. New exception records: E8-E14.
 - Sizing: about 4,160 → about 5,910 LOC (estimated), every unit under 500.
+
+## 9. Wave B landing notes
+
+Wave B landed on main by fast-forward push, one unit at a time, on 2026-11-08 and 2026-11-09. Every unit's gate is `bash /tmp/cli-conv-gate-run.sh` (every §1 gate: shellcheck, telemetry, bash 3.2 parse, `perl -c`, assets and the secret scan, bats with the TAP plan asserted, plus `diagrams:check` when README or assets change) on the exact tree that was pushed, or on a stack that contained it. The one bats skip in every run is the R408 lint (`tests/common.bats`, "TTY/CI checks only in lib/common.sh"); see B8 below. Contract packets in force: ad226c7513ea (keep today's exit codes, JSON shapes, confirmation flags and preview-by-default) and 8825ca436960 (D1-D26 keep today's behavior until answered).
+
+| Unit | Landed sha | Gate |
+|---|---|---|
+| B1 | c8b4eb9 | GATES rc=0, bats 1..323, not ok 0, skip 1 |
+| B4 | 87171aa | GATES rc=0 on c8b4eb9 + B4, bats 1..337, not ok 0, skip 1 |
+| B5 | 1c770c0 | GATES rc=0 on 87171aa + B5, bats 1..348, not ok 0, skip 1 |
+| B9 | 96054e2 | GATES rc=0 on 1c770c0 + B9, bats 1..367, not ok 0, skip 1 |
+| B2 | d79ecb1 | GATES rc=0 on 96054e2 + B2, bats 1..383, not ok 0, skip 1 |
+| (test) | 0d03e92 | load-tolerant egress SIGTERM and concurrent store_add tests; covered by B3's gate |
+| B3 | 58d065c | GATES rc=0 on d79ecb1 + test + B3, bats 1..397, not ok 0, skip 1 |
+| B7 | 4ed7ec5 | GATES rc=0 on 58d065c + B7, bats 1..419, not ok 0, skip 1 |
+| B6 | 0e3bb8d | GATES rc=0 on 4ed7ec5 + B6, bats 1..434, not ok 0, skip 1 |
+| B11 | 25fdb14 | GATES rc=0 on 0e3bb8d + B11, bats 1..454, not ok 0, skip 1 |
+| B12 | 28875a4 | GATES rc=0 on 25fdb14 + B12, bats 1..468, not ok 0, skip 1 |
+| (test) | 2db4fce | wizard Ctrl-C test fix: repeat Ctrl-C until restore_flow returns; gated with B13 |
+| B13 | 4c441ca | GATES rc=0 on 28875a4 + test + B13 + B9.5 fix (the tree of 7a997cf), bats 1..478, not ok 0, skip 1 |
+| (B9.5 fix) | 7a997cf | Ctrl-C at the consent prompt is a decline with its receipt; gated with B13 |
+| B10 | 8a8334d | GATES rc=0 on 7a997cf + B10, bats 1..498, not ok 0, skip 1 |
+| B8 | f3fb1d4 | GATES rc=0 on 8a8334d + B8, bats 1..507, not ok 0, skip 1, diagrams:check rc=0 |
+
+### Conflicts and deviations, by unit
+
+Each one keeps the caller working and does not widen the change.
+
+**B1 (store)**
+- B1.1: `store_has` matches names literally (`grep -qxF`); `store_init` dies through `agsec_die_undecryptable` when the canary returns 2 (the plan's version exited silently).
+- B1.5: bash 3.2 starts background jobs with SIGINT and SIGQUIT ignored, and `trap - INT` cannot undo that. `store_exec_managed` launches the child through `/usr/bin/perl -e '$SIG{INT}=$SIG{QUIT}="DEFAULT"; exec …'` (same pid).
+- B1.10 vs B1.12: an unknown `-x` is `agsec_unknown_option`; a bare word before `--` keeps the old usage line, which `tests/flows.bats:65` and `tests/store.bats:74` pin.
+- Two B1 tests were made load-tolerant in their own commit (0d03e92): the egress SIGTERM test's child now sleeps 600 s, longer than the 120 s wait for it to appear; the concurrent `store_add` test asserts the contract under a 10 s store-lock timeout (a writer that reports success finds its name; one that fails names the lock).
+
+**B2 (add, list)**
+- B2.4: help does not list `list --format=json`; the alias still works (B8 dropped it from help).
+
+**B4 (backup)**
+- B4.10: the `backup.sh` catch-all is split: `-*` is `agsec_unknown_option`, a bare positional is `agsec_unexpected_argument` (both exit 2).
+
+**B5 (uninstall)**
+- B5.11: the row says "prompt only in a tty", but B5.9's `agsec_noninteractive` treats stdout-redirected with stdin and stderr on a tty as interactive. Kept `agsec_noninteractive`; the test asserts the prompt there. JSON on a tty is asserted as exit 2.
+- B5.12: `manifest_backup_user_target` takes an optional third argument OURS (default `$AGENT_SECRETS_ROOT/bin/<name>`) so install.sh can pass `$INSTALL_DIR/bin/<name>`.
+
+**B6 (setup)**
+- B6 made setup's `_import_env_valid` require at least one name (matching install). B9's loop in `tests/install.bats` that pinned "setup accepts ','" now expects status 1; `tests/install.bats` joined B6's paths.
+- B6.16 vs `tests/one_command.bats:150-160` (wizard lines at most 72 columns): the row's done-screen line "(Claude Code reads the agent rules in ~/.claude/CLAUDE.md, if you added them.)" is 78 columns. Kept the words over two `ui_say` lines. The row-verbatim "Writing the agent-secrets rules (advisory, recorded in the manifest) into:" (74 columns) stays: it shows only when the user accepts discovery, a path no width test covers.
+- The flows.bats mode-matrix probe redirected only the `printf`, not setup's stderr; it now runs `bash -c 'exec 2>"$1"; …'`.
+
+**B7 (doctor, dispatcher)**
+- Fixed the stale comment at `lib/common.sh:44` (the dispatcher's `-V` sed was removed by B7.8).
+
+**B9 (install.sh: parsing, help, re-exec)**
+- B9.3(a): the row's `Unexpected argument '$1'` would echo the token; kept the names-only "Unexpected argument for install.sh." per `agsec_unexpected_argument` and B9.2's no-echo rule.
+- B9.14's dry-run test and B9.3's parse-only check of B9.8's printed command moved to B11 (rows B9.8 and C7.1 were not yet present). `_self_cmd` and the POSIX `_agsec_show_url` seam are in place.
+- B9.15: the `docs/FAQ.md:71` edit was left to its owner, B8.18; the install.sh comment parts of D23(A) are done.
+- B9.5's PTY tests moved to B10.
+
+**B11 (install.sh: consent, setup parity, plan, offer)**
+- B9.7/B11.6: `INTERACTIVE` and `_attach_tty` treat `AGENT_SECRETS_NONINTERACTIVE=1` as nobody present (parity with `setup_resolve_mode`, which B11.4's test pins). On a tty with that variable the consent keypress is skipped, as in CI.
+- B9.11/B13.1: `_target_is_foreign` is defined inline (the B13.1 spec); B13 rewords the foreign-symlink plan row to say the link is backed up.
+- B9.8/B11.3: a mirror with no baked digest prints "Checked only against the mirror's own .sha256: transport integrity, not tamper evidence." instead of "SHA-256 verified." No test pinned the old line.
+- B11.4 follows D19(a): setup stays a child; the discovery offer runs after it, only on the wizard path, only without `--no-discovery`.
+
+**B12 (install.sh: downloads, exit handler, receipts, signals)**
+- B12.1/B9.9, POSIX part not done: the `sh` re-fetch keeps `$(curl -fsSL URL)` with no `-o` and no curl budget, because B9's `tests/install.bats:382-411` serve install.sh through the curl mock's stdout mode and pin the argv to `-fsSL <url>`; the plan's `-o` form fails both (measured). URL redaction on the error line is done. Finishing it needs those tests moved to `AGSEC_MOCK_DL_DIR` with a URL match.
+- B12.5: the plan's literal `_say(){ ( printf ... >&2 ) 2>/dev/null || true; }` silences all output on bash 3.2 (the subshell's `2>/dev/null` also catches its `>&2`; measured). Wrote `( printf ... >&2 ) || true`, which keeps the row's intent (the subshell takes SIGPIPE).
+- B9.10/B12.5: recovery commands in the recorded window print `<INSTALL_DIR>/bin/agent-secrets uninstall --dry-run`, because the `~/bin` link may not exist yet; setup-phase messages use BIN_DIR as planned.
+- The retry notice uses `curl ... 2>&1 | _retry_notice` under pipefail instead of `2> >(...)`: bash 3.2 cannot wait on a process substitution.
+- D14(a) (setup's exit code passes through), D19(a) (setup stays a foreground child) and D25(a) (URL redacted on display only) are in force.
+
+**B13 (install.sh: backups, staged swap, lock)**
+- The foreign-symlink plan row now reads "replace your existing symlink <path> (backed up to $STATE_DIR/<f>.preinstall.bak; uninstall restores it)"; the replacing note "is replaced in place, with no backup" became "is replaced, with no backup" (the staging swap).
+- Install lock: `$STATE_DIR/install.lock`, a 60 s wall-clock wait, a dead pid's lock reclaimed at once, an unreadable pid's after 5 s (the `agsec_lock` rules). New global `_AGSEC_SWAPPED`.
+- Landed with two neighbors in the same push: a test fix for B6's "Ctrl-C during the hidden key paste restores terminal echo" (under load bash 3.2 can swallow a SIGINT that arrives while it reaps a subshell, so the drive repeats Ctrl-C every 20 s until `restore_flow` returns), and a B9.5 fix found by B10's PTY suite: Ctrl-C at the consent prompt killed the installer with no receipt, because the INT trap was armed only after consent. The consent loop now traps INT itself and prints "Canceled. Nothing was changed." with exit 130, as for "n".
+
+**B10 (install.sh TTY tests)**
+- New `tests/install_tty.bats` (20 tests, skip 0). `load mode_matrix` was added to `tests/one_command.bats` and `tests/audit_regressions.bats`, and the `tests/install.bats:427` shim test is wrapped in `mm_no_ctty` too (beyond the rows' list, needed for a stable controlling-tty state).
+- On this Mac's expect 5.45, the one-braced-argument form never matches a `[Y/n]` pattern; the drives use the unbraced multi-pattern form.
+
+**B8 (help and docs)**
+- The R408 lint (`tests/common.bats`, "TTY/CI checks only in lib/common.sh") stays skipped: enabling it fails on `cmd/setup.sh`'s `elif [ ! -t 2 ]` (B6.13's branch in `setup_resolve_mode`). The skip reason names that line.
+- The stale common.bats `-V` test is retitled "lib/common.sh keeps exactly one unindented AGENT_SECRETS_VERSION fallback, a semver".
+- B8.5: `help --json` `flags[]` gains `type`, `value_hint`, `default` and `choices` (fields added only, no shape change).
+- B8.12 (PR-body transcripts): not applicable; Wave B landed by push to main, with no PR.
+- B8.13 (document the new installer flags) vs B8.15 (advertise nothing an unreleased tag lacks; the docs pin v0.1.3): kept the B8.13 lists with a note that they arrive with the next release and that v0.1.3's install.sh lacks them.
+- help folds text with a byte-counting awk, because macOS `fold` under `LC_ALL=C` gives non-ASCII bytes zero width.
+- `lib/help.sh` lists uninstall's exit 1 (partial rollback, B5) and backup's exit 2 without `--yes` when not interactive (B4.2) and 130 on decline (B4.3).
