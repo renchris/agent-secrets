@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # install.sh — one-command bootstrap (curl'd).
 # FUNCTION-GUARDED (main(){…}; main "$@") so a truncated download can never partial-exec
-# Consent gate is the FIRST screen; --dry-run = plan-then-apply (the rendered
-# plan is exactly what executes). STOP-ASK gates have NO --force/env bypass.
+# Consent gate is the FIRST screen; --dry-run renders the same plan and runs the local checks, but cannot
+# check the download or the dependency steps. Consent tiers: a human at a terminal answers [Y/n]; with no
+# terminal, or in a detected coding-agent or CI session (counted as no human present), the plan is the
+# disclosure and running the installer is the consent.
 # Install from a PINNED release tag (never main); SHA-256 verify the release tarball and every
 # dependency binary before running it. This script is itself the trust root: the sh re-fetch below runs
 # AGENT_SECRETS_INSTALL_URL's text unverified, so that override replaces the trust root.
@@ -174,7 +176,7 @@ main() {
   _say()  { printf '%s\n' "$*" >&2; }
   _step() { printf '  → %s\n' "$*" >&2; }
   _die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
-  _run()  { if [ "$DRY_RUN" -eq 1 ]; then _step "$*"; else _step "$*"; "$@"; fi; }
+  _run()  { _step "$*"; "$@"; }
   _debug() { if [ "$DEBUG" -eq 1 ]; then printf 'debug: %s\n' "$*" >&2; fi; }
 
   # The command that re-runs THIS installer, printed in hints (never run). A real script file re-runs
@@ -231,7 +233,7 @@ main() {
   # opposite together are a usage error, never last-wins (an appended flag must not turn a preview into
   # a mutation). Repeating the same value is idempotent.
   local DRY_RUN=0 HEADLESS=0 IMPORT_ENV="" NO_DISCOVERY=0 DISCOVERY_YES=0 DEBUG=0
-  local _f_dry="" _f_headless="" _f_disc="" _f_import=0 _flag _val
+  local _f_dry="" _f_headless="" _f_disc="" _f_import=0 _f_nocolor=0 _flag _val
   _bool() {  # FLAG VALUE-AFTER-= → prints 1 or 0, or dies
     case "$2" in true) printf '1' ;; false) printf '0' ;; *) _usage_die "Use $1=true or $1=false." ;; esac
   }
@@ -258,7 +260,7 @@ main() {
                          IMPORT_ENV="$2"; _f_import=1; shift ;;
       --import-env=*)    IMPORT_ENV="${1#--import-env=}"; _f_import=1
                          [ -n "$IMPORT_ENV" ] || _usage_die "Can't use --import-env without <NAME>." ;;
-      --no-color)        NO_COLOR=1; export NO_COLOR ;;
+      --no-color)        NO_COLOR=1; export NO_COLOR; _f_nocolor=1 ;;
       --debug)           DEBUG=1 ;;
       -h|--help|help)    _agsec_usage; return 0 ;;   # the pre-scan above normally answers first
       --)                shift; [ "$#" -eq 0 ] || _usage_die "Unexpected argument for install.sh. It takes no positional arguments."; break ;;
@@ -297,89 +299,240 @@ main() {
     return 1
   }
 
+  # The mode resolves in two steps: AGENT before the attach (the attach must never run in an agent
+  # session), the terminal state after it (the attach rebinds stdin).
+  local AGENT=0 INTERACTIVE=0 MODE_WHY=""
+  if _agent_session; then AGENT=1; fi
+
   # `curl … | bash` binds stdin to the PIPE, so every `[ -t 0 ]` gate reads "no human here" while a
   # real terminal sits in front of the user — which is how the most widely-known install idiom
   # silently degraded into a two-command flow. Rebind stdin to the controlling terminal so the one
   # command stays one command. NEVER inside an agent session: there /dev/tty is the agent's own pty
-  # and its transcript is secret-bearing, so that case still defers to a real terminal (below).
+  # and its transcript is secret-bearing. Nor when the run says nobody answers (UNATTENDED, CI,
+  # AGENT_SECRETS_NONINTERACTIVE=1): the rebind would also discard a piped seed line.
   _attach_tty() {
+    [ "$AGENT" -eq 0 ] || return 1
+    if [ -n "${AGENT_SECRETS_UNATTENDED:-}" ] || [ -n "${CI:-}" ] || [ "${AGENT_SECRETS_NONINTERACTIVE:-}" = 1 ]; then
+      return 1
+    fi
     [ -t 0 ] && return 0
-    _agent_session && return 1
     ( exec 3</dev/tty; [ -t 3 ] ) 2>/dev/null || return 1
     exec 0</dev/tty || return 1
     [ -t 0 ]
   }
-  if _attach_tty; then _debug "stdin: a terminal"; else _debug "stdin: no terminal (setup will run headless)"; fi
+  # The one interactive decision (consent keypress, plan wording, discovery offer). It mirrors
+  # setup_resolve_mode (cmd/setup.sh), so the plan names the setup mode that really runs; the terminal
+  # tests and the CI read live only here and in _attach_tty (tests/install_plan.bats checks both).
+  _resolve_mode() {
+    INTERACTIVE=0
+    if [ "$AGENT" -eq 1 ]; then MODE_WHY="coding-agent session"
+    elif [ -n "${AGENT_SECRETS_UNATTENDED:-}" ]; then MODE_WHY="unattended"
+    elif [ -n "${CI:-}" ] || [ "${AGENT_SECRETS_NONINTERACTIVE:-}" = 1 ]; then MODE_WHY="non-interactive"
+    elif [ ! -t 0 ]; then MODE_WHY="no terminal"
+    elif [ ! -t 2 ]; then MODE_WHY="stderr is not a terminal"
+    else INTERACTIVE=1
+    fi
+  }
+  if _attach_tty; then _debug "stdin: a terminal"; else _debug "stdin: not attached to a terminal"; fi
+  _resolve_mode
+  _debug "mode: ${MODE_WHY:-interactive}"
+  # Setup runs its wizard only on this path; anywhere else it runs headless.
+  _wizard_path() { [ "$INTERACTIVE" -eq 1 ] && [ "$HEADLESS" -eq 0 ] && [ -z "$IMPORT_ENV" ]; }
 
   # --- the plan (rendered identically for consent + dry-run) -------------------
+  # Dot-separated numeric compare for the reinstall rows (bash 3.2 has no sort -V): prints lt, eq or gt.
+  _ver_cmp() {
+    local a="$1." b="$2." x y
+    while [ -n "$a" ] || [ -n "$b" ]; do
+      x="${a%%.*}"; y="${b%%.*}"; a="${a#*.}"; b="${b#*.}"
+      x=$((10#${x:-0})); y=$((10#${y:-0}))
+      if [ "$x" -lt "$y" ]; then printf 'lt\n'; return 0; fi
+      if [ "$x" -gt "$y" ]; then printf 'gt\n'; return 0; fi
+    done
+    printf 'eq\n'
+  }
+  # The unpacked VERSION of an existing install, or "unknown" when it does not read as a version.
+  _installed_version() {
+    local v; v="$(head -n 1 "$INSTALL_DIR/VERSION" 2>/dev/null)" || v=""
+    v="${v//[[:space:]]/}"; v="${v#v}"
+    case "$v" in ''|*[!0-9.]*|.*|*.|*..*) printf 'unknown\n' ;; *) printf '%s\n' "$v" ;; esac
+  }
+  # Plan text only (lib/ is not unpacked yet): a ~/bin target is foreign when it exists, or is a link,
+  # and is not already our own link. The write itself decides what is backed up.
+  _target_is_foreign() {
+    local t="$BIN_DIR/$1"
+    { [ -e "$t" ] || [ -L "$t" ]; } || return 1
+    if [ -L "$t" ] && [ "$(readlink "$t")" = "$INSTALL_DIR/bin/$1" ]; then return 1; fi
+    return 0
+  }
+  # The files the agent rules can go to, resolved as lib/discovery.sh resolves them (inlined: the lib
+  # is not unpacked yet). The registry decides at write time which of them are present.
+  _plan_discovery_paths() {
+    local claude codex gate="(if that tool's config dir exists)"
+    if [ -n "${AGENT_SECRETS_HOME:-}" ]; then
+      claude="$AGENT_SECRETS_HOME/.claude"; codex="$AGENT_SECRETS_HOME/.codex"
+    else
+      claude="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; codex="${CODEX_HOME:-$HOME/.codex}"
+    fi
+    _say "      $claude/CLAUDE.md   (Claude Code and VS Code Copilot, if either is present)"
+    [ "$claude" = "$HOME_DIR/.claude" ] || _say "      $HOME_DIR/.claude/CLAUDE.md   (the copy VS Code Copilot reads)"
+    _say "      $codex/AGENTS.md   $gate"
+    _say "      $HOME_DIR/.gemini/GEMINI.md   $gate"
+    _say "      $HOME_DIR/.config/zed/AGENTS.md   $gate"
+    _say "      $HOME_DIR/.agents/AGENTS.md   $gate"
+    _say "      (nothing is written on an org/MDM-managed machine: its managed layer owns these rules)"
+  }
   _render_plan() {
+    local f old replacing=0 at=""
     _say ""
     _say "agent-secrets installer — this will:"
-    _say "  • ensure age, sops, jq (reuse yours · Homebrew if present · else pinned, SHA-256-verified downloads — no sudo)"
-    _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG, SHA-256 verified)"
+    if [ -n "${AGENT_SECRETS_BASE_URL:-}" ]; then _say "  Source: $(_agsec_show_url "$BASE_URL") (AGENT_SECRETS_BASE_URL)"; fi
+    if [ -n "${AGENT_SECRETS_HOME:-}" ]; then _say "  Source: $HOME_DIR (AGENT_SECRETS_HOME)"; fi
+    if [ -f "$INSTALL_DIR/VERSION" ]; then
+      replacing=1
+      old="$(_installed_version)"
+      if [ "$old" = unknown ]; then
+        _say "  agent-secrets is already installed at $INSTALL_DIR (version unknown). Replacing it with $PINNED_TAG."
+      else
+        case "$(_ver_cmp "$old" "${PINNED_TAG#v}")" in
+          eq) _say "  agent-secrets $PINNED_TAG is already installed. Re-applying it to repair dependencies, wiring and agent rules." ;;
+          lt) _say "  Upgrading agent-secrets v$old to $PINNED_TAG." ;;
+          gt) _say "  Warning: this downgrades agent-secrets v$old to $PINNED_TAG." ;;
+        esac
+      fi
+    fi
+    _say "  • ensure age, sops, jq (reuse yours · 'brew install' of any not on PATH when Homebrew is present · else pinned, SHA-256-verified downloads — no sudo)"
+    # Trust keys on the baked digest, not on the mirror: a baked digest is verified even on a mirror.
+    if [ -n "$EXPECTED_SHA256" ]; then
+      _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG, SHA-256 verified)"
+      _say "  • verify the download against the baked SHA-256 digest"
+    elif [ -n "${AGENT_SECRETS_BASE_URL:-}" ]; then
+      _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG; checked only against the mirror's own .sha256)"
+      _say "  • verify against the mirror's .sha256 (transport integrity only, not tamper evidence)"
+    else
+      _say "  • install the tool under $INSTALL_DIR   (pinned $PINNED_TAG)"
+      _say "  • REFUSE: this install.sh has no baked release digest; install from a published release tag"
+    fi
     _say "  • symlink the command + wrappers into $BIN_DIR   (agent-secrets, claude-agent, cursor-agent, apiKeyHelper)"
+    for f in agent-secrets claude-agent cursor-agent apiKeyHelper; do
+      _target_is_foreign "$f" || continue
+      if [ -L "$BIN_DIR/$f" ]; then
+        _say "  • replace your existing symlink $BIN_DIR/$f (it points elsewhere; the old link is not kept)"
+      elif [ -f "$BIN_DIR/$f" ]; then
+        _say "  • replace your existing $BIN_DIR/$f (backed up to $STATE_DIR/$f.preinstall.bak; uninstall restores it)"
+      fi
+    done
     _say "  • add a marker-delimited PATH block to $RC_FILE${BASH_RC_FILE:+ (and $BASH_RC_FILE — your login shell is bash)}"
     _say "  • install a weekly launchd smoke job ($SMOKE_LABEL)"
-    _say "  • (via 'agent-secrets setup') back up an existing ~/.claude/settings.json as the revert point for its apiKeyHelper edit (wired only once ANTHROPIC_API_KEY is stored)"
-    if [ -t 0 ] && [ "$HEADLESS" -eq 0 ] && [ "$DISCOVERY_YES" -eq 1 ]; then
-      _say "  • add agent-secrets rules to ~/.claude/CLAUDE.md (+ each present agent CLI's file) so agents in EVERY repo know to use it — advisory, reversible (--discovery, no offer)"
-    elif [ -t 0 ] && [ "$HEADLESS" -eq 0 ]; then
-      _say "  • OFFER (opt-in) to add agent-secrets rules to ~/.claude/CLAUDE.md so agents in EVERY repo know to use it"
-    elif [ "$NO_DISCOVERY" -eq 1 ]; then
-      _say "  • skip the machine-wide agent rules (--no-discovery)"
-    else
-      _say "  • add agent-secrets rules to ~/.claude/CLAUDE.md (+ each present agent CLI's file) so agents in EVERY repo know to use it — advisory, reversible; --no-discovery skips"
-    fi
-    _say "  • record every change to $STATE_DIR/install-manifest.json (one-command uninstall)"
-    if [ -t 0 ] && [ "$HEADLESS" -eq 0 ]; then
+    # lib/wire.sh writes under the install home and ignores CLAUDE_CONFIG_DIR, so name that path.
+    [ "$HOME_DIR" = "$HOME" ] || at=" (at $HOME_DIR/.claude/settings.json)"
+    _say "  • (via 'agent-secrets setup') back up an existing ~/.claude/settings.json$at as the revert point for its apiKeyHelper edit (wired only once ANTHROPIC_API_KEY is stored)"
+    _say "  • record each file, PATH block, launchd job and settings.json edit in $STATE_DIR/install-manifest.json ('agent-secrets uninstall' rolls back recorded entries; Homebrew-installed tools are not recorded)"
+    if _wizard_path; then
       _say "  • run 'agent-secrets setup' at the end — the interactive wizard (keys, first secret, wiring)"
     else
       _say "  • run 'agent-secrets setup --headless' at the end — real keys, Keychain custody, wiring, NO prompts and no secret on any output${IMPORT_ENV:+; import from env: $IMPORT_ENV}"
     fi
+    if [ "$NO_DISCOVERY" -eq 1 ]; then
+      _say "  • skip the machine-wide agent rules (--no-discovery)"
+    elif _wizard_path && [ "$DISCOVERY_YES" -eq 1 ]; then
+      _say "  • after setup, add agent-secrets rules so agents in every repo know to use it: advisory; recorded in the manifest (--discovery, no offer)"
+      _plan_discovery_paths
+    elif _wizard_path; then
+      _say "  • after setup, OFFER (opt-in) to add agent-secrets rules so agents in every repo know to use it, to:"
+      _plan_discovery_paths
+    else
+      _say "  • add agent-secrets rules so agents in every repo know to use it: advisory; recorded in the manifest; --no-discovery skips"
+      _plan_discovery_paths
+    fi
+    if [ "$replacing" -eq 1 ]; then
+      _say ""
+      _say "Some effects cannot be undone: the existing $INSTALL_DIR is replaced in place, with no backup."
+    fi
     _say ""
+  }
+  # The flags this run was given, rebuilt from the parsed state (names only) for the printed command.
+  _rerun_flags() {
+    local s=""
+    [ "$HEADLESS" -eq 0 ] || s="$s --headless"
+    [ -z "$IMPORT_ENV" ] || s="$s --import-env $(printf '%q' "$IMPORT_ENV")"
+    [ "$NO_DISCOVERY" -eq 0 ] || s="$s --no-discovery"
+    [ "$DISCOVERY_YES" -eq 0 ] || s="$s --discovery"
+    [ "$_f_nocolor" -eq 0 ] || s="$s --no-color"
+    [ "$DEBUG" -eq 0 ] || s="$s --debug"
+    printf '%s' "$s"
+  }
+
+  # --- preflight: a regular file (or dangling symlink) where we need a directory --------------------
+  # `mkdir -p` below would die "File exists" under set -e AFTER partially creating siblings, leaving
+  # residue with no manifest to roll back. Catch it pre-network, pre-mutation, and name every conflict
+  # (at most 5). The `if`-form is load-bearing: a `[ … ] && [ … ] && …` chain returns nonzero on the
+  # healthy (dir-absent) path and would abort the install under set -e. A symlink TO a directory passes
+  # (`[ ! -d ]` follows links), so a legitimately symlinked ~/bin is unaffected. The ancestors are listed
+  # because `[ -e ]` is false beneath a regular-file parent. The rc files take the inverse test: only a
+  # directory there is a conflict (a symlinked ~/.zshenv is healthy).
+  _preflight_dirs() {
+    local d n=0 list=""
+    for d in "$HOME_DIR/.local" "$HOME_DIR/.local/state" "$STATE_DIR" "$HOME_DIR/Library" \
+             "$HOME_DIR/Library/LaunchAgents" "$INSTALL_DIR" "$BIN_DIR"; do
+      if { [ -e "$d" ] || [ -L "$d" ]; } && [ ! -d "$d" ]; then
+        n=$((n + 1))
+        if [ "$n" -le 5 ]; then list="$list  $d already exists and is not a directory"$'\n'; fi
+      fi
+    done
+    for d in "$RC_FILE" ${BASH_RC_FILE:+"$BASH_RC_FILE"}; do
+      if [ -d "$d" ]; then
+        n=$((n + 1))
+        if [ "$n" -le 5 ]; then list="$list  $d is a directory, where the PATH block needs a file"$'\n'; fi
+      fi
+    done
+    if [ "$n" -gt 0 ]; then
+      printf 'ERROR: %s path(s) are in the way of the install:\n%s' "$n" "$list" >&2
+      if [ "$n" -gt 5 ]; then printf '  …and %s more\n' "$((n - 5))" >&2; fi
+      printf 'Move each aside, then re-run the installer.\n' >&2
+      exit 1
+    fi
   }
 
   # --- consent gate — FIRST screen, nothing mutates before it ------------------
   if [ "$DRY_RUN" -eq 1 ]; then
     _say "DRY RUN — showing the plan, changing nothing."
     _render_plan
-    _say "Re-run without --dry-run to apply exactly this plan."
+    _preflight_dirs
+    # Only the local checks ran: the download and the dependency steps need network and writes.
+    if [ -z "$EXPECTED_SHA256" ] && [ -z "${AGENT_SECRETS_BASE_URL:-}" ]; then
+      _say "Install from a published release tag, or set AGENT_SECRETS_BASE_URL."
+    else
+      _say "Local checks passed. To install with this plan (download and dependency steps were not checked):"
+      _say "    $(_self_cmd)$(_rerun_flags)"
+    fi
     return 0
   fi
   _render_plan
-  # Consent is an interactive, human gate (no --force/env bypass). When stdin is a TTY, require the
-  # keypress. When it is NOT a tty — a piped `curl … | bash`, or a coding-agent session whose stdin is
-  # /dev/null or an open-but-empty pipe — there is no human at the terminal: the plan was just shown
-  # (the disclosure) and running the installer IS the consent, so proceed. Blocking on `read` here would
-  # otherwise abort under `set -e` on EOF (closed stdin) or hang forever (open pipe) — and, for an agent
-  # session, would never reach the exit-0 key-ceremony deferral below.
-  if [ -t 0 ]; then
-    printf '[Enter] continue · [d] show the full dry-run first · Ctrl-C stop: ' >&2
-    local reply=""; read -r reply || reply=""
-    if [ "$reply" = "d" ] || [ "$reply" = "D" ]; then
-      DRY_RUN=1; _render_plan; DRY_RUN=0
-      printf '[Enter] continue · Ctrl-C stop: ' >&2; read -r reply || reply=""
-    fi
+  # Consent tiers. A human at a terminal (INTERACTIVE) answers [Y/n]: Enter or yes installs; no, q or
+  # EOF cancels with exit 130 (nothing is written before this point); a 4th unclear answer counts as a
+  # decline. Inline, because lib/ui.sh is not unpacked yet. With no terminal, or in a detected agent or
+  # CI session, nobody is there to answer: the plan just shown is the disclosure and running the
+  # installer is the consent. Blocking on `read` there would abort under `set -e` on EOF (closed stdin)
+  # or hang forever (open pipe). --dry-run is the way to look without installing.
+  if [ "$INTERACTIVE" -eq 1 ]; then
+    local reply="" bad=0
+    while :; do
+      printf 'Install agent-secrets to %s and edit %s? [Y/n] ' "$INSTALL_DIR" "$RC_FILE" >&2
+      if ! read -r reply; then reply=n; printf '\n' >&2; fi
+      case "$reply" in
+        ''|y|Y|yes) break ;;
+        n|N|no|q)   _say "Canceled. Nothing was changed."; exit 130 ;;
+      esac
+      bad=$((bad + 1))
+      if [ "$bad" -ge 4 ]; then _say "Canceled. Nothing was changed."; exit 130; fi
+      _say "Please answer y or n."
+    done
   else
-    if _agent_session; then
-      _say "(coding-agent session — proceeding with the plan above; setup runs headless)"
-    else
-      _say "(no terminal on stdin — proceeding with the plan above; setup runs headless)"
-    fi
+    _say "($MODE_WHY: proceeding with the plan above; --dry-run previews, --no-discovery skips the agent rules)"
   fi
 
-  # --- preflight: a regular file (or dangling symlink) where we need a directory --------------------
-  # `mkdir -p` below would die "File exists" under set -e AFTER partially creating siblings, leaving
-  # residue with no manifest to roll back. Catch it here — pre-network, pre-mutation — and name the
-  # conflict. The `if`-form is load-bearing: a `[ … ] && [ … ] && _die` chain returns nonzero on the
-  # healthy (dir-absent) path and would abort the install under set -e. A symlink TO a directory passes
-  # (`[ ! -d ]` follows links), so a legitimately symlinked ~/bin is unaffected.
-  local _d
-  for _d in "$INSTALL_DIR" "$BIN_DIR" "$STATE_DIR"; do
-    if { [ -e "$_d" ] || [ -L "$_d" ]; } && [ ! -d "$_d" ]; then
-      _die "$_d already exists and is not a directory — move it aside, then re-run the installer"
-    fi
-  done
+  _preflight_dirs
 
   # --- toolchain: resolved AFTER unpack, from the tool's own lib/deps.sh -----------------------------
   # (This USED to `brew install age sops jq` behind a sudo-gated Homebrew bootstrap — the #1
@@ -408,7 +561,11 @@ main() {
     _die "this install.sh carries no baked release digest (EXPECTED_SHA256 empty) — it was not cut by the release runbook. Refusing a same-origin .sha256 fallback on the default production URL (it cannot detect a swapped release asset). Install from a published release tag, or set AGENT_SECRETS_BASE_URL to use a dev/mirror."
   fi
   [ "$got" = "$expect" ] || _die "SHA-256 mismatch — refusing to run the downloaded artifact"
-  _say "SHA-256 verified."
+  if [ -n "$EXPECTED_SHA256" ]; then
+    _say "SHA-256 verified."
+  else
+    _say "Checked only against the mirror's own .sha256: transport integrity, not tamper evidence."
+  fi
 
   # --- unpack the tool ---------------------------------------------------------
   # Was $INSTALL_DIR created by THIS run? A re-run over an existing (live) install must never have its
@@ -423,7 +580,7 @@ main() {
   # Check BOTH a lib and the dispatcher: a tarball missing bin/agent-secrets would otherwise dangle the
   # dispatcher symlink, and manifest_record_file (which follows the link) returns 1 → set -e abort AFTER
   # the cleanup trap is disarmed → half-wired install with no rollback.
-  [ "$DRY_RUN" -eq 1 ] || { [ -f "$INSTALL_DIR/lib/common.sh" ] && [ -f "$INSTALL_DIR/bin/agent-secrets" ]; } \
+  { [ -f "$INSTALL_DIR/lib/common.sh" ] && [ -f "$INSTALL_DIR/bin/agent-secrets" ]; } \
     || _die "unexpected tarball layout (need one top-level prefix dir with bin/ + lib/) — re-cut with: git archive --prefix=agent-secrets-\${TAG}/ \${TAG}"
 
   # Cleanup trap for the pre-manifest window: from here until $INSTALL_DIR is recorded, an abort — e.g. a
@@ -500,33 +657,50 @@ main() {
   # Weekly launchd smoke job. Written from the tool's own template.
   _run mkdir -p "$HOME_DIR/Library/LaunchAgents"
   _install_smoke_plist "$SMOKE_PLIST" "$SMOKE_LABEL" "$INSTALL_DIR"
-  if [ "$DRY_RUN" -eq 0 ]; then
-    launchctl bootout "gui/$(id -u)/$SMOKE_LABEL" >/dev/null 2>&1 || true
-    launchctl bootstrap "gui/$(id -u)" "$SMOKE_PLIST" >/dev/null 2>&1 || true
-    manifest_record_launchd "$SMOKE_LABEL" "$SMOKE_PLIST"
-  fi
+  launchctl bootout "gui/$(id -u)/$SMOKE_LABEL" >/dev/null 2>&1 || true
+  launchctl bootstrap "gui/$(id -u)" "$SMOKE_PLIST" >/dev/null 2>&1 || true
+  manifest_record_launchd "$SMOKE_LABEL" "$SMOKE_PLIST"
 
   # The ~/.claude/settings.json apiKeyHelper edit + its revert point are owned SOLELY by `setup`
   # (_wire_tools): it records a write-once backup when the file pre-existed, or a `created` marker when
   # it did not (rollback then deletes the tool-made file instead of leaving an empty {}). Recording it
   # here too would double the revert record, so the installer intentionally does not.
 
-  # --- OPT-IN: machine-wide agent discovery ------------------------------------
+  # Pin AGENT_SECRETS_BIN to the PATH command so the discovery preview and the write share one abs-path
+  # (the rendered rules reference THIS binary, not a PATH impostor). Exported before setup, so the
+  # headless setup this installer chains into renders the SAME path when it writes discovery itself.
+  AGENT_SECRETS_BIN="$BIN_DIR/agent-secrets"; export AGENT_SECRETS_BIN
+
+  # --- finish: setup, in the mode this environment can run ----------------------------------------
+  # ONE command means setup runs HERE, in every environment. A human at a terminal gets the wizard.
+  # An agent session or a no-tty install used to be told "open Terminal.app and run agent-secrets
+  # setup" — the human became the runtime. Now `setup` itself detects that nobody can be prompted and
+  # runs HEADLESS: real keys minted to files, the Keychain populated over a pipe, no first secret
+  # unless --import-env names one already in this environment, and only names/paths/status printed —
+  # nothing a transcript could capture. UNATTENDED (tests/CI) still runs with fake values.
+  # Setup stays a child, not an exec (D19), so control returns for the offer below; under set -e a
+  # failed setup never reaches it.
+  _say ""
+  local -a setup_args=()
+  if [ "$HEADLESS" -eq 1 ]; then setup_args+=(--headless); fi
+  if [ -n "$IMPORT_ENV" ]; then setup_args+=(--import-env "$IMPORT_ENV"); fi
+  if [ "$NO_DISCOVERY" -eq 1 ]; then setup_args+=(--no-discovery); fi
+  _say "Installed. Running setup…"
+  _debug "setup flags: ${setup_args[*]+${setup_args[*]}}"
+  _run "$BIN_DIR/agent-secrets" setup ${setup_args[@]+"${setup_args[@]}"}
+
+  # --- OPT-IN: machine-wide agent discovery, offered after the result ----------------------------
   # A marker block in ~/.claude/CLAUDE.md teaches agents everywhere this Mac has agent-secrets: Claude
   # Code loads it in EVERY repo, AND VS Code Copilot reads it by default (chat.useClaudeMdFile) — so ONE
   # file covers both readers (user-home ~/.claude/rules is NOT default-read by Copilot on stable VS Code).
   # The registry (lib/discovery.sh) also covers any OTHER agent CLI present on this Mac (Codex/Gemini/
   # Zed/Cline, each its own file), DEFERS on any org/MDM-managed machine, and SKIPS unwritable targets.
   # Consent is INFORMED: the prompt NAMES each file it would write + previews the block — never a blind
-  # one-keypress fan-out. Interactive stdin only — a piped/CI install NEVER silently edits a global file.
-  # Pin AGENT_SECRETS_BIN to the PATH command so the preview and the write share one abs-path (the
-  # rendered rules reference THIS binary, not a PATH impostor). Exported, so the headless setup this
-  # installer chains into renders the SAME path when it writes discovery itself.
-  AGENT_SECRETS_BIN="$BIN_DIR/agent-secrets"; export AGENT_SECRETS_BIN
-  # Interactive stdin only, and not under --headless: a headless setup writes discovery ITSELF (by
-  # default, announcing every file first; --no-discovery skips) — so a piped/agent install is never
-  # asked, and never silently skipped either.
-  if [ -t 0 ] && [ "$HEADLESS" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+  # one-keypress fan-out. Offered only on the wizard path, where setup defaults to writing no rules, so a
+  # decline holds. Every other path runs headless setup, which writes them itself by default (naming each
+  # file first; --no-discovery skips): a piped or agent install is never asked, and never silently skipped.
+  # A decline is not a cancel: exit 0, no "Canceled.".
+  if _wizard_path && [ "$NO_DISCOVERY" -eq 0 ]; then
     local _plan; _plan="$(agsec_discovery_plan)"
     if [ -z "$_plan" ]; then
       _say "  → no writable agent surfaces detected (or all are org/MDM-managed) — machine-wide discovery skipped"
@@ -536,7 +710,7 @@ main() {
         dreply=y   # --discovery pre-answered the offer, so it is not asked
       else
         printf '\nMake every coding agent on this Mac aware of agent-secrets?\n' >&2
-        printf 'This writes a short, reversible, advisory block into EACH of these files (uninstall removes them):\n' >&2
+        printf 'This writes a short, advisory block into each of these files (recorded in the manifest; agent-secrets uninstall removes recorded blocks):\n' >&2
         printf '%s\n' "$_plan" | while IFS="$(printf '\t')" read -r _lbl _pth; do printf '   • %s\n' "$_pth" >&2; done
         printf 'The block (advisory — makes agents aware of the tool; not an enforced guarantee):\n' >&2
         agsec_render_rules claude-md | sed 's/^/     │ /' >&2
@@ -557,22 +731,7 @@ main() {
       esac
     fi
   fi
-
-  # --- finish: setup, in the mode this environment can run ----------------------------------------
-  # ONE command means setup runs HERE, in every environment. A human at a terminal gets the wizard.
-  # An agent session or a no-tty install used to be told "open Terminal.app and run agent-secrets
-  # setup" — the human became the runtime. Now `setup` itself detects that nobody can be prompted and
-  # runs HEADLESS: real keys minted to files, the Keychain populated over a pipe, no first secret
-  # unless --import-env names one already in this environment, and only names/paths/status printed —
-  # nothing a transcript could capture. UNATTENDED (tests/CI) still runs with fake values.
-  _say ""
-  local -a setup_args=()
-  if [ "$HEADLESS" -eq 1 ]; then setup_args+=(--headless); fi
-  if [ -n "$IMPORT_ENV" ]; then setup_args+=(--import-env "$IMPORT_ENV"); fi
-  if [ "$NO_DISCOVERY" -eq 1 ]; then setup_args+=(--no-discovery); fi
-  _say "Installed. Running setup…"
-  _debug "setup flags: ${setup_args[*]+${setup_args[*]}}"
-  _run "$BIN_DIR/agent-secrets" setup ${setup_args[@]+"${setup_args[@]}"}
+  return 0
 }
 
 # The ~/.claude/CLAUDE.md discovery block is rendered by agsec_render_rules claude-md (lib/common.sh),
@@ -584,7 +743,6 @@ main() {
 # Weekly smoke launchd plist (runs the tool's own smoke command; no value ever printed).
 _install_smoke_plist() {
   local plist="$1" label="$2" install_dir="$3"
-  if [ "${DRY_RUN:-0}" -eq 1 ]; then _step "write launchd plist: $plist"; return 0; fi
   cat >"$plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
