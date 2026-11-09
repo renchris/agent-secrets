@@ -221,9 +221,12 @@ EOF
 set timeout -1
 after 900000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
 spawn bash --norc --noprofile -c {cd "$REPO_ROOT"; ( . lib/common.sh; . lib/ui.sh; . lib/keychain.sh; . lib/store.sh; . lib/restore.sh; restore_flow ); echo "RC=$?"; stty -a}
-# The prompt prints after echo is off and the handlers are set, so nothing races the Ctrl-C.
-expect "then press Ctrl-D:" { send "AGE-SECRET-KEY-1PARTIAL"; send "\003" }
-expect "RC=" { }
+# The prompt prints after echo is off and the handlers are set. Under load bash 3.2 can still swallow
+# a SIGINT that lands while it reaps a subshell, and then blocks in read, so wait a second and repeat
+# the Ctrl-C every 20 s until restore_flow returns. The repeat stops at RC= so it cannot hit stty -a.
+proc again {} { global again_id; catch { send "\003" }; set again_id [after 20000 again] }
+expect "then press Ctrl-D:" { send "AGE-SECRET-KEY-1PARTIAL"; sleep 1; send "\003"; set again_id [after 20000 again] }
+expect "RC=" { after cancel $again_id }
 expect eof { }
 catch wait result
 if {[llength $result] > 4} { puts "\nDRIVE-KILLED $result"; exit 92 }
