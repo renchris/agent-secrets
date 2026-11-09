@@ -7,14 +7,20 @@
 # lib call is guarded in a subshell so an unset/absent store reports a failure, never crashes.
 # Exit 0 if all pass, else 1.
 set -euo pipefail
+[ "$#" -eq 0 ] || { printf 'agent-secrets smoke: takes no arguments (got: %s)\n' "$1" >&2; exit 2; }
 . "${AGENT_SECRETS_LIB:?AGENT_SECRETS_LIB unset — run via the launchd job or bin/agent-secrets}/common.sh"
+agsec_parse_only_exit
 . "$AGENT_SECRETS_LIB/store.sh"
 . "$AGENT_SECRETS_LIB/keychain.sh"
 
 fail=0
 
 notify() {  # title message — names-only; no values ever transit here
-  osascript -e "display notification \"$2\" with title \"$1\"" >/dev/null 2>&1 || true
+  # Text travels as argv, never spliced into the script, so a quote in a name cannot end the string.
+  # No `--`: osascript does not document it, so it could arrive as item 1. stdin is closed because
+  # the rotate_by scan below calls this inside a loop that reads the manifest on stdin.
+  osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' \
+    -e 'end run' "$1" "$2" </dev/null >/dev/null 2>&1 || true
   agsec_warn "$1: $2"
 }
 # Guarded value capture (contains a die-stub/absent-lib exit; value never printed).
@@ -53,8 +59,10 @@ if [ -f "$mf" ]; then
   today=$(date +%s); name=""
   while IFS= read -r line; do
     case "$line" in
-      *name*=*) name=$(printf '%s' "$line" | sed -E 's/.*=[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/') ;;
+      # -n…p: a line the pattern does not match yields "" (skipped below), never the raw line.
+      *name*=*) name=$(printf '%s' "$line" | sed -nE 's/.*=[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/p') ;;
       *rotate_by*=*)
+        [ -n "$name" ] || continue
         rb=$(printf '%s' "$line" | sed -E 's/.*=[[:space:]]*"?([0-9-]+)"?.*/\1/')
         due=$(date -j -f %Y-%m-%d "$rb" +%s 2>/dev/null) || continue
         days=$(( (due - today) / 86400 ))

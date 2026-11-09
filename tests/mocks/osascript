@@ -1,3 +1,6 @@
 #!/usr/bin/env bash
+# With AGSEC_OSASCRIPT_LOG set, each call appends a `--call--` line and then one line per argv item,
+# so a test can tell whether text arrived as its own item or was spliced into the script.
+if [ -n "${AGSEC_OSASCRIPT_LOG:-}" ]; then printf '%s\n' --call-- "$@" >>"$AGSEC_OSASCRIPT_LOG"; fi
 cat >/dev/null 2>&1 || true
 exit 0

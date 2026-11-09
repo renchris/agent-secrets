@@ -41,8 +41,9 @@ fi
 # checked anyway. Unknown to an ancient sops → harmlessly ignored. Exported so child sops calls inherit it.
 export SOPS_DISABLE_VERSION_CHECK=1
 
-# VERSION is the single source; this literal is only the never-empty fallback. The dispatcher's -V seds
-# for a line starting with this exact assignment, so the override below must stay indented.
+# VERSION is the single source; this literal is only the never-empty fallback. The dispatcher prints
+# $AGENT_SECRETS_VERSION after sourcing this file. Keep this the only unindented assignment:
+# tests/common.bats seds for exactly one such line.
 AGENT_SECRETS_VERSION="0.1.3"
 _agsec_v=""
 if [ -r "${AGSEC_SELF_ROOT:-}/VERSION" ]; then

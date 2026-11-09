@@ -14,27 +14,36 @@ case "${1:-}" in -h|--help) . "$AGENT_SECRETS_LIB/help.sh"; agsec_help_render do
 . "$AGENT_SECRETS_LIB/manifest.sh"    # marker helpers (discovery block extraction)
 . "$AGENT_SECRETS_LIB/discovery.sh"   # machine-wide agent-discovery registry (per-surface status)
 
-FORMAT=text ; REDACT=0 ; FIX=0 ; GATES=0 ; SUMMARY=0
+FORMAT=text ; REDACT=0 ; FIX=0 ; GATES=0 ; SUMMARY=0 ; FORMAT_ALIASES=""
+agsec_scan_json "$@"   # so a usage error below already comes out in the selected format
 for arg in "$@"; do
   case "$arg" in
-    --format=json) FORMAT=json ;;
-    --format=text) FORMAT=text ;;
+    --json)        FORMAT=json ;;
+    # Hidden deprecated aliases (the space form `--format json` was never accepted, and is not added).
+    --format=json|--format=text) FORMAT=${arg#--format=}; FORMAT_ALIASES="$FORMAT_ALIASES $arg" ;;
     --redact)      REDACT=1 ;;
     --fix)         FIX=1 ;;
     --gates)       GATES=1 ;;
     --summary)     SUMMARY=1 ;;
-    -h|--help) printf '%s\n' "usage: agent-secrets doctor [--format=json] [--redact] [--gates] [--summary] [--fix]"; exit 0 ;;
-    *) agsec_die "doctor: unknown flag: $arg (see --help)" 2 ;;
+    -h|--help) printf '%s\n' "usage: agent-secrets doctor [--json] [--redact] [--gates] [--summary] [--fix]"; exit 0 ;;
+    *) agsec_unknown_option doctor "$arg" ;;
   esac
 done
+AGSEC_OUTPUT=$FORMAT   # the last format flag wins, for the document and for any error after this
+agsec_parse_only_exit
+for arg in $FORMAT_ALIASES; do
+  case "$arg" in
+    --format=json) agsec_deprecated "$arg" --json ;;
+    *)             agsec_deprecated "$arg" "the default text output (no flag)" ;;
+  esac
+done
+agsec_json_signal_traps
 
 # Must match install.sh's SMOKE_LABEL exactly, else the maintenance check can never pass.
 LAUNCHD_LABEL="${AGENT_SECRETS_LAUNCHD_LABEL:-com.agent-secrets.smoke}"
 had_bad=0
 SUMMARY_HIDDEN=0    # count of optional rows suppressed under --summary (reported in the footer)
 JSON_ROWS=()
-
-_js() { local s=${1//\\/\\\\}; printf '%s' "${s//\"/\\\"}"; }  # minimal JSON string escape
 
 # Wrap at SPACES ONLY. A token wider than $1 is emitted on its own line, whole — never split.
 _wrap_words() {
@@ -67,7 +76,7 @@ _row() {
     # JSON keeps the historical single-field shape: the command is appended to detail, so an agent
     # parsing the manifest sees exactly what it saw before this split existed.
     JSON_ROWS+=("$(printf '{"category":"%s","status":"%s","check":"%s","detail":"%s"}' \
-      "$cat" "$st" "$(_js "$name")" "$(_js "${detail}${cmd:+ — run: $cmd}")")")
+      "$cat" "$st" "$(agsec_js "$name")" "$(agsec_js "${detail}${cmd:+ — run: $cmd}")")")
     return 0
   fi
   # --summary text filter: keep every ✗ and every core row; hide non-bad optional rows (count them).
@@ -232,14 +241,20 @@ check_injection() {
   # helper as a hard auth failure (lib/wire.sh), so with NO key stored the correct state is "helper
   # present, NOT wired, Claude Code on its own login" — an ⚠ next-step, never a ✗. With the key
   # stored, an empty helper or an unwired settings.json IS broken.
-  local have_key=0; _guard store_has ANTHROPIC_API_KEY && have_key=1
+  # store_has: 0 stored, 1 not stored, 2 the store could not be decrypted. A decrypt failure is not
+  # "not stored", so it gets its own ✗ row instead of the optional "no key stored" ⚠ rows below.
+  local have_key=0 key_rc=0; _guard store_has ANTHROPIC_API_KEY || key_rc=$?
+  if [ "$key_rc" = 0 ]; then have_key=1
+  elif [ "$key_rc" = 2 ]; then
+    _row store bad "store readable" "decrypt failed — check key custody" core "agent-secrets doctor --gates"
+  fi
   akh="$bd/apiKeyHelper"
   if [ -x "$akh" ]; then
     if [ "$have_key" = 1 ]; then
       if _try out "$akh" && [ -n "$out" ]; then _row injection ok "apiKeyHelper" "returns credential"
       else _row injection bad "apiKeyHelper" "empty output"; fi
       out=""
-    else
+    elif [ "$key_rc" != 2 ]; then
       _row injection attn "apiKeyHelper" "no ANTHROPIC_API_KEY stored (optional) — Claude Code uses its own login until you add one" optional "agent-secrets add ANTHROPIC_API_KEY"
     fi
   else
@@ -257,10 +272,10 @@ check_injection() {
       else _row injection bad "settings.json apiKeyHelper" "wired but no ANTHROPIC_API_KEY stored — Claude Code auth will FAIL (empty helper); store the key or unwire" core "agent-secrets add ANTHROPIC_API_KEY"; fi
     elif [ -n "$helper" ]; then _row injection attn "settings.json apiKeyHelper" "points at a different helper (kept — your edit)"
     elif [ "$have_key" = 1 ]; then _row injection bad "settings.json apiKeyHelper" "not wired" core "agent-secrets setup"
-    else _row injection attn "settings.json apiKeyHelper" "not wired — nothing to wire until ANTHROPIC_API_KEY is stored (add wires it)" optional "agent-secrets add ANTHROPIC_API_KEY"; fi
+    elif [ "$key_rc" != 2 ]; then _row injection attn "settings.json apiKeyHelper" "not wired — nothing to wire until ANTHROPIC_API_KEY is stored (add wires it)" optional "agent-secrets add ANTHROPIC_API_KEY"; fi
   elif [ "$have_key" = 1 ]; then
     _row injection attn "settings.json apiKeyHelper" "settings.json/jq unavailable"
-  else
+  elif [ "$key_rc" != 2 ]; then
     _row injection attn "settings.json apiKeyHelper" "not wired — nothing to wire until ANTHROPIC_API_KEY is stored (add wires it)" optional "agent-secrets add ANTHROPIC_API_KEY"
   fi
 }
@@ -268,7 +283,8 @@ check_injection() {
 check_backup() {  # is an off-machine second copy configured? (makes disaster recovery real, not a hope)
   local marker; marker="$(agsec_config_dir)/backup-repo"
   if [ -f "$marker" ] && [ -s "$marker" ]; then
-    _row backup ok "off-machine backup" "configured ($(cat "$marker"))" optional
+    # First line only, control bytes dropped: the marker is user-editable and this lands in a terminal.
+    _row backup ok "off-machine backup" "configured ($(head -n1 "$marker" | tr -d '[:cntrl:]'))" optional
   elif ! agsec_have_devtool git; then
     # backup stages the ciphertext in a git repo. On a Mac without Apple's developer tools,
     # /usr/bin/git is an inert stub that only offers to install them, so name the real first link.
@@ -313,7 +329,7 @@ check_discovery() {  # machine-wide agent-discovery surfaces (ADVISORY — makes
       managed)  _row discovery ok   "agent rules ($label)" "org/MDM-managed — deployment is IT's job; the installer defers (writes nothing here)" optional ;;
       stale)    _row discovery attn "agent rules ($label)" "STALE (older version) — re-run the installer to refresh the rules" optional ;;
       tampered) _row discovery bad  "agent rules ($label)" "TAMPERED / hand-edited — content does not match its integrity marker (or carries hidden-Unicode); re-run the installer to restore, or inspect $path" ;;
-      *)        _row discovery attn "agent rules ($label)" "not installed (opt-in — agents won't know agent-secrets exists; re-run the installer to add)" optional ;;
+      *)        _row discovery attn "agent rules ($label)" "not installed (opt-in — agents won't know agent-secrets exists); add them with: agent-secrets setup --discovery" optional ;;
     esac
   done
   # Cursor has NO global rules FILE (User Rules live in an opaque, cloud-synced settings DB), so the tool
@@ -414,12 +430,10 @@ if [ "$SUMMARY" = 1 ] && [ "$FORMAT" = text ] && [ "$SUMMARY_HIDDEN" -gt 0 ]; th
     "$C_DIM" "$SUMMARY_HIDDEN" "$C_RESET"
 fi
 if [ "$FORMAT" = json ]; then
-  printf '{"checks":['
-  i=0
-  for row in "${JSON_ROWS[@]}"; do
-    if [ "$i" -gt 0 ]; then printf ','; fi
-    printf '%s' "$row"; i=$((i + 1))
-  done
-  printf '],"exit":%d}\n' "$had_bad"
+  doc=""
+  for row in ${JSON_ROWS[@]+"${JSON_ROWS[@]}"}; do doc="${doc:+$doc,}$row"; done
+  # warnings (deprecations) is an extra key; agents read only checks and exit.
+  printf '{"checks":[%s],"exit":%d%s}\n' "$doc" "$had_bad" \
+    "${AGSEC_WARNINGS:+,\"warnings\":[$AGSEC_WARNINGS]}" | agsec_json_out
 fi
 exit "$had_bad"
