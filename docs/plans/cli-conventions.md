@@ -2641,3 +2641,66 @@ Each one keeps the caller working and does not widen the change.
 - B8.13 (document the new installer flags) vs B8.15 (advertise nothing an unreleased tag lacks; the docs pin v0.1.3): kept the B8.13 lists with a note that they arrive with the next release and that v0.1.3's install.sh lacks them.
 - help folds text with a byte-counting awk, because macOS `fold` under `LC_ALL=C` gives non-ASCII bytes zero width.
 - `lib/help.sh` lists uninstall's exit 1 (partial rollback, B5) and backup's exit 2 without `--yes` when not interactive (B4.2) and 130 on decline (B4.3).
+
+## 10. Wave C landing notes
+
+Wave C landed only its decision-free part. Both contract packets are still open, class B, and this wave follows their default course: ad226c7513ea ("keep today's behavior across all repos: documented exit codes stay and get listed in help, --yes is added as an alias, preview-by-default stays, JSON shapes stay; the contract-changing fixes do not land unless you choose change") and 8825ca436960 ("keep today's behavior for all of them; record the conflict in docs/plans/cli-conventions.md"). The units ran serially on the lead, because the machine's capacity gate refused the teammate spawns (8-9 sessions mid-turn against a ceiling of 8). Gate: `GATE_MAX_TRIES=600 bash /tmp/cli-conv-gate-run.sh` on the stack that was pushed.
+
+| Item | What landed | Landed sha |
+|---|---|---|
+| C3 F28 | setup exits 1 when the health check finds a ✗ row: the done screen still prints, titled "Set up, with problems", with a warning naming `agent-secrets doctor`; wizard state is `checked`, never `done`. The returning-user fast path no longer `exec`s doctor and does the same. | 83672c5 |
+| C7.3 (F28 part) | install's setup-failure branch reads "Setup finished with problems. Run: agent-secrets doctor" when setup exits 1 and its state is `checked`; any other failure keeps B9.10's text. Exit code unchanged (setup's code passes through, D14 unanswered). | 113f785 |
+| C7.1 (copy, prefix kept) | `_die` layout: headline, detail rows, blank row, instruction ending in `:`, command indented 4. New copy at the digest guard (two recoveries: the published release's installer, or `AGENT_SECRETS_BASE_URL=<MIRROR_URL> bash install.sh`), the SHA-256 mismatch (file, URL, expected and actual digests, re-run, issues link), `_preflight_dirs` (one `mv` per path, then the re-run), the mis-cut tarball (issues link; `git archive` only under "If you run a mirror, rebuild with:"), and the POSIX re-fetch failure (ASCII, download-then-bash). `ERROR:` stays (D6). Every pinned substring and exit 1 kept. | 113f785 |
+| C7.2 (incl. pass 2) | Glyph selector on fd 2 next to `_say` (plain with `AGENT_SECRETS_PLAIN`, `NO_COLOR`, `--no-color`, no terminal on stderr, or `TERM=dumb`; D26 option A); plain pairs `->`, `-`, `,`, `|`, `...`; `✓ ` on the final receipt in rich mode only; plan rows at column 0 in plain mode and `_step` printing just the command; "agent rules" as the one noun; sentence case ("offer", "no prompts"); banner "Showing the install plan. Nothing will change."; the settings.json bullet split so "back up an existing ~/.claude/settings.json" starts a row; the offer prompt reads `[y = yes, write them (recommended) · Enter = skip (default)]: `. | 113f785 |
+| receive `-y`/`--yes` | `-y` and `--yes` are plain aliases of `--yes-i-reviewed`: same variable, no warning, no behavior change. share and backup unchanged. | 46a950f |
+| C6 (these items only) | help: receive's synopsis and flag row list the aliases (one boolean flag in `help --json`); setup's exit 1 covers a ✗ health check; setup's exit 130 (Ctrl-C at the hidden key paste of `--restore`, lib/restore.sh) was the one documented code help did not list, now listed. No README, AGENTS.md, llms.txt or FAQ text quotes any install copy C7 changed (grep), so no install doc changed. | 46a950f |
+| These notes | §10 of this plan | the docs commit after 113f785 |
+
+### Deviations and recorded conflicts in the landed items
+
+- **C3: the `checked` state value.** Setup exits 1 both when a step fails and when the health check finds a ✗ row, and B9.10's test pins "Setup failed (exit 1)" for the first case. So setup records `checked` in wizard-state.json in the second case, and install words its message from that value. Nothing else reads the value: tests grep for `done`, and `restore_returning_user_check` tests only that the file exists. A returning-user re-run that finds a ✗ also records `checked`, replacing an earlier `done`.
+- **C3: the fast path's exit 2.** `exec doctor --summary` used to pass doctor's code through, so a doctor usage error (2) would have surfaced as 2. Setup now maps any code above 1 to 1 (an internal error), per the F28 row. Setup itself never passes doctor a bad option, so no caller sees the difference.
+- **C3: the ✗ fixture.** No doctor shim was needed: a settings.json apiKeyHelper with no `ANTHROPIC_API_KEY` stored is a doctor ✗ (tests/headless.bats M4), and setup leaves a pre-existing helper in place.
+- **C7.2: wrapping is terminal-only.** On a terminal, plan rows wrap at `${COLUMNS:-80}` with a 4-space continuation, and a word wider than the row (a long path) stays whole. Plain output keeps each row on one physical row, because the B9-B13 tests pin substrings that would straddle a wrap under a long test home (for example, "back up an existing ~/.claude/settings.json (at <home>/.claude/settings.json)"), and a log or grep needs the row whole.
+- **C7.2: the ✗ prefix stays.** "✗ Failed to install agent-secrets" and "✗ Setup failed" keep their glyph in plain mode: the ✗/`Error:`/`ERROR` prefix family is D6, unanswered.
+- **C7.2: "The agent-secrets installer will:"** replaces "agent-secrets installer — this will:", rewriting that chain as a sentence and keeping the `agent-secrets installer` substring (tests/one_command.bats:50).
+- **Tests updated with the copy** (all in files C7 owns): tests/install_failure.bats ("Retrying automatically...", "Running setup..." in plain mode), tests/install_tty.bats (the offer prompt's "(default)", ": the interactive wizard", "-> aware:" and the header in plain mode) and tests/install_plan.bats ("offer (opt-in)").
+
+### Kept at today's behavior
+
+Each item below stays as it is, by the default course of 8825ca436960 (D1-D26 keep) and the general rule of ad226c7513ea. Nothing here is dropped: each lands when its packet is answered "change".
+
+| Item | Kept behavior | Decision |
+|---|---|---|
+| C1 uninstall consent and preview | No `--yes`/`--purge-data`, no new prompt or refusal; the purge stays interactive-only with "no --force bypass" (lib/help.sh). | D1 |
+| C2, the rest | share gets no `--yes`; `AGENT_SECRETS_UNATTENDED` still grants consent to share and backup with no deprecation warning; `--yes-i-reviewed` is not deprecated or hidden; no extra receive confirmation (F9); share and backup headlines unchanged (F20). Only receive's alias landed, per ad226c7513ea. | D2, D3, D4, D6 |
+| C3 F8 | Headless setup still writes the agent rules by default; install forwards no `--discovery`. | D5 |
+| C4 | No reserved-name denylist, no `--allow-env`; `agsec_die` keeps `ERROR`, warnings keep ⚠; no plural helper; doctor gets no `--fields`. | D4, D6, D7 |
+| C5 | `list --json` stays an array; no `--fields`, no `--legacy-array`. | D7 |
+| C6, the rest | No glossary or banned-synonym lint (D16); no CHANGELOG (D8); no help rows for unlanded items. | D8, D16 |
+| C7.1 prefix | `ERROR:` stays in install.sh (`_die`, `_usage_die`, the POSIX guard, `_fetch_die`, the lock and preflight messages), lib/common.sh and scripts/release.sh:24. | D6 |
+| C7.4 | No change: the TTY prompt stays (D9 B); no `--yes`/`--non-interactive` (D10); no-TTY still chains into headless setup (D11 A); the unreleased dry run exits 0 (D12 B); fetch schemes stay open (D13); `AGSEC_REEXECED` keeps its name (D15 b); the /dev/tty rebind stays (D17 B); detected agents and CI skip the keypress (D18 1); setup stays a child (D19 a); a same-version re-run re-applies (D20 A); foreign targets are backed up, not confirmed (D21 A); docs keep "reversible" (D22 A); the `sh` re-fetch stays (D23 A); credentialed mirror URLs work and are redacted on display (D25 a). | D9-D23, D25 |
+| C7.5 | Install's stdout is unchanged: setup's stdout still inherits it and no identifier is printed. The plan itself classes this stream change as breaking, so it waits for a decision and a release note. | ad226c7513ea |
+| C8 | No install `--json`. | D24 |
+| CHANGELOG, VERSION, tag, release | None: publishing is user-gated (.claude/rules/agent-operating-lessons.md). | D8 |
+
+### Exception records E1-E14
+
+§4 says these records go to SECURITY.md or AGENTS.md "only for the options the operator picks". No packet is answered yet, so none is written there; each is recorded here against the default course, ready to copy when the packets resolve.
+
+| Record | Status under the default course |
+|---|---|
+| E1 (no-TTY run is consent) | Applies (D10 keep). Install's no-TTY path proceeds after printing the plan; pinned by tests/install.bats and B9.13's message. |
+| E2 (`/dev/tty` rebind; no-TTY goes headless) | Applies (D11 A, D17 B). Pinned by tests/install_tty.bats and tests/install_plan.bats. |
+| E3 (agent sessions never prompt) | Applies, unconditionally. Pinned by tests/headless.bats and B6.12's `agent` row. |
+| E4 (`AGSEC_` internal prefix) | Applies (D15 b). Its help.bats check is not written yet. |
+| E5 (share's tty gate has no flag) | Applies, unconditionally. Pinned by tests/share.bats. |
+| E6 (no answer summary before the first mutation) | Applies. The replay half shipped in B6.10. |
+| E7 (`--version` prints `agent-secrets <version>`) | Applies (B7.8 kept the form; `--version --json` gives the bare value). |
+| E8 (usage errors never echo a token) | Applies. Pinned by tests/common.bats, B9.2, B6.14. |
+| E9 (install help is hand-written, found by a pre-scan) | Applies. Pinned by B9.16's parity test. |
+| E10 (snake_case JSON keys) | Not applicable: C8 did not land. |
+| E11 (install keeps its own TTY and CI checks) | Applies. The glyph selector added in C7.2 is the same kind of bootstrap duplicate (lib/common.sh is not unpacked yet). |
+| E12 (TERM/HUP to the installer's pid waits for setup) | Applies (D19 a). |
+| E13 (setup's writes can still get SIGPIPE after the handoff) | Applies; no test yet. |
+| E14 (two retry gaps) | Applies; B12.1's POSIX part also stays open (§9, B12). |
