@@ -1,6 +1,11 @@
 #!/usr/bin/env bats
-# tests/flows.bats — wizard (unattended), run guard, cursor single-instance guard, restore drill.
+# tests/flows.bats — wizard (unattended), run guard, cursor single-instance guard, restore drill,
+# setup's flag conflicts and mode resolution, apiKeyHelper wiring, wrapper backups.
 load test_helper
+load mode_matrix
+
+# setup with no agent-session variables, so the mode is the one under test.
+_setup_cli() { env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash "$REPO_ROOT/bin/agent-secrets" setup "$@"; }
 
 @test "unattended wizard completes and seeds the first secret" {
   run bash -c "printf '%s' fakeseed_val | AGENT_SECRETS_UNATTENDED=1 bash '$REPO_ROOT/bin/agent-secrets' setup"
@@ -132,4 +137,187 @@ load test_helper
   [ "$status" -eq 0 ]
   run agsec list
   [[ "$output" == *"OPENAI_API_KEY"* ]] || return 1     # seeded with the placeholder, not aborted
+}
+
+# ---- setup: flag conflicts and --import-env -------------------------------------------------------
+
+@test "setup --restore --keychain exits 2 and writes nothing" {
+  run _setup_cli --restore --keychain </dev/null
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"can't use --restore with --keychain"* ]] || return 1
+  [ ! -e "$AGENT_SECRETS_HOME/.config/secrets" ]
+}
+
+@test "setup --discovery --no-discovery exits 2 and writes no CLAUDE.md" {
+  mkdir -p "$AGENT_SECRETS_HOME/.claude"
+  run env CLAUDECODE=1 bash "$REPO_ROOT/bin/agent-secrets" setup --discovery --no-discovery </dev/null
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"can't use --discovery with --no-discovery"* ]] || return 1
+  [ ! -e "$AGENT_SECRETS_HOME/.claude/CLAUDE.md" ]
+}
+
+@test "setup --import-env never echoes the token it rejects, and needs at least one NAME" {
+  run _setup_cli --import-env 'sk-ant-SEKRET' </dev/null
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"--import-env"* ]] || return 1
+  [[ "$output" != *"SEKRET"* ]] || return 1
+  run _setup_cli --import-env , </dev/null
+  [ "$status" -eq 2 ]
+  run _setup_cli --import-envv=sk-ant-SEKRET </dev/null              # a typo'd flag is named without its value
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"Unknown option '--import-envv' for setup."* ]] || return 1
+  [[ "$output" != *"SEKRET"* ]] || return 1
+  [ ! -e "$AGENT_SECRETS_HOME/.config/secrets" ]
+}
+
+# ---- setup: mode resolution (R403 mode matrix) ----------------------------------------------------
+
+@test "setup's mode resolution across the mode matrix: only a terminal on stdin and stderr gets the wizard" {
+  export AGENT_SECRETS_LIB="$REPO_ROOT/lib"
+  # shellcheck disable=SC2016  # expanded by the inner bash
+  local probe='. "$REPO_ROOT/cmd/setup.sh"; setup_resolve_mode; printf "MODE[%s|%s]\n" "${HEADLESS:-wizard}" "$HEADLESS_WHY" >&2'
+  local mode want got
+  for mode in tty stdout-redirected noninteractive-tty ci-tty stdin-piped agent; do
+    case "$mode" in
+      tty|stdout-redirected)   want='MODE[wizard|]' ;;
+      noninteractive-tty|ci-tty) want='MODE[1|non-interactive (--non-interactive or CI)]' ;;
+      stdin-piped)             want='MODE[1|no terminal attached]' ;;
+      agent)                   want='MODE[1|coding-agent session]' ;;
+    esac
+    mm_run "$mode" -- bash -c "$probe"
+    got="$mm_pty$mm_stderr"
+    [ "$mm_status" -eq 0 ] || { echo "$mode: status $mm_status"; return 1; }
+    [[ "$got" == *"$want"* ]] || { echo "$mode: want $want, got: $got"; return 1; }
+    [ -z "$mm_stdout" ] || { echo "$mode: stdout not empty"; return 1; }
+  done
+  # stderr redirected on a terminal: every prompt would be invisible.
+  local log="$AGENT_SECRETS_HOME/probe.log"
+  mm_run tty -- bash -c 'exec 2>"$1"; '"$probe" _ "$log"
+  [ "$mm_status" -eq 0 ]
+  grep -qF 'MODE[1|stderr is not a terminal]' "$log"
+  # setup has no --json: json-tty is a usage error before anything is written.
+  mm_run json-tty -- bash "$REPO_ROOT/bin/agent-secrets" setup --json
+  [ "$mm_status" -eq 2 ]
+  [[ "$mm_pty" == *"Unknown option '--json' for setup."* ]] || return 1
+  [[ "$mm_pty" != *"Save it off this Mac now?"* ]] || return 1
+  [ ! -e "$AGENT_SECRETS_HOME/.config/secrets" ]
+}
+
+@test "CI=1 setup on a terminal goes headless" {
+  mm_run ci-tty -- bash "$REPO_ROOT/bin/agent-secrets" setup
+  [ "$mm_status" -eq 0 ] || { printf '%s\n' "$mm_pty" | tail -25; return 1; }
+  [[ "$mm_pty" == *"(headless)"* ]] || return 1
+  [[ "$mm_pty" == *"non-interactive (--non-interactive or CI)"* ]] || return 1
+  [[ "$mm_pty" == *"You're set up"* ]] || return 1
+  [[ "$mm_pty" != *"Save it off this Mac now?"* ]] || return 1
+  [[ "$mm_pty" != *"choose ["* ]] || return 1
+}
+
+@test "headless modes run setup to the end with no prompt: noninteractive-tty, stdin-piped, agent, stderr to a log" {
+  local base="$AGENT_SECRETS_HOME" mode why out
+  for mode in noninteractive-tty stdin-piped agent stderr-log; do
+    AGENT_SECRETS_HOME="$base/$mode"; mkdir -p "$AGENT_SECRETS_HOME"; export AGENT_SECRETS_HOME
+    case "$mode" in
+      stderr-log)
+        mm_run tty -- bash -c 'bash "$1" setup 2>"$2"' _ "$REPO_ROOT/bin/agent-secrets" "$AGENT_SECRETS_HOME/setup.log"
+        out="$(cat "$AGENT_SECRETS_HOME/setup.log")"; why="stderr is not a terminal" ;;
+      *)
+        mm_run "$mode" -- bash "$REPO_ROOT/bin/agent-secrets" setup
+        out="$mm_pty$mm_stderr" ;;
+    esac
+    case "$mode" in
+      noninteractive-tty) why="non-interactive (--non-interactive or CI)" ;;
+      stdin-piped)        why="no terminal attached" ;;
+      agent)              why="coding-agent session" ;;
+    esac
+    [ "$mm_status" -eq 0 ] || { echo "$mode: status $mm_status"; printf '%s\n' "$out" | tail -25; return 1; }
+    [[ "$out" == *"(headless)"* ]] || { echo "$mode: not headless"; return 1; }
+    [[ "$out" == *"$why"* ]] || { echo "$mode: reason '$why' missing"; return 1; }
+    [[ "$out" == *"You're set up"* ]] || { echo "$mode: did not finish"; return 1; }
+    [[ "$out$mm_pty$mm_stdout" != *"Save it off this Mac now?"* ]] || { echo "$mode: prompted"; return 1; }
+    [[ "$out$mm_pty$mm_stdout" != *"choose ["* ]] || { echo "$mode: prompted"; return 1; }
+    case "$mode" in
+      stdin-piped|agent) [[ "$mm_stdout" != *"You're set up"* ]] || { echo "$mode: wizard copy on stdout"; return 1; } ;;
+    esac
+  done
+  AGENT_SECRETS_HOME="$base"; export AGENT_SECRETS_HOME
+}
+
+# ---- apiKeyHelper wiring (lib/wire.sh) ------------------------------------------------------------
+
+# Loads the libs agsec_wire_apikeyhelper needs, with a store and the helper link in place.
+_wire_env() {
+  setup_store
+  export AGENT_SECRETS_ROOT="$REPO_ROOT"
+  . "$REPO_ROOT/lib/ui.sh"; . "$REPO_ROOT/lib/manifest.sh"; . "$REPO_ROOT/lib/wire.sh"
+  mkdir -p "$AGENT_SECRETS_HOME/bin" "$AGENT_SECRETS_HOME/.claude"
+  ln -sfn "$REPO_ROOT/bin/apiKeyHelper" "$AGENT_SECRETS_HOME/bin/apiKeyHelper"
+}
+
+@test "wiring keeps a symlinked settings.json a symlink" {
+  _wire_env
+  printf '%s' fake-wire-val | store_add ANTHROPIC_API_KEY >/dev/null 2>&1
+  local sj="$AGENT_SECRETS_HOME/.claude/settings.json" real="$AGENT_SECRETS_HOME/dotfiles/settings.json"
+  mkdir -p "$(dirname "$real")"; printf '{"theme":"dark"}\n' >"$real"; ln -s "$real" "$sj"
+  run agsec_wire_apikeyhelper
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"wired apiKeyHelper"* ]] || return 1
+  [ -L "$sj" ]
+  [ "$(jq -r .apiKeyHelper "$real")" = "$AGENT_SECRETS_HOME/bin/apiKeyHelper" ]
+  [ "$(jq -r .theme "$real")" = dark ]
+  run compgen -G "$AGENT_SECRETS_HOME/.claude/.settings.json.*"; [ "$status" -ne 0 ]   # no temp left
+  [ ! -e "$AGENT_SECRETS_HOME/.local/state/agent-secrets/.settings.lock" ]              # lock released
+}
+
+@test "wiring on an undecryptable store says so and returns 2 (not 'no key stored')" {
+  _wire_env
+  printf 'not a sops file\n' >"$(agsec_store_file)"
+  run agsec_wire_apikeyhelper
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"can't read the store (decrypt failed)"* ]] || return 1
+  [[ "$output" != *"no ANTHROPIC_API_KEY in the store yet"* ]] || return 1
+  [ ! -e "$AGENT_SECRETS_HOME/.claude/settings.json" ]
+}
+
+@test "wiring waits for the settings lock, then gives up with rc 2 and leaves settings.json alone" {
+  _wire_env
+  printf '%s' fake-wire-val | store_add ANTHROPIC_API_KEY >/dev/null 2>&1
+  local lock="$AGENT_SECRETS_HOME/.local/state/agent-secrets/.settings.lock"
+  mkdir -p "$lock"; printf '%s\n' "$$" >"$lock/pid"                     # held by a live process (this test)
+  run agsec_wire_apikeyhelper
+  [ "$status" -eq 2 ]
+  [[ "$output" == *"another agent-secrets run is editing settings.json"* ]] || return 1
+  [ ! -e "$AGENT_SECRETS_HOME/.claude/settings.json" ]
+  [ "$(cat "$lock/pid")" = "$$" ]                                         # someone else's lock is kept
+}
+
+# ---- wrappers (_wire_tools) -----------------------------------------------------------------------
+
+@test "a foreign symlink at ~/bin/claude-agent is backed up and restored" {
+  setup_store
+  export AGENT_SECRETS_ROOT="$REPO_ROOT"
+  local bd="$AGENT_SECRETS_HOME/bin" other="$AGENT_SECRETS_HOME/elsewhere/claude-agent"
+  mkdir -p "$bd" "$(dirname "$other")"; printf '#!/bin/sh\n' >"$other"
+  ln -s "$other" "$bd/claude-agent"
+  run bash -c '. "$REPO_ROOT/cmd/setup.sh"; _wire_tools'
+  [ "$status" -eq 0 ]
+  [ "$(readlink "$bd/claude-agent")" = "$REPO_ROOT/bin/claude-agent" ]
+  local b="$AGENT_SECRETS_HOME/.local/state/agent-secrets/wrapper-claude-agent.bak"
+  [ -L "$b" ]; [ "$(readlink "$b")" = "$other" ]
+  . "$REPO_ROOT/lib/manifest.sh"
+  manifest_rollback >/dev/null 2>&1
+  [ -L "$bd/claude-agent" ]; [ "$(readlink "$bd/claude-agent")" = "$other" ]
+}
+
+@test "a wrapper backup that fails stops setup before the user's file is replaced" {
+  setup_store
+  export AGENT_SECRETS_ROOT="$REPO_ROOT"
+  local bd="$AGENT_SECRETS_HOME/bin" st="$AGENT_SECRETS_HOME/.local/state/agent-secrets"
+  mkdir -p "$bd" "$st"; printf 'mine\n' >"$bd/claude-agent"
+  chmod 500 "$st"                                                       # the backup copy cannot be written
+  run bash -c '. "$REPO_ROOT/cmd/setup.sh"; _wire_tools'
+  chmod 700 "$st"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not back up your existing $bd/claude-agent"* ]] || return 1
+  [ ! -L "$bd/claude-agent" ]; [ "$(cat "$bd/claude-agent")" = mine ]
 }

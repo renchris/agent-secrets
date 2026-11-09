@@ -14,15 +14,20 @@
 # agsec_wire_apikeyhelper — wire settings.json to <bindir>/apiKeyHelper, reversibly (manifest edit
 # record, write-once backup). Idempotent. Prints one line per outcome.
 #   rc 0 = wired (now, or already) · 1 = deliberately not wired (no ANTHROPIC_API_KEY in the store, or
-#   the helper wrapper is absent) · 2 = could not wire (jq missing, or settings.json is not valid JSON)
+#   the helper wrapper is absent) · 2 = could not wire (jq missing, the store does not decrypt,
+#   settings.json is not valid JSON or cannot be written, or another wiring held the lock too long)
 agsec_wire_apikeyhelper() {
-  local bindir helper sj; bindir="$(agsec_bin_dir)"; helper="$bindir/apiKeyHelper"
+  local bindir helper sj rc=0; bindir="$(agsec_bin_dir)"; helper="$bindir/apiKeyHelper"
   sj="$(agsec_home)/.claude/settings.json"
   if [ ! -x "$helper" ]; then
     ui_warn "apiKeyHelper wrapper missing at $helper — re-run:  agent-secrets setup"
     return 1
   fi
-  if ! ( store_has ANTHROPIC_API_KEY ) >/dev/null 2>&1; then
+  ( store_has ANTHROPIC_API_KEY ) >/dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    ui_warn "can't read the store (decrypt failed) — run: agent-secrets doctor"
+    return 2
+  elif [ "$rc" -ne 0 ]; then
     ui_say "apiKeyHelper not wired: no ANTHROPIC_API_KEY in the store yet, so"
     ui_say "  Claude Code keeps using its own login. Storing one wires it:"
     ui_say "  agent-secrets add ANTHROPIC_API_KEY"
@@ -33,6 +38,21 @@ agsec_wire_apikeyhelper() {
     ui_say  "  Install jq (the installer vendors it), then re-run:  agent-secrets setup"
     return 2
   fi
+  # setup and `add ANTHROPIC_API_KEY` can race on the same read-modify-write; the lock serializes them.
+  local lock; lock="$(agsec_state_dir)/.settings.lock"
+  mkdir -p "$(agsec_state_dir)"
+  if ! agsec_lock "$lock" 10; then
+    ui_warn "could not wire apiKeyHelper — another agent-secrets run is editing settings.json; re-run:  agent-secrets setup"
+    return 2
+  fi
+  rc=0; _agsec_wire_settings "$helper" "$sj" || rc=$?
+  agsec_unlock "$lock"
+  return "$rc"
+}
+
+# The settings.json read-modify-write, called with the settings lock held. Same rc contract.
+_agsec_wire_settings() {  # HELPER SETTINGS_JSON
+  local helper="$1" sj="$2"
   mkdir -p "$(dirname "$sj")"
   if [ -f "$sj" ] && [ "$(jq -r '.apiKeyHelper // empty' "$sj" 2>/dev/null)" = "$helper" ]; then
     ui_ok "apiKeyHelper already wired into settings.json"
@@ -61,17 +81,25 @@ agsec_wire_apikeyhelper() {
     # shellcheck disable=SC2016  # $h is a jq --arg variable; keep it literal in the shell
     jqprog='.apiKeyHelper=$h | .cleanupPeriodDays=14'
   fi
-  # Capture jq's exit: an INVALID pre-existing settings.json makes jq fail, mv is skipped, and — because
-  # an &&-list is errexit-exempt — an unconditional ui_ok would print a FALSE "wired" success and leave
-  # a settings.json.new residue. Only claim success when the write actually happened.
-  if jq --arg h "$helper" "$jqprog" "$sj" >"$sj.new" 2>/dev/null; then
-    mv "$sj.new" "$sj"
-    ui_ok "wired apiKeyHelper into settings.json (reversible)"
-    return 0
+  # Capture jq's exit: an INVALID pre-existing settings.json makes jq fail, and an unconditional ui_ok
+  # would print a FALSE "wired" success. Only claim success when the write actually happened. The temp
+  # file is a sibling and agsec_commit writes through a symlinked settings.json (dotfile managers).
+  local tmp
+  if ! tmp="$(agsec_tmp_sibling "$sj")"; then
+    ui_warn "could not wire apiKeyHelper — can't create a temp file beside $sj"
+    return 2
   fi
-  rm -f "$sj.new"
-  ui_warn "could not wire apiKeyHelper — not valid JSON:"
-  ui_say  "  $sj"
-  ui_say  "  Fix it, then re-run:  agent-secrets setup"
-  return 2
+  if ! jq --arg h "$helper" "$jqprog" "$sj" >"$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    ui_warn "could not wire apiKeyHelper — not valid JSON:"
+    ui_say  "  $sj"
+    ui_say  "  Fix it, then re-run:  agent-secrets setup"
+    return 2
+  fi
+  if ! agsec_commit "$tmp" "$sj"; then
+    ui_warn "could not wire apiKeyHelper — can't write $sj"
+    return 2
+  fi
+  ui_ok "wired apiKeyHelper into settings.json (recorded in the manifest)"
+  return 0
 }

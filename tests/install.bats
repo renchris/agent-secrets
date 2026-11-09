@@ -326,10 +326,10 @@ _expect_parse_ok() {
     case "$status" in 0) got=0 ;; 2) got=1 ;; *) printf 'install exit %s for [%s]\n' "$status" "$in" >&2; return 1 ;; esac
     if [ "$got" != "$want" ]; then printf 'disagree on [%s]: setup %s, install %s\n' "$in" "$want" "$got" >&2; return 1; fi
   done
-  # setup accepts a list with no names (its '' arm never runs); install requires at least one.
+  # A list with no names: both refuse (setup needs at least one name since B6).
   for in in , ' ' ',,'; do
     run bash -c 'export AGENT_SECRETS_LIB="$1/lib"; . "$1/cmd/setup.sh"; _import_env_valid "$2"' _ "$REPO_ROOT" "$in"
-    [ "$status" -eq 0 ] || return 1
+    [ "$status" -eq 1 ] || return 1
     _expect_usage --import-env "$in" || return 1
   done
 }

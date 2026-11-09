@@ -24,6 +24,7 @@ HEADLESS=""            # set by --headless, or auto-detected in main (no human t
 HEADLESS_WHY=""        # the ONE reason headless was chosen, for the done screen
 IMPORT_ENV=""          # --import-env NAME[,NAME…]: seed the store from the caller's own environment
 DISCOVERY=""           # headless default 1 (write the machine-wide agent rules); --no-discovery → 0
+FIRST_SECRET=""        # the NAME the interactive first-secret screen stored, for the no-prompt replay
 STATE="$(agsec_wizard_state)"
 _state() { mkdir -p "$(dirname "$STATE")"; printf '%s\n' "$1" >"$STATE"; }
 # UNATTENDED answers every confirm YES (legacy test contract). HEADLESS answers with the DECLARED
@@ -294,7 +295,7 @@ _first_secret() {
     #   3. a fake placeholder (the test/CI default)
     if [ -n "${AGENT_SECRETS_SEED_VALUE:-}" ]; then
       val="$AGENT_SECRETS_SEED_VALUE"                 # set AND non-empty (an empty SEED_VALUE falls through)
-    elif [ ! -t 0 ]; then
+    elif ! agsec_stdin_is_tty; then
       IFS= read -r -t 5 val 2>/dev/null || true      # val is set even on EOF-without-newline; timeout ⇒ empty
       [ -n "$val" ] || val="$AGENT_SECRETS_UNATTENDED_PLACEHOLDER"
     else
@@ -306,7 +307,9 @@ _first_secret() {
     printf '%s' "$val" | store_add "$name" || agsec_die "unattended seed failed for $name — see the error above"
     unset val; ui_ok "stored $name"; return 0
   fi
-  name="$(ui_menu 'Which secret first? (you can finish setup without one)' ANTHROPIC_API_KEY OPENAI_API_KEY 'custom' 'skip for now')"
+  # ui_menu returns 1 on EOF or a 4th bad answer: a cancel, so nothing is stored under a name nobody chose.
+  name="$(ui_menu 'Which secret first? (you can finish setup without one)' ANTHROPIC_API_KEY OPENAI_API_KEY 'custom' 'skip for now')" \
+    || { ui_say "Skipped. Store one anytime:  agent-secrets add <NAME>"; return 0; }
   case "$name" in
     'skip for now') ui_say "Skipped — store one anytime:  agent-secrets add <NAME>"; return 0 ;;
   esac
@@ -328,7 +331,7 @@ _first_secret() {
       esac
     done
   fi
-  if _read_secret_store "$name" "Value for $name"; then ui_ok "stored $name (value never shown)"; fi
+  if _read_secret_store "$name" "Value for $name"; then ui_ok "stored $name (value never shown)"; FIRST_SECRET="$name"; fi
 }
 
 # The breach canary is NOT offered here any more. It ships as an inert decoy, arming is opt-in, and
@@ -342,17 +345,16 @@ _wire_tools() {
   local w
   for w in claude-agent cursor-agent apiKeyHelper; do
     [ -f "$AGENT_SECRETS_ROOT/bin/$w" ] || continue
-    # A pre-existing NON-symlink at the target is the USER'S own file — `ln -sf` would clobber it and
-    # uninstall's `rm -f` on the `file` record would then finish the loss. Write-once backup + an `edit`
-    # record so uninstall RESTORES it. The edit record is appended BEFORE the file record: rollback is
-    # LIFO, so the symlink is removed first, then the user's file restored.
-    if [ -f "$bindir/$w" ] && [ ! -L "$bindir/$w" ]; then
-      local wbak; wbak="$(agsec_state_dir)/wrapper-$w.bak"; mkdir -p "$(dirname "$wbak")"
-      [ -f "$wbak" ] || cp -p "$bindir/$w" "$wbak"      # WRITE-ONCE: a re-run must not overwrite the pristine backup
-      manifest_record_edit "$bindir/$w" "$wbak" >/dev/null 2>&1 || true
-    fi
+    # A pre-existing file or symlink at the target that is not our link is the USER'S own — `ln -sfn`
+    # would clobber it and uninstall's `rm -f` on the `file` record would then finish the loss. Back it
+    # up with an `edit` record so uninstall RESTORES it. The edit record is appended BEFORE the file
+    # record: rollback is LIFO, so our symlink is removed first, then the user's entry restored. A
+    # re-run keeps the backup while the entry is unchanged; a changed one refreshes it and keeps the
+    # previous backup beside it (manifest_backup_user_target). If the backup fails, nothing is replaced.
+    manifest_backup_user_target "$bindir/$w" "wrapper-$w.bak" >/dev/null \
+      || agsec_die "could not back up your existing $bindir/$w — it was left as is; move it aside, then re-run: agent-secrets setup"
     # Symlink (not copy) so the wrapper follows the link back to its sibling lib/ under the install root.
-    ln -sf "$AGENT_SECRETS_ROOT/bin/$w" "$bindir/$w"
+    ln -sfn "$AGENT_SECRETS_ROOT/bin/$w" "$bindir/$w"
     manifest_record_file "$bindir/$w" >/dev/null 2>&1 || true
   done
   ui_ok "installed wrappers to $bindir"
@@ -382,7 +384,7 @@ _discovery_screen() {
     ui_say "  Machine-wide discovery skipped — nothing to write."
     return 0
   fi
-  ui_say "Writing the agent-secrets rules (advisory, reversible) into:"
+  ui_say "Writing the agent-secrets rules (advisory, recorded in the manifest) into:"
   printf '%s\n' "$plan" | while IFS="$(printf '\t')" read -r _lbl _pth; do ui_say "  $_pth"; done
   local wrote; wrote="$(agsec_discovery_install_all)"
   if [ -n "$wrote" ]; then
@@ -420,13 +422,29 @@ _done_screen() {
   if agsec_have pbcopy && agsec_agent_rules | pbcopy 2>/dev/null; then
     ui_say "Using Cursor? Its agent rules are on your clipboard now."
     ui_say "Paste them into: Cursor Settings → Rules → User Rules."
-    ui_say "(Claude Code is already covered by the ~/.claude/CLAUDE.md block.)"
+    ui_say "(Claude Code reads the agent rules in ~/.claude/CLAUDE.md,"
+    ui_say " if you added them.)"
   else
     ui_say "Using Cursor? Paste these into Settings → Rules → User Rules:"
     agsec_agent_rules | while IFS= read -r _rule; do ui_say "  $_rule"; done
   fi
+  # Only after the prompting wizard: a restore's replay is not this command, and an unattended run
+  # asked nothing.
+  if _human && [ "${1:-}" != restore ]; then
+    ui_say ""
+    ui_say "Run this again without prompts:"
+    ui_say "  $(_replay_cmd)"
+  fi
   ui_say ""
   ui_say "Docs: https://github.com/renchris/agent-secrets"
+}
+
+# The prompt-free equivalent of the interactive run just finished. --no-discovery because the
+# interactive wizard writes no machine-wide rules; --import-env names the stored secret, whose value
+# the replay reads from the variable of that name, so no value is ever part of the command.
+_replay_cmd() {  # [NAME=$FIRST_SECRET]
+  local name="${1:-$FIRST_SECRET}"
+  printf 'agent-secrets setup --headless --no-discovery%s\n' "${name:+ --import-env $name}"
 }
 
 # The headless done screen is written for the reader it has: an agent, or a log. It names the
@@ -508,54 +526,78 @@ _restore_screen() {
   ui_say "then paste your saved age private key to re-establish custody."
   restore_flow || agsec_die "restore did not complete — see the message above (copy your store copy into place, then re-run: agent-secrets setup --restore)"
   _wire_tools
-  _done_screen
+  _done_screen restore
 }
 
 # Validate an --import-env list: comma/space-separated env-var NAMES (a value never appears here).
+# At least one name. The character check runs first because the list is split by an unquoted `for`,
+# where a `*` or `?` would glob against the working directory.
 _import_env_valid() {
-  local n
+  local n count=0
+  case "$1" in *[!A-Za-z0-9_,\ ]*) return 1 ;; esac
   for n in $(printf '%s' "$1" | tr ',' ' '); do
-    case "$n" in [A-Za-z_]*[!A-Za-z0-9_]* | [!A-Za-z_]* | '') return 1 ;; esac
+    case "$n" in [!A-Za-z_]*) return 1 ;; esac
+    count=$((count + 1))
   done
+  [ "$count" -gt 0 ]
+}
+
+# The one place setup decides whether a human can be prompted (tests/install parity reads it).
+# HEADLESS whenever there is nobody to prompt: a coding-agent session (its pty is transcript-captured,
+# so a hidden prompt there is not hidden — M2), no terminal that could be attached (ssh -T, cron), an
+# explicit non-interactive request (AGENT_SECRETS_NONINTERACTIVE=1 or CI), or a stderr that is not a
+# terminal (every prompt is written there, so the human would answer prompts they cannot see). A human
+# running `curl … | bash` has a pipe on stdin AND a real terminal, and is attached to it in main — that
+# is what keeps the one-liner ONE command. UNATTENDED and --headless/--import-env were decided first.
+setup_resolve_mode() {
+  [ -z "$UNATTENDED" ] && [ -z "$HEADLESS" ] || return 0
+  if agsec_in_agent_session; then HEADLESS=1; HEADLESS_WHY="coding-agent session"
+  elif ! agsec_have_tty; then HEADLESS=1; HEADLESS_WHY="no terminal attached"
+  elif agsec_noninteractive_requested; then HEADLESS=1; HEADLESS_WHY="non-interactive (--non-interactive or CI)"
+  elif [ ! -t 2 ]; then HEADLESS=1; HEADLESS_WHY="stderr is not a terminal"
+  fi
   return 0
 }
 
 main() {
-  local do_restore=0 do_keychain=0 do_discovery=0
+  local do_restore=0 do_keychain=0 do_discovery=0 nodisc=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --restore)      do_restore=1 ;;
       --keychain)     do_keychain=1 ;;
       --discovery)    do_discovery=1 ;;
       --headless)     HEADLESS=1; HEADLESS_WHY="--headless" ;;
-      --no-discovery) DISCOVERY=0 ;;
+      --no-discovery) DISCOVERY=0; nodisc=1 ;;
       --import-env)
-        [ -n "${2:-}" ] || agsec_die "--import-env needs NAME[,NAME…] (env-var names — never a value)" 2
-        _import_env_valid "$2" || agsec_die "--import-env: '$2' — names are letters, digits, underscore (start with a letter or _), comma-separated" 2
+        # Never echo the token back: a value pasted where a NAME belongs would land in a transcript.
+        [ -n "${2:-}" ] || agsec_die "--import-env needs <NAME>[,<NAME>…] (env-var names — never a value)" 2
+        _import_env_valid "$2" || agsec_die "--import-env: bad NAME list (letters, digits, underscore; comma-separated)" 2
         IMPORT_ENV="$2"; HEADLESS="${HEADLESS:-1}"; HEADLESS_WHY="${HEADLESS_WHY:---import-env}"; shift ;;
       --import-env=*)
         _import_env_valid "${1#--import-env=}" || agsec_die "--import-env: bad NAME list (letters, digits, underscore; comma-separated)" 2
         IMPORT_ENV="${1#--import-env=}"; HEADLESS="${HEADLESS:-1}"; HEADLESS_WHY="${HEADLESS_WHY:---import-env}" ;;
-      *) agsec_die "setup: unknown argument '$1' (see: agent-secrets setup --help)" 2 ;;
+      *) agsec_unknown_option setup "$1" ;;
     esac
     shift
   done
-  # Mode resolution. HEADLESS whenever there is nobody to prompt: a coding-agent session (its pty is
-  # transcript-captured, so a hidden prompt there is not hidden — M2), or no terminal that could be
-  # attached (ssh -T, cron, CI). A human running `curl … | bash` has a pipe on stdin AND a real
-  # terminal, and is attached to it below — that is what keeps the one-liner ONE command.
-  if [ -z "$UNATTENDED" ] && [ -z "$HEADLESS" ]; then
-    if agsec_in_agent_session; then HEADLESS=1; HEADLESS_WHY="coding-agent session"
-    elif ! agsec_have_tty; then HEADLESS=1; HEADLESS_WHY="no terminal attached"
-    fi
-  fi
+  # Each of these runs a single screen and returns, so a second one would be silently ignored.
+  local f one=""
+  for f in "--restore:$do_restore" "--keychain:$do_keychain" "--discovery:$do_discovery"; do
+    [ "${f##*:}" = 1 ] || continue
+    [ -z "$one" ] || agsec_die "setup: can't use $one with ${f%%:*} (each runs one step; run them separately)" 2
+    one="${f%%:*}"
+  done
+  [ "$do_discovery" -eq 0 ] || [ "$nodisc" -eq 0 ] \
+    || agsec_die "setup: can't use --discovery with --no-discovery (one writes the agent rules, the other opts out)" 2
+  agsec_parse_only_exit
+  setup_resolve_mode
   [ -n "$DISCOVERY" ] || { [ -n "$HEADLESS" ] && DISCOVERY=1 || DISCOVERY=0; }
   agsec_secure_umask
   # --keychain / --restore / --discovery are single screens; --restore reads piped stdin (the key).
   if [ "$do_keychain" -eq 1 ]; then _keychain_screen; return 0; fi
   if [ "$do_restore" -eq 1 ]; then _restore_screen; _state 'done'; return 0; fi
   if [ "$do_discovery" -eq 1 ]; then ui_title "agent-secrets setup --discovery"; _discovery_screen; return 0; fi
-  if _human && [ ! -t 0 ]; then
+  if _human && ! agsec_stdin_is_tty; then
     agsec_attach_tty || agsec_die "setup: a terminal was detected but could not be attached — re-run in Terminal.app, or add --headless for a prompt-free setup"
   fi
   ui_title "agent-secrets setup${HEADLESS:+ (headless)}"

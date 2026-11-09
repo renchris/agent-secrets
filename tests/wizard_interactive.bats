@@ -46,6 +46,30 @@ setup_file() { :; }
   [[ "$output" == *"Skipped"* ]] || return 1
 }
 
+@test "menu: four bad answers cancel the first secret — setup continues, nothing stored" {
+  run _wiz '9\n9\n9\n9\n' _first_secret
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Enter a number from 1 to 4"* ]] || return 1
+  [[ "$output" == *"Skipped"* ]] || return 1
+  [ ! -e "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]
+}
+
+@test "menu: EOF at the first-secret menu skips — nothing stored" {
+  run _wiz '' _first_secret
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Skipped"* ]] || return 1
+  [[ "$output" != *"Value for"* ]] || return 1                   # no value prompt under an unchosen name
+  [ ! -e "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]
+}
+
+@test "menu: a bad answer asks again, then the explicit skip skips" {
+  run _wiz '7\n4\n' _first_secret
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Enter a number from 1 to 4"* ]] || return 1
+  [[ "$output" == *"Skipped"* ]] || return 1
+  [ ! -e "$AGENT_SECRETS_HOME/.config/secrets/secrets.env" ]
+}
+
 @test "F3: an invalid custom NAME re-prompts instead of reaching store_add's fatal die" {
   setup_store
   run _wiz '3\nBAD-NAME\nGOOD_NAME\nval-regression-name\n' _first_secret
@@ -157,6 +181,8 @@ set timeout -1
 after 900000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
 spawn env -u CLAUDECODE -u CLAUDE_CODE -u CURSOR_AGENT -u CURSOR_TRACE_ID -u TERM_PROGRAM bash $env(REPO_ROOT)/bin/agent-secrets setup
 expect "Save it off this Mac now?"
+# On a terminal the recovery offer is the wizard's FIRST prompt (mode matrix, tty row).
+if {[regexp {\[[yY]/[nN]\]|choose \[} $expect_out(buffer)]} { puts "\nEARLIER-PROMPT"; exit 93 }
 # The test's "password manager": read the key line from the on-disk file the wizard just minted.
 set fh [open "$env(AGENT_SECRETS_HOME)/.config/secrets/recovery.key" r]
 set keyline ""
@@ -178,6 +204,36 @@ EOF
   [ ! -f "$AGENT_SECRETS_HOME/.config/secrets/recovery.key" ]      # verified ⇒ removed
   [[ "$output" != *"e2e-val-regression"* ]] || return 1            # hidden read: value never echoed
   [[ "$output" == *"wired apiKeyHelper"* ]] || return 1            # the key IS stored ⇒ the helper is wired
+  [[ "$output" == *"Run this again without prompts:"* ]] || return 1          # the no-prompt replay
+  [[ "$output" == *"setup --headless --no-discovery --import-env ANTHROPIC_API_KEY"* ]] || return 1
   run agsec list
   [[ "$output" == *"ANTHROPIC_API_KEY"* ]] || return 1             # the secret actually landed
+}
+
+# ---- restore: a signal mid-paste gives the terminal its echo back -------------------------------
+
+@test "Ctrl-C during the hidden key paste restores terminal echo" {
+  command -v expect >/dev/null 2>&1 || skip "expect not available"
+  # A non-interactive outer shell, not `bash -i`: an interactive bash restores the terminal itself
+  # when a foreground job dies of a signal, which would hide a missing handler. Here the outer shell
+  # runs `stty -a` only if restore_flow handled the INT itself (a SIGINT death would end it too).
+  cat >"$AGENT_SECRETS_HOME/drive.exp" <<'EOF'
+set timeout -1
+after 900000 { puts "\nDESYNC-TIMEOUT"; exit 90 }
+spawn bash --norc --noprofile -c {cd "$REPO_ROOT"; ( . lib/common.sh; . lib/ui.sh; . lib/keychain.sh; . lib/store.sh; . lib/restore.sh; restore_flow ); echo "RC=$?"; stty -a}
+# The prompt prints after echo is off and the handlers are set, so nothing races the Ctrl-C.
+expect "then press Ctrl-D:" { send "AGE-SECRET-KEY-1PARTIAL"; send "\003" }
+expect "RC=" { }
+expect eof { }
+catch wait result
+if {[llength $result] > 4} { puts "\nDRIVE-KILLED $result"; exit 92 }
+exit [lindex $result 3]
+EOF
+  run expect "$AGENT_SECRETS_HOME/drive.exp"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"RC=130"* ]] || return 1
+  local lflags; lflags="$(printf '%s\n' "$output" | grep -m1 'lflags:')"
+  [[ " $lflags " == *" echo "* ]] || { echo "echo still off: $lflags"; return 1; }
+  [[ "$lflags" != *"-echo "* ]] || { echo "echo still off: $lflags"; return 1; }
+  [[ "$output" != *"PARTIAL"* ]] || return 1                       # the paste was never echoed
 }
