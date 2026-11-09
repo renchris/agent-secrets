@@ -149,6 +149,25 @@ EOF
   done
 }
 
+@test "receive help lists -y and --yes beside --yes-i-reviewed, as one boolean flag" {
+  run agsec receive --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"-y | --yes | --yes-i-reviewed"* ]] || return 1
+  [[ "$output" == *"-y, --yes, --yes-i-reviewed"* ]] || return 1
+  run bash -c "bash '$REPO_ROOT/bin/agent-secrets' help --json | jq -e '
+    .commands[] | select(.name==\"receive\") | .flags[] | select(.flag==\"-y, --yes, --yes-i-reviewed\") | .type==\"boolean\"'"
+  [ "$status" -eq 0 ]
+}
+
+@test "setup help says exit 1 covers a ✗ health check, and lists exit 130 for an interrupted restore" {
+  run agsec setup --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"health check found a ✗ row"* ]] || return 1
+  run bash -c "bash '$REPO_ROOT/bin/agent-secrets' help --json | jq -e '
+    .commands[] | select(.name==\"setup\") | .exit_codes | map(.code) | contains([0,1,2,130])'"
+  [ "$status" -eq 0 ]
+}
+
 @test "uninstall --help lists exit 0 for nothing to roll back and exit 1 for a partial rollback" {
   run agsec uninstall --help
   [ "$status" -eq 0 ]

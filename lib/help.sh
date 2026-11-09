@@ -54,8 +54,9 @@ setup	example	agent-secrets setup --restore	recover on a new machine (copy your 
 setup	example	agent-secrets setup --keychain	re-run only the Keychain populate step (doctor: file custody)
 setup	writes	~/.config/secrets/{age.key,age.pub,recovery.key (headless: kept),recovery.pub,age-key-cmd.sh,secrets.env,.sops.yaml,manifest.toml}, ~/bin wrappers, ~/.claude/settings.json (apiKeyHelper, only once ANTHROPIC_API_KEY is stored), discovery blocks (headless default / --discovery)
 setup	exit	0	setup completed (or returned early on an existing install)
-setup	exit	1	a step failed (see message)
+setup	exit	1	a step failed (see message), or the health check found a ✗ row: setup finished with problems (run agent-secrets doctor)
 setup	exit	2	usage error (unknown option, a bad --import-env NAME list, or two step options that cannot be combined)
+setup	exit	130	interrupted at the hidden key paste of --restore (terminal echo is restored; the key is not stored)
 setup	namesonly	never prints the age key or any secret value; interactive input is hidden (read -s); headless reads no secret from any prompt and imports only from named environment variables
 add	synopsis	agent-secrets add <NAME>
 add	summary	Add or update ONE secret by name. The value is read hidden and never echoed.
@@ -136,11 +137,11 @@ share	exit	1	no such NAME, the store can't be decrypted, a recipient key that ca
 share	exit	2	usage error (unknown option, bad NAME or recipient form), or no interactive terminal
 share	exit	130	canceled at the y/N confirm or the --verify digest check (nothing shared)
 share	namesonly	the value is encrypted to the recipient and never printed; only ciphertext + the NAME leave
-receive	synopsis	agent-secrets receive [--rename <NAME>] [--yes-i-reviewed]
+receive	synopsis	agent-secrets receive [--rename <NAME>] [-y | --yes | --yes-i-reviewed]
 receive	summary	Ingest a pasted share envelope on STDIN, decrypt, store — never displayed. tty-gated.
 receive	desc	Reads a v1 envelope blob from STDIN and takes every confirm from /dev/tty (hard-refuses when no tty is present, except --yes-i-reviewed for CI which still runs the canary/collision hard errors). Recomputes the digest locally over the base64-decoded ciphertext (advisory) for an out-of-band voice-compare, rejects unknown envelope versions, hard-refuses the in-store canary name, and asks before overwriting an existing NAME (under --yes-i-reviewed it hard-stops; use --rename). The decrypted value is piped straight into the encrypted store. v0.1 stores SINGLE-LINE values only — a multi-line envelope (PEM/JSON blob) is refused (multi-line/file secrets are a v0.2 item). stdout: the stored NAME only.
 receive	flag	--rename <NAME>	store the received secret under this NAME (use when the envelope's NAME collides or you prefer a local name)
-receive	flag	--yes-i-reviewed	non-interactive ingest for CI; skips the tty prompts but keeps the canary/collision hard errors
+receive	flag	-y, --yes, --yes-i-reviewed	non-interactive ingest for CI; skips the tty prompts but keeps the canary/collision hard errors (the three spellings are the same flag)
 receive	env	AGENT_SECRETS_HOME	base dir for all state (default $HOME; empty = $HOME); set to an isolated dir for tests/CI
 receive	example	agent-secrets receive	run, then paste the envelope on STDIN and press Ctrl-D
 receive	reads	STDIN (the pasted v1 envelope)

@@ -88,6 +88,31 @@ EOF
   [ "$output" = "ci-value-1" ]
 }
 
+@test "-y and --yes are aliases of --yes-i-reviewed: each ingests with no usable tty" {
+  setup_store
+  local flag n=0
+  for flag in -y --yes; do
+    n=$((n + 1))
+    make_blob "CI_ALIAS_$n" "ci-alias-$n" > "$BATS_TEST_TMPDIR/blob"
+    run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/does-not-exist" bash "$(receive_bin)" receive "$flag" < "$BATS_TEST_TMPDIR/blob"
+    [ "$status" -eq 0 ] || { echo "$flag: exit $status"; return 1; }
+    [[ "$output" != *"deprecated"* ]] || return 1
+    run store_extract "CI_ALIAS_$n"
+    [ "$output" = "ci-alias-$n" ] || { echo "$flag: not stored"; return 1; }
+  done
+}
+
+@test "--yes keeps the collision hard error, and a near-miss flag is still a usage error" {
+  setup_store
+  make_blob CI_TOKEN 'ci-value-1' > "$BATS_TEST_TMPDIR/blob"
+  env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/does-not-exist" bash "$(receive_bin)" receive --yes < "$BATS_TEST_TMPDIR/blob" >/dev/null 2>&1
+  run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/does-not-exist" bash "$(receive_bin)" receive --yes < "$BATS_TEST_TMPDIR/blob"
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"already exists"* ]] || return 1
+  run env AGSEC_CONFIRM_SRC="$BATS_TEST_TMPDIR/does-not-exist" bash "$(receive_bin)" receive --yess < "$BATS_TEST_TMPDIR/blob"
+  [ "$status" -eq 2 ]
+}
+
 @test "--yes-i-reviewed still hard-errors on the canary name" {
   setup_store
   make_blob "$AGENT_SECRETS_CANARY_NAME" 'x' > "$BATS_TEST_TMPDIR/blob"

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cmd/receive.sh — `receive [--rename NEW] [--yes-i-reviewed]`: ingest a pasted v1 share envelope on
+# cmd/receive.sh — `receive [--rename NEW] [-y | --yes | --yes-i-reviewed]`: ingest a pasted v1 share envelope on
 # STDIN, decrypt it to the local age key, and store it names-only. NOT env-gated (design §3.10): the
 # protection is the /dev/tty confirm seam (an agent with no tty hits a hard-refuse), never the env guard.
 # The blob occupies STDIN, so every confirm/re-prompt reads from ${AGSEC_CONFIRM_SRC:-/dev/tty} — an
@@ -23,7 +23,8 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --rename) shift; rename="${1:-}"; [ -n "$rename" ] || agsec_die "--rename needs a NAME" 2;;
     --rename=*) rename="${1#--rename=}";;
-    --yes-i-reviewed) yes_reviewed=1;;
+    # -y/--yes are plain aliases (operator ruling ad226c7513ea): same effect, no deprecation.
+    -y|--yes|--yes-i-reviewed) yes_reviewed=1;;
     -*) agsec_unknown_option receive "$1";;
     *) agsec_unexpected_argument receive;;
   esac
