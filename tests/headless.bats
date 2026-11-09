@@ -144,6 +144,38 @@ _agent() { env CLAUDECODE=1 AGENT_SECRETS_HOME="$AGENT_SECRETS_HOME" "$@" </dev/
   [[ "$output" == *"auth will FAIL"* ]] || return 1
 }
 
+# ---- F28: a ✗ health check is a failed setup ------------------------------------------------------
+# The ✗ fixture is M4's: a settings.json helper wired with no ANTHROPIC_API_KEY stored. Setup leaves a
+# pre-existing helper in place (lib/wire.sh only adds one), so doctor --summary reports it as ✗.
+_wire_helper_without_key() {
+  mkdir -p "$AGENT_SECRETS_HOME/.claude"
+  jq -n --arg h "$AGENT_SECRETS_HOME/bin/apiKeyHelper" '{apiKeyHelper:$h}' >"$AGENT_SECRETS_HOME/.claude/settings.json"
+}
+
+@test "setup exits 1 and does not say 'You're set up' when the health check finds a ✗" {
+  _wire_helper_without_key
+  run _agent bash "$REPO_ROOT/bin/agent-secrets" setup --no-discovery
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"auth will FAIL"* ]] || return 1
+  [[ "$output" != *"You're set up"* ]] || return 1
+  [[ "$output" == *"Set up, with problems"* ]] || return 1
+  [[ "$output" == *"next: agent-secrets doctor"* ]] || return 1
+  [[ "$output" == *"$AGENT_SECRETS_HOME/bin/agent-secrets"* ]] || return 1   # the done screen still runs
+  local st="$AGENT_SECRETS_HOME/.local/state/agent-secrets/wizard-state.json"
+  grep -qx checked "$st"
+  ! grep -q done "$st"
+}
+
+@test "a re-run on an installed machine exits 1 when the health check finds a ✗" {
+  _agent bash "$REPO_ROOT/bin/agent-secrets" setup --no-discovery >/dev/null 2>&1
+  _wire_helper_without_key
+  run _agent bash "$REPO_ROOT/bin/agent-secrets" setup --no-discovery
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"already set up"* ]] || return 1
+  [[ "$output" == *"next: agent-secrets doctor"* ]] || return 1
+  grep -qx checked "$AGENT_SECRETS_HOME/.local/state/agent-secrets/wizard-state.json"
+}
+
 # ---- discovery: default on, announced, --no-discovery, standalone ---------------------------------
 
 @test "headless writes the machine-wide agent rules by default and ANNOUNCES each file before writing" {

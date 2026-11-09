@@ -22,6 +22,7 @@ for _m in ui store keychain manifest restore wire discovery; do . "$AGENT_SECRET
 UNATTENDED="${AGENT_SECRETS_UNATTENDED:-}"
 HEADLESS=""            # set by --headless, or auto-detected in main (no human to prompt)
 HEADLESS_WHY=""        # the ONE reason headless was chosen, for the done screen
+DONE_TITLE="You're set up"   # "Set up, with problems" when the health check finds a ✗ row (F28)
 IMPORT_ENV=""          # --import-env NAME[,NAME…]: seed the store from the caller's own environment
 DISCOVERY=""           # headless default 1 (write the machine-wide agent rules); --no-discovery → 0
 FIRST_SECRET=""        # the NAME the interactive first-secret screen stored, for the no-prompt replay
@@ -396,7 +397,7 @@ _discovery_screen() {
 }
 
 _done_screen() {
-  ui_title "You're set up"
+  ui_title "$DONE_TITLE"
   if [ -n "$HEADLESS" ]; then _done_screen_headless; return 0; fi
   ui_say "The 3 commands you'll use:"
   ui_say "  agent-secrets add <NAME>    — add a secret (value never shown)"
@@ -610,7 +611,12 @@ main() {
       if _confirm "Run a health check instead of re-onboarding?" y; then
         _wire_tools; _import_env
         [ "$DISCOVERY" = 1 ] && _discovery_screen
-        exec bash "$AGENT_SECRETS_CMD/doctor.sh" --summary
+        local hc=0
+        bash "$AGENT_SECRETS_CMD/doctor.sh" --summary || hc=$?
+        [ "$hc" -eq 0 ] && return 0
+        # `checked` (never `done`) tells install.sh this setup ran but found a ✗ row (F28).
+        if [ "$hc" -eq 1 ]; then _state checked; _health_warn; fi
+        return 1
       fi ;;
     partial) ui_say "A previous setup was interrupted — continuing (idempotent; your key is kept)." ;;
   esac
@@ -628,8 +634,22 @@ main() {
   _state wired
   # --summary so the wizard ends on core custody/toolchain/store/injection status instead of ~7 aspirational
   # ⚠ (canary/backup/discovery/hygiene/…) that read as "broken" though exit is 0. Full report: `doctor`.
-  ui_step 5 6 "Health check";     bash "$AGENT_SECRETS_CMD/doctor.sh" --summary || true
-  ui_step 6 6 "Done";             _done_screen;    _state 'done'
+  # A ✗ row is a failed setup (F28, R003): still show the done screen (its follow-ups apply), but
+  # retitle it, record `checked` instead of `done` (install.sh reads it), and exit 1.
+  local hc=0
+  ui_step 5 6 "Health check";     bash "$AGENT_SECRETS_CMD/doctor.sh" --summary || hc=$?
+  [ "$hc" -le 1 ] || return 1
+  if [ "$hc" -eq 1 ]; then
+    _health_warn
+    DONE_TITLE="Set up, with problems"
+  fi
+  ui_step 6 6 "Done";             _done_screen
+  if [ "$hc" -eq 1 ]; then _state checked; return 1; fi
+  _state 'done'
+}
+
+_health_warn() {
+  ui_warn "health check found problems — see the ✗ rows above; next: agent-secrets doctor"
 }
 # Execute-only guard: `bash cmd/setup.sh` (the dispatcher) runs the wizard; SOURCING this file
 # (the bats regression tests) only loads the screen functions for direct, deterministic testing.
