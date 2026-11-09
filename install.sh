@@ -566,6 +566,9 @@ main() {
   # or hang forever (open pipe). --dry-run is the way to look without installing.
   if [ "$INTERACTIVE" -eq 1 ]; then
     local reply="" bad=0
+    # Nothing is written before the answer, so Ctrl-C here is a decline: same receipt, same 130. The
+    # phase traps (_agsec_on_signal) are armed only after the work dir exists.
+    trap '_eprintf "\n"; _say "Canceled. Nothing was changed."; exit 130' INT
     while :; do
       _eprintf 'Install agent-secrets to %s and edit %s? [Y/n] ' "$INSTALL_DIR" "$RC_FILE"
       if ! read -r reply; then reply=n; _eprintf '\n'; fi
@@ -577,6 +580,7 @@ main() {
       if [ "$bad" -ge 4 ]; then _say "Canceled. Nothing was changed."; exit 130; fi
       _say "Please answer y or n."
     done
+    trap - INT
   else
     _say "($MODE_WHY: proceeding with the plan above; --dry-run previews, --no-discovery skips the agent rules)"
   fi
