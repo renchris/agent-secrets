@@ -133,8 +133,9 @@ NOPROXY=(env -u HTTPS_PROXY -u https_proxy -u AGENT_SECRETS_NO_EGRESS)
   [ -x /usr/bin/perl ] || skip "no /usr/bin/perl"
   setup_store
   printf '127.0.0.1\n' >"$(agsec_config_dir)/egress.allow"
-  # A duration no other process on the machine uses, so ps can tell this child apart.
-  local dur="30.$$${RANDOM}" w rc=0 deadline
+  # A duration no other process on the machine uses, so ps can tell this child apart. It must outlive
+  # the 120 s wait below: under load the child can still be sleeping-out before the TERM arrives.
+  local dur="600.$$${RANDOM}" w rc=0 deadline
   # ps is read whole before grep: common.sh sets pipefail, so `ps | grep -q` fails when ps takes a
   # SIGPIPE. Whole-line match, so a grep's own argv never counts as the child.
   _child_up() { local all; all="$(ps -axo command=)"; grep -qxF "sleep $dur" <<<"$all"; }

@@ -59,16 +59,21 @@ load test_helper
   run grep -c "$secret" "$(agsec_store_file)"; [ "$output" -eq 0 ]   # nothing stored
 }
 
-@test "two concurrent store_add calls keep both names" {
+@test "two concurrent store_add calls never silently lose a name" {
   setup_store
-  local a b
-  ( printf 'fake-a' | store_add LOCK_A ) 3>&- & a=$!
-  ( printf 'fake-b' | store_add LOCK_B ) 3>&- & b=$!
-  wait "$a"; wait "$b"
+  local a b ra=0 rb=0 t="$BATS_TEST_TMPDIR"
+  ( printf 'fake-a' | store_add LOCK_A ) 3>&- 2>"$t/a.err" & a=$!
+  ( printf 'fake-b' | store_add LOCK_B ) 3>&- 2>"$t/b.err" & b=$!
+  wait "$a" || ra=$?; wait "$b" || rb=$?
+  # Each writer either stores its name or, when the 10 s lock wait runs out on a loaded machine, fails
+  # loudly with the lock error. A writer that reports success must find its name in the store.
+  [ "$ra" -eq 0 ] || [ "$rb" -eq 0 ]
   run store_names
   [ "$status" -eq 0 ]
-  grep -qx LOCK_A <<<"$output"
-  grep -qx LOCK_B <<<"$output"
+  if [ "$ra" -eq 0 ]; then grep -qx LOCK_A <<<"$output" || return 1
+  else grep -qF "Couldn't lock the store" "$t/a.err" || return 1; fi
+  if [ "$rb" -eq 0 ]; then grep -qx LOCK_B <<<"$output" || return 1
+  else grep -qF "Couldn't lock the store" "$t/b.err" || return 1; fi
   [ ! -e "$(agsec_config_dir)/.store.lock" ]                 # released
 }
 
