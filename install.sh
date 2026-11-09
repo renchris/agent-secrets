@@ -122,8 +122,10 @@ if [ -z "${AGSEC_REEXECED:-}" ] && { [ -z "${BASH_VERSION:-}" ] || shopt -qo pos
   # Capture first so a failed re-fetch fails LOUD — `bash -c "$(curl…)"` inline would silently run an
   # empty program (exit 0) on a network error, a no-op masquerading as success.
   _agsec_self_url="${AGENT_SECRETS_INSTALL_URL:-https://raw.githubusercontent.com/${_agsec_repo}/${AGSEC_PINNED_TAG}/install.sh}"
+  # No --retry on this `$(curl …)` capture: a retried stall after a partial body can exit 0 with the
+  # partial text captured, and that text would reach `exec bash -c`.
   _agsec_src="$(curl -fsSL "$_agsec_self_url")" || _agsec_src=""
-  [ -n "$_agsec_src" ] || { printf 'ERROR: could not re-fetch install.sh to re-exec under bash. Re-run the README one-liner with bash (not sh) — it curl-pipes this URL: %s\n' "$_agsec_self_url" >&2; exit 1; }
+  [ -n "$_agsec_src" ] || { printf 'ERROR: could not re-fetch install.sh to re-exec under bash. Re-run the README one-liner with bash (not sh) — it curl-pipes this URL: %s\n' "$(_agsec_show_url "$_agsec_self_url")" >&2; exit 1; }
   exec bash -c "$_agsec_src" bash "$@"
 fi
 # The sentinel has done its job (the re-exec'd bash skipped the guard). Exported, it would reach setup and
@@ -131,6 +133,47 @@ fi
 unset AGSEC_REEXECED
 
 set -euo pipefail
+
+# --- outcome reporting: one EXIT handler and one signal handler, both reading globals only ----------
+# main()'s locals are gone by the time the EXIT trap fires while the shell unwinds through an `exit`
+# (verified under bash 3.2), so a handler may read only these globals. Each step updates them:
+# _AGSEC_CLEANUP_CMD holds %q-baked commands (rebuilt by each step), _AGSEC_PHASE names the step for
+# the report, and _AGSEC_RECORDED turns 1 once the manifest records the tool dir.
+_AGSEC_CLEANUP_CMD=""; _AGSEC_PHASE=""; _AGSEC_RECORDED=0; _AGSEC_FRESH=0
+_AGSEC_REPORTED=0; _AGSEC_SIGNALED=0; _AGSEC_RERUN=""; _AGSEC_TOOL_CMD=""; _AGSEC_BIN_CMD=""; _AGSEC_STATE_DIR=""
+# A subshell per write: a closed stderr (`… 2>&1 | head -1`) then kills only the subshell, so the default
+# SIGPIPE disposition, which skips the EXIT trap, never reaches this shell or its children.
+_agsec_err() { ( printf '%s\n' "$@" >&2 ) || true; }
+_agsec_on_signal() {
+  _AGSEC_SIGNALED=1
+  case "$_AGSEC_PHASE" in
+    download|verify) _agsec_err "Canceled. Nothing was changed." ;;
+    setup) _agsec_err "Installed; setup was interrupted. Re-run it:" "    ${_AGSEC_BIN_CMD:-agent-secrets} setup" ;;
+    *)
+      if [ "$_AGSEC_RECORDED" -eq 1 ]; then
+        _agsec_err "Stopped. Partly installed; every change is recorded in $_AGSEC_STATE_DIR/install-manifest.json." \
+          "See what uninstall would undo:" "    $_AGSEC_TOOL_CMD uninstall --dry-run"
+      elif [ "$_AGSEC_FRESH" -eq 1 ]; then
+        _agsec_err "Stopped. Removed the partial install."
+      else
+        _agsec_err "Stopped. Your existing install may be partly updated. Re-run the installer:" "    $_AGSEC_RERUN"
+      fi ;;
+  esac
+  exit "$1"
+}
+_agsec_on_exit() {
+  local rc=$?
+  set +e
+  [ -z "$_AGSEC_CLEANUP_CMD" ] || eval "$_AGSEC_CLEANUP_CMD"
+  if [ "$rc" -ne 0 ] && [ "$_AGSEC_SIGNALED" -eq 0 ] && [ "$_AGSEC_REPORTED" -eq 0 ]; then
+    _agsec_err "✗ Failed to install agent-secrets: $_AGSEC_PHASE failed." "Re-run the installer:" "    $_AGSEC_RERUN"
+    if [ "$_AGSEC_RECORDED" -eq 1 ]; then
+      _agsec_err "Or see what uninstall would undo:" "    $_AGSEC_TOOL_CMD uninstall --dry-run"
+    fi
+    rc=1   # a raw tool code (curl 22 or 56, tar 2) means nothing to the caller
+  fi
+  exit "$rc"
+}
 
 main() {
   # --- pinned trust anchors ----------------------------------------------------
@@ -173,11 +216,14 @@ main() {
   local SMOKE_LABEL="com.agent-secrets.smoke"
   local SMOKE_PLIST="$HOME_DIR/Library/LaunchAgents/${SMOKE_LABEL}.plist"
 
-  _say()  { printf '%s\n' "$*" >&2; }
-  _step() { printf '  → %s\n' "$*" >&2; }
-  _die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+  # Every write is a subshell (see _agsec_err): a closed stderr must never kill this shell mid-install.
+  _say()  { ( printf '%s\n' "$*" >&2 ) || true; }
+  _step() { ( printf '  → %s\n' "$*" >&2 ) || true; }
+  # shellcheck disable=SC2059  # a printf wrapper: the callers pass literal formats
+  _eprintf() { ( printf "$@" >&2 ) || true; }
+  _die()  { ( printf 'ERROR: %s\n' "$*" >&2 ) || true; exit 1; }
   _run()  { _step "$*"; "$@"; }
-  _debug() { if [ "$DEBUG" -eq 1 ]; then printf 'debug: %s\n' "$*" >&2; fi; }
+  _debug() { if [ "$DEBUG" -eq 1 ]; then ( printf 'debug: %s\n' "$*" >&2 ) || true; fi; }
 
   # The command that re-runs THIS installer, printed in hints (never run). A real script file re-runs
   # in place. Under `curl | bash` or the sh re-fetch there is no file, so print a download-then-run line;
@@ -487,9 +533,9 @@ main() {
       fi
     done
     if [ "$n" -gt 0 ]; then
-      printf 'ERROR: %s path(s) are in the way of the install:\n%s' "$n" "$list" >&2
-      if [ "$n" -gt 5 ]; then printf '  …and %s more\n' "$((n - 5))" >&2; fi
-      printf 'Move each aside, then re-run the installer.\n' >&2
+      _eprintf 'ERROR: %s path(s) are in the way of the install:\n%s' "$n" "$list"
+      if [ "$n" -gt 5 ]; then _eprintf '  …and %s more\n' "$((n - 5))"; fi
+      _eprintf 'Move each aside, then re-run the installer.\n'
       exit 1
     fi
   }
@@ -518,8 +564,8 @@ main() {
   if [ "$INTERACTIVE" -eq 1 ]; then
     local reply="" bad=0
     while :; do
-      printf 'Install agent-secrets to %s and edit %s? [Y/n] ' "$INSTALL_DIR" "$RC_FILE" >&2
-      if ! read -r reply; then reply=n; printf '\n' >&2; fi
+      _eprintf 'Install agent-secrets to %s and edit %s? [Y/n] ' "$INSTALL_DIR" "$RC_FILE"
+      if ! read -r reply; then reply=n; _eprintf '\n'; fi
       case "$reply" in
         ''|y|Y|yes) break ;;
         n|N|no|q)   _say "Canceled. Nothing was changed."; exit 130 ;;
@@ -533,6 +579,11 @@ main() {
   fi
 
   _preflight_dirs
+  # Refuse before any download: on the default production URL a missing baked digest can never pass the
+  # SHA-256 gate below. After consent (the plan is the first screen) and after the dry-run return.
+  if [ -z "$EXPECTED_SHA256" ] && [ -z "${AGENT_SECRETS_BASE_URL:-}" ]; then
+    _die "this install.sh carries no baked release digest (EXPECTED_SHA256 empty) — it was not cut by the release runbook. Refusing a same-origin .sha256 fallback on the default production URL (it cannot detect a swapped release asset). Install from a published release tag, or set AGENT_SECRETS_BASE_URL to use a dev/mirror."
+  fi
 
   # --- toolchain: resolved AFTER unpack, from the tool's own lib/deps.sh -----------------------------
   # (This USED to `brew install age sops jq` behind a sudo-gated Homebrew bootstrap — the #1
@@ -541,11 +592,63 @@ main() {
   #  binary. It lives in lib/deps.sh, so it can only run once the tarball is unpacked — hence the move.)
 
   # --- download + SHA-256 verify (never execute an unverified artifact) --------
+  # One curl budget for every download: 15 s to connect, 120 s per attempt, 3 retries of the transient
+  # failures curl itself classifies (never --retry-all-errors, which retries a 404), 300 s overall. The
+  # URL stays in curl's argv (tests/mocks/curl reads it there); only the display is redacted (D25).
+  _AGSEC_CURL_QUIET=""
+  _fetch() {
+    local rc=0
+    if [ -z "$_AGSEC_CURL_QUIET" ]; then
+      # --no-progress-meter (curl 7.67.0+) keeps curl's "Will retry" lines, which -sS hides.
+      if curl --no-progress-meter --version >/dev/null 2>&1; then _AGSEC_CURL_QUIET=--no-progress-meter; else _AGSEC_CURL_QUIET=-sS; fi
+    fi
+    _step "curl $(_agsec_show_url "$1") -o $2"
+    curl -fL "$_AGSEC_CURL_QUIET" --connect-timeout 15 --max-time 120 --retry 3 --retry-connrefused --retry-max-time 300 \
+      "$1" -o "$2" 2>&1 | _retry_notice || rc=$?
+    return "$rc"
+  }
+  # curl's stderr, with each retry warning rewritten and a retry count after a final `curl: (N)` line.
+  _retry_notice() {
+    local line="" last="" n=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        *"Will retry"*) n=$((n + 1)); _say "Retrying automatically…" ;;
+        *) _say "$line" ;;
+      esac
+      last="$line"; line=""
+    done
+    case "$last" in "curl: ("*) if [ "$n" -gt 0 ]; then _say "Retries: $n"; fi ;; esac
+    return 0
+  }
+  # Only 6, 7 and 28 say why it failed (no DNS, no connection, timeout); any other code (a 404 is 22 on
+  # the mock and 56 on the real host, README.md:70) gets the raw code and the redacted URL instead.
+  _fetch_die() {
+    local host="${1#*://}" file="${1##*/}"
+    host="${host%%/*}"; host="${host##*@}"; host="${host%%[?#]*}"; file="${file%%[?#]*}"
+    case "$2" in
+      6|7|28) _say "ERROR: Couldn't reach $host." ;;
+      *) _agsec_err "ERROR: Couldn't download $file from $host." "  curl exit: $2" "  URL: $(_agsec_show_url "$1")" ;;
+    esac
+    exit 1
+  }
+
+  _AGSEC_RERUN="$(_self_cmd)$(_rerun_flags)"
+  _AGSEC_STATE_DIR="$STATE_DIR"
+  _AGSEC_PHASE=download
   local work; work="$(mktemp -d)"
+  # From here every exit runs _agsec_on_exit: the work dir always goes, and the steps below add to the
+  # cleanup string what they create. Signals print where the run stopped, then exit 129, 130 or 143.
+  printf -v _AGSEC_CLEANUP_CMD 'rm -rf -- %q' "$work"
+  local _work_rm="$_AGSEC_CLEANUP_CMD"
+  trap '_agsec_on_exit' EXIT
+  trap '_agsec_on_signal 130' INT
+  trap '_agsec_on_signal 143' TERM
+  trap '_agsec_on_signal 129' HUP
   local pkg="$work/agent-secrets-${PINNED_TAG}.tar.gz"
   local url="$BASE_URL/releases/download/${PINNED_TAG}/agent-secrets-${PINNED_TAG}.tar.gz"
   _say "Downloading ${PINNED_TAG}…"
-  _run curl -fsSL "$url" -o "$pkg"
+  _fetch "$url" "$pkg" || _fetch_die "$url" "$?"
+  _AGSEC_PHASE=verify
   local got expect
   got="$(shasum -a 256 "$pkg" | awk '{print $1}')"
   if [ -n "$EXPECTED_SHA256" ]; then
@@ -555,10 +658,10 @@ main() {
   elif [ -n "${AGENT_SECRETS_BASE_URL:-}" ]; then
     # Dev/mirror convenience ONLY (BASE_URL overridden): trust a sibling .sha256 from the mirror you
     # control. This is transport integrity (corruption/partial-download), NOT release-asset tamper-evidence.
-    _run curl -fsSL "$url.sha256" -o "$pkg.sha256"
+    _AGSEC_PHASE=download
+    _fetch "$url.sha256" "$pkg.sha256" || _fetch_die "$url.sha256" "$?"
+    _AGSEC_PHASE=verify
     expect="$(awk '{print $1}' "$pkg.sha256")"; _debug "digest: the mirror's sibling .sha256 (AGENT_SECRETS_BASE_URL is set)"
-  else
-    _die "this install.sh carries no baked release digest (EXPECTED_SHA256 empty) — it was not cut by the release runbook. Refusing a same-origin .sha256 fallback on the default production URL (it cannot detect a swapped release asset). Install from a published release tag, or set AGENT_SECRETS_BASE_URL to use a dev/mirror."
   fi
   [ "$got" = "$expect" ] || _die "SHA-256 mismatch — refusing to run the downloaded artifact"
   if [ -n "$EXPECTED_SHA256" ]; then
@@ -568,12 +671,41 @@ main() {
   fi
 
   # --- unpack the tool ---------------------------------------------------------
-  # Was $INSTALL_DIR created by THIS run? A re-run over an existing (live) install must never have its
-  # tool dir deleted by the pre-manifest abort trap below (RT6), so only arm that trap when fresh.
+  # The pre-manifest window: from the mkdir below until the manifest records $INSTALL_DIR, an abort (a
+  # tar failure, the layout check, a REQUIRED dependency that can't be fetched on a locked-down network)
+  # would strand the unpacked tool with NO manifest to roll back. So the cleanup string grows here to
+  # remove ONLY what this run creates: $INSTALL_DIR when it is fresh (a re-run over a live install must
+  # never be deleted by an abort, RT6), and each directory this run makes on the way to $STATE_DIR and
+  # $BIN_DIR, deepest first (a pre-existing empty ~/bin is not ours to remove). Once the manifest
+  # records $INSTALL_DIR the string drops back to the work dir, so the success path and uninstall are
+  # unaffected. The paths are %q-baked now because the handler cannot read main()'s locals.
   local FRESH_INSTALL=0; [ -d "$INSTALL_DIR" ] || FRESH_INSTALL=1
   _debug "fresh install: $FRESH_INSTALL (1 = an abort removes the unpacked tool)"
+  # A string, not an array: an empty array under set -u aborts on bash 3.2.
+  local _created=""
+  _note_new() {
+    local p="$1" q
+    while [ "$p" != "$HOME_DIR" ] && [ ! -e "$p" ] && [ ! -L "$p" ]; do
+      printf -v q '%q' "$p"; _created="$_created $q"; p="$(dirname "$p")"
+    done
+  }
+  _note_new "$STATE_DIR"; _note_new "$BIN_DIR"
+  local _q
+  if [ "$FRESH_INSTALL" -eq 1 ]; then
+    printf -v _q '%q' "$INSTALL_DIR"; _AGSEC_CLEANUP_CMD="$_AGSEC_CLEANUP_CMD; rm -rf -- $_q"
+  fi
+  # A state dir this run creates holds only this run's files (the manifest, once initialised).
+  if [ ! -e "$STATE_DIR" ]; then
+    printf -v _q '%q' "$STATE_DIR"; _AGSEC_CLEANUP_CMD="$_AGSEC_CLEANUP_CMD; rm -rf -- $_q"
+  fi
+  if [ -n "$_created" ]; then
+    _AGSEC_CLEANUP_CMD="$_AGSEC_CLEANUP_CMD; rmdir --$_created 2>/dev/null || true"
+  fi
+  _AGSEC_FRESH="$FRESH_INSTALL"
+  _AGSEC_PHASE=unpack
   _run mkdir -p "$INSTALL_DIR" "$BIN_DIR" "$STATE_DIR"
-  _run tar -xzf "$pkg" -C "$INSTALL_DIR" --strip-components=1
+  _run tar -xzf "$pkg" -C "$INSTALL_DIR" --strip-components=1 \
+    || _die "Couldn't unpack $(basename "$pkg") into $INSTALL_DIR."
   # Fail LOUDLY on a mis-cut tarball (wrong/missing top-level prefix flattens the layout and would
   # dangle every wrapper symlink) instead of a cryptic `set -e` abort on the first source below. The
   # release runbook pins `git archive --prefix=agent-secrets-${TAG}/` to guarantee the single prefix dir.
@@ -583,26 +715,19 @@ main() {
   { [ -f "$INSTALL_DIR/lib/common.sh" ] && [ -f "$INSTALL_DIR/bin/agent-secrets" ]; } \
     || _die "unexpected tarball layout (need one top-level prefix dir with bin/ + lib/) — re-cut with: git archive --prefix=agent-secrets-\${TAG}/ \${TAG}"
 
-  # Cleanup trap for the pre-manifest window: from here until $INSTALL_DIR is recorded, an abort — e.g. a
-  # REQUIRED dependency that can't be fetched on a locked-down network (deps_ensure below) — would strand
-  # the unpacked tool with NO manifest to roll back (the residue regression the reorder introduced).
-  # Remove ONLY what we just created: $INSTALL_DIR (removed only when created fresh THIS run — a re-run
-  # over a live install must never be deleted by an abort) plus the two tool dirs if still empty (rmdir
-  # is a no-op on a pre-existing ~/bin holding the user's files). Disarmed the instant the manifest
-  # records $INSTALL_DIR, so the success path + uninstall are unaffected.
-  # The paths MUST be baked in NOW (%q-quoted so any shell metacharacter in an exotic AGENT_SECRETS_HOME
-  # stays safe): a named handler is NOT an option — main()'s locals are already out of scope by the time
-  # the EXIT trap fires while the shell unwinds through an `exit` on an abort (verified under bash 3.2).
-  if [ "$FRESH_INSTALL" -eq 1 ]; then
-    local _cleanup_cmd
-    printf -v _cleanup_cmd 'rm -rf -- %q; rmdir -- %q %q 2>/dev/null || true' "$INSTALL_DIR" "$STATE_DIR" "$BIN_DIR"
-    # shellcheck disable=SC2064  # expand-now via the pre-built %q string is DELIBERATE (see above)
-    trap "$_cleanup_cmd" EXIT
-  fi
-
   # From here on the tool's own libs exist — source them to record artifacts.
   # shellcheck source=/dev/null
   . "$INSTALL_DIR/lib/common.sh"
+  # The same subshell-per-write for the lib's printers in this process (deps_ensure writes through them
+  # in the pre-manifest window). Each original is kept under a _agsec_raw_ name and called in a subshell.
+  local _fn
+  for _fn in agsec_log agsec_note agsec_plan agsec_warn agsec_ok agsec_attn agsec_bad \
+             agsec_receipt agsec_receipt_attn agsec_receipt_bad _agsec_emit_error; do
+    declare -F "$_fn" >/dev/null || continue
+    eval "_agsec_raw_$(declare -f "$_fn")"
+    eval "$_fn() { ( _agsec_raw_$_fn \"\$@\" ) || true; }"
+  done
+  _AGSEC_PHASE=toolchain
   # Resolve the toolchain NO-SUDO before anything below needs it: manifest.sh + every artifact-record
   # call use jq, and setup/store need age+sops. deps_ensure reuses a PATH copy → Homebrew if present →
   # else fetches pinned SHA-256-verified binaries into $INSTALL_DIR/vendor/bin (inside the recorded
@@ -622,8 +747,14 @@ main() {
   # Wire the bin dispatcher + wrappers as SYMLINKS onto PATH (they follow the link back to their
   # sibling lib/ under $INSTALL_DIR — a plain copy would strand them from lib/). Record each symlink
   # for rollback, and record $INSTALL_DIR itself so uninstall removes the unpacked tool (no residue).
-  manifest_record_file "$INSTALL_DIR" >/dev/null 2>&1 || true
-  trap - EXIT   # $INSTALL_DIR is now recorded → uninstall can roll it back; disarm the pre-manifest cleanup
+  # The `||` context is load-bearing: the record is on a directory, so the shasum inside it exits 1, and
+  # only the `||` keeps errexit from aborting there; the status still reflects the append. A failed
+  # record dies while the pre-manifest cleanup is still armed, so the fresh tool dir goes too.
+  manifest_record_file "$INSTALL_DIR" >/dev/null 2>&1 || _die "Couldn't record $INSTALL_DIR in the install manifest."
+  # $INSTALL_DIR is recorded → uninstall can roll it back; the cleanup drops back to the work dir.
+  _AGSEC_CLEANUP_CMD="$_work_rm"; _AGSEC_RECORDED=1
+  printf -v _AGSEC_TOOL_CMD '%q' "$INSTALL_DIR/bin/agent-secrets"
+  _AGSEC_PHASE="wire PATH"
   # A pre-existing NON-symlink at a target on PATH is the USER'S own file — `ln -sf` clobbers it and
   # uninstall's `rm -f` of the `file` record would finish the loss. Write-once backup + an `edit` record
   # (appended BEFORE the file record: LIFO rollback removes the symlink first, then restores the file).
@@ -632,18 +763,18 @@ main() {
     if [ -f "$t" ] && [ ! -L "$t" ]; then
       b="$STATE_DIR/$(basename "$t").preinstall.bak"
       [ -f "$b" ] || cp -p "$t" "$b"
-      manifest_record_edit "$t" "$b" >/dev/null 2>&1 || true
+      manifest_record_edit "$t" "$b" >/dev/null 2>&1 || _die "Couldn't record the backup of $t in the install manifest."
     fi
   }
   local f
   _bak_user_target "$BIN_DIR/agent-secrets"
   _run ln -sf "$INSTALL_DIR/bin/agent-secrets" "$BIN_DIR/agent-secrets"
-  manifest_record_file "$BIN_DIR/agent-secrets"
+  manifest_record_file "$BIN_DIR/agent-secrets" || _die "Couldn't record $BIN_DIR/agent-secrets in the install manifest."
   for f in claude-agent cursor-agent apiKeyHelper; do
     [ -f "$INSTALL_DIR/bin/$f" ] || continue
     _bak_user_target "$BIN_DIR/$f"
     _run ln -sf "$INSTALL_DIR/bin/$f" "$BIN_DIR/$f"
-    manifest_record_file "$BIN_DIR/$f"
+    manifest_record_file "$BIN_DIR/$f" || _die "Couldn't record $BIN_DIR/$f in the install manifest."
   done
 
   # Idempotent, marker-delimited PATH block → shell rc (recorded for total rollback).
@@ -655,10 +786,20 @@ main() {
   fi
 
   # Weekly launchd smoke job. Written from the tool's own template.
+  _AGSEC_PHASE=launchd
   _run mkdir -p "$HOME_DIR/Library/LaunchAgents"
   _install_smoke_plist "$SMOKE_PLIST" "$SMOKE_LABEL" "$INSTALL_DIR"
+  # A failed bootout is the normal first-install case. A failed bootstrap is legitimate over SSH or with
+  # no GUI session, so it warns and goes on (doctor classes the job as optional) unless the job is
+  # loaded anyway, the check doctor uses. The plist is recorded either way: uninstall needs the record.
+  local smoke_loaded=1
   launchctl bootout "gui/$(id -u)/$SMOKE_LABEL" >/dev/null 2>&1 || true
-  launchctl bootstrap "gui/$(id -u)" "$SMOKE_PLIST" >/dev/null 2>&1 || true
+  if ! launchctl bootstrap "gui/$(id -u)" "$SMOKE_PLIST" >/dev/null 2>&1 \
+     && ! launchctl list "$SMOKE_LABEL" >/dev/null 2>&1; then
+    smoke_loaded=0
+    _say "! Couldn't load the weekly smoke job ($SMOKE_LABEL). Run agent-secrets doctor later."
+    _say "  This command failed: launchctl bootstrap gui/$(id -u) $(printf '%q' "$SMOKE_PLIST")"
+  fi
   manifest_record_launchd "$SMOKE_LABEL" "$SMOKE_PLIST"
 
   # The ~/.claude/settings.json apiKeyHelper edit + its revert point are owned SOLELY by `setup`
@@ -678,16 +819,37 @@ main() {
   # runs HEADLESS: real keys minted to files, the Keychain populated over a pipe, no first secret
   # unless --import-env names one already in this environment, and only names/paths/status printed —
   # nothing a transcript could capture. UNATTENDED (tests/CI) still runs with fake values.
-  # Setup stays a child, not an exec (D19), so control returns for the offer below; under set -e a
-  # failed setup never reaches it.
+  # Setup stays a child, not an exec and not in the background (D19): control returns for the outcome
+  # and the offer below, and a background child would start with SIGINT ignored. A TERM or HUP sent to
+  # this pid alone is handled once setup returns. A failed setup is reported here with its own exit
+  # code, and the run stops before the offer.
   _say ""
   local -a setup_args=()
   if [ "$HEADLESS" -eq 1 ]; then setup_args+=(--headless); fi
   if [ -n "$IMPORT_ENV" ]; then setup_args+=(--import-env "$IMPORT_ENV"); fi
   if [ "$NO_DISCOVERY" -eq 1 ]; then setup_args+=(--no-discovery); fi
-  _say "Installed. Running setup…"
+  local not_loaded=""
+  [ "$smoke_loaded" -eq 1 ] || not_loaded=" (weekly smoke job not loaded)"
+  _say "Tool installed at $INSTALL_DIR$not_loaded. Changes recorded in $(agsec_install_manifest). Running setup…"
   _debug "setup flags: ${setup_args[*]+${setup_args[*]}}"
-  _run "$BIN_DIR/agent-secrets" setup ${setup_args[@]+"${setup_args[@]}"}
+  printf -v _AGSEC_BIN_CMD '%q' "$BIN_DIR/agent-secrets"
+  _AGSEC_PHASE=setup
+  local setup_rc=0
+  _run "$BIN_DIR/agent-secrets" setup ${setup_args[@]+"${setup_args[@]}"} || setup_rc=$?
+  if [ "$setup_rc" -ne 0 ]; then
+    _AGSEC_REPORTED=1
+    case "$setup_rc" in
+      129|130|143) _agsec_err "Installed; setup was interrupted. Re-run it:" "    $_AGSEC_BIN_CMD setup" ;;
+      *)
+        _say "✗ Setup failed (exit $setup_rc). The tool is installed but not configured."
+        _say "Finish setup:"
+        _say "    $_AGSEC_BIN_CMD setup"
+        _say "Or remove it:"
+        _say "    $_AGSEC_BIN_CMD uninstall" ;;
+    esac
+    exit "$setup_rc"
+  fi
+  _AGSEC_PHASE="agent rules"
 
   # --- OPT-IN: machine-wide agent discovery, offered after the result ----------------------------
   # A marker block in ~/.claude/CLAUDE.md teaches agents everywhere this Mac has agent-secrets: Claude
@@ -709,12 +871,12 @@ main() {
       if [ "$DISCOVERY_YES" -eq 1 ]; then
         dreply=y   # --discovery pre-answered the offer, so it is not asked
       else
-        printf '\nMake every coding agent on this Mac aware of agent-secrets?\n' >&2
-        printf 'This writes a short, advisory block into each of these files (recorded in the manifest; agent-secrets uninstall removes recorded blocks):\n' >&2
-        printf '%s\n' "$_plan" | while IFS="$(printf '\t')" read -r _lbl _pth; do printf '   • %s\n' "$_pth" >&2; done
-        printf 'The block (advisory — makes agents aware of the tool; not an enforced guarantee):\n' >&2
-        agsec_render_rules claude-md | sed 's/^/     │ /' >&2
-        printf '[y = yes, write them (recommended) · Enter = skip]: ' >&2
+        _eprintf '\nMake every coding agent on this Mac aware of agent-secrets?\n'
+        _eprintf 'This writes a short, advisory block into each of these files (recorded in the manifest; agent-secrets uninstall removes recorded blocks):\n'
+        printf '%s\n' "$_plan" | while IFS="$(printf '\t')" read -r _lbl _pth; do _eprintf '   • %s\n' "$_pth"; done
+        _eprintf 'The block (advisory — makes agents aware of the tool; not an enforced guarantee):\n'
+        agsec_render_rules claude-md | sed 's/^/     │ /' >&2 || true
+        _eprintf '[y = yes, write them (recommended) · Enter = skip]: '
         read -r dreply || dreply=''
       fi
       case "$dreply" in
@@ -731,6 +893,7 @@ main() {
       esac
     fi
   fi
+  _say "Installed agent-secrets $PINNED_TAG."
   return 0
 }
 
