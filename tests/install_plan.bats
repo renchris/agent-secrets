@@ -290,11 +290,12 @@ _plan_mode() { case "$1" in *"the interactive wizard"*) echo wizard ;; *"setup -
   done
 }
 
-@test "terminal tests and the CI read live only in _attach_tty and _resolve_mode; the agent check precedes the attach" {
+@test "terminal tests and the CI read live only in _attach_tty, _resolve_mode and the glyph selector; the agent check precedes the attach" {
   local i="$REPO_ROOT/install.sh" body a b
+  # _agsec_glyphs picks presentation only (plain or rich glyphs on stderr, C7.2), never the mode.
   run awk '
-    /^  (_attach_tty|_resolve_mode)\(\) \{/ { inside = 1; next }
-    inside && /^  \}/ { inside = 0; next }
+    /^  (_attach_tty|_resolve_mode)\(\) \{/ || /^_agsec_glyphs\(\) \{/ { inside = 1; next }
+    inside && /^(  )?\}/ { inside = 0; next }
     inside { next }
     /^[[:space:]]*#/ { next }
     /-t [012]/ || /\$[{]?CI[^A-Za-z0-9_]/ { print NR ": " $0 }
